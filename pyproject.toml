@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "relay-agent"
+name = "chatflow-agent"
 version = "0.1.0"
 description = "Lightweight, async multi-agent framework with native handoffs powered by Gemini."
 readme = "README.md"
@@ -45,7 +45,7 @@ webhook = [
     "uvicorn>=0.29.0",
 ]
 all = [
-    "relay-agent[telegram,whatsapp,webhook]",
+    "chatflow-agent[telegram,whatsapp,webhook]",
 ]
 dev = [
     "pytest>=8.0.0",
@@ -55,7 +55,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/relay_agent"]
+packages = ["src/chatflow_agent"]
 
 [tool.ruff]
 target-version = "py310"
@@ -69,7 +69,7 @@ ignore = ["B008"]
 [tool.mypy]
 python_version = "3.10"
 strict = true
-packages = ["relay_agent"]
+packages = ["chatflow_agent"]
 mypy_path = "src"
 
 [tool.pytest.ini_options]

@@ -1,7 +1,7 @@
-# relay-agent
+# chatflow-agent
 
-[![PyPI version](https://img.shields.io/pypi/v/relay-agent.svg)](https://pypi.org/project/relay-agent/)
-[![Python versions](https://img.shields.io/pypi/pyversions/relay-agent.svg)](https://pypi.org/project/relay-agent/)
+[![PyPI version](https://img.shields.io/pypi/v/chatflow-agent.svg)](https://pypi.org/project/chatflow-agent/)
+[![Python versions](https://img.shields.io/pypi/pyversions/chatflow-agent.svg)](https://pypi.org/project/chatflow-agent/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 > Lightweight, async multi-agent framework with native handoffs powered by Google Gemini.  
@@ -13,7 +13,7 @@
 ## English
 
 ### Overview
-`relay-agent` is designed for simplicity, speed, and seamless multi-agent orchestration. Build specialized autonomous agents and connect them directly to real-world channels (**WhatsApp**, **Telegram**, **Webhooks**, **CLI**) with native tool calling and Swarm-style peer handoffs.
+`chatflow-agent` is designed for simplicity, speed, and seamless multi-agent orchestration. Build specialized autonomous agents and connect them directly to real-world channels (**WhatsApp**, **Telegram**, **Webhooks**, **CLI**) with native tool calling and Swarm-style peer handoffs.
 
 ### Key Features
 - **Ultra-light Core:** Built on top of `google-genai` and `pydantic` with zero bloated dependencies.
@@ -22,9 +22,37 @@
 - **Pythonic Tool Registry:** Register tools using the `@agent.tool` decorator; schema extraction is automated via type hints and docstrings.
 - **Pluggable Channels:** Run across chat platforms or locally via an interactive CLI.
 
+### Quickstart: WhatsApp (Webhook / Meta Cloud API)
+```python
+from chatflow_agent import Agent, Runner, WhatsAppChannel
+
+# 1. Define agents and tools as usual
+support_agent = Agent(
+    name="WhatsApp Support",
+    instructions="You provide friendly 24/7 customer assistance.",
+)
+
+@support_agent.tool
+def check_order(order_id: str) -> dict:
+    """Check shipment and delivery status of an order."""
+    return {"order_id": order_id, "status": "Out for delivery", "eta": "2 hours"}
+
+# 2. Attach runner to WhatsApp Channel
+runner = Runner(starting_agent=support_agent)
+whatsapp = WhatsAppChannel(
+    verify_token="YOUR_WEBHOOK_VERIFY_TOKEN",
+    access_token="YOUR_WHATSAPP_ACCESS_TOKEN",
+    phone_number_id="YOUR_PHONE_NUMBER_ID",
+)
+whatsapp.attach(runner)
+
+if __name__ == "__main__":
+    whatsapp.run(port=8000)  # Starts webhook server ready for Meta / Evolution API
+```
+
 ### Quickstart: Telegram Bot
 ```python
-from relay_agent import Agent, Runner, TelegramChannel
+from chatflow_agent import Agent, Runner, TelegramChannel
 
 # 1. Define specialized agents
 billing_agent = Agent(
@@ -53,40 +81,12 @@ if __name__ == "__main__":
     channel.run()
 ```
 
-### Quickstart: WhatsApp (Webhook / Meta Cloud API)
-```python
-from relay_agent import Agent, Runner, WhatsAppChannel
-
-# 1. Define agents and tools as usual
-support_agent = Agent(
-    name="WhatsApp Support",
-    instructions="You provide friendly 24/7 customer assistance.",
-)
-
-@support_agent.tool
-def check_order(order_id: str) -> dict:
-    """Check shipment and delivery status of an order."""
-    return {"order_id": order_id, "status": "Out for delivery", "eta": "2 hours"}
-
-# 2. Attach runner to WhatsApp Channel
-runner = Runner(starting_agent=support_agent)
-whatsapp = WhatsAppChannel(
-    verify_token="YOUR_WEBHOOK_VERIFY_TOKEN",
-    access_token="YOUR_WHATSAPP_ACCESS_TOKEN",
-    phone_number_id="YOUR_PHONE_NUMBER_ID",
-)
-whatsapp.attach(runner)
-
-if __name__ == "__main__":
-    whatsapp.run(port=8000)  # Starts webhook server ready for Meta / Evolution API
-```
-
 ---
 
 ## Español
 
 ### Descripción General
-`relay-agent` está diseñado para ofrecer máxima simplicidad y velocidad en la orquestación multiagente. Permite construir agentes autónomos especializados y conectarlos directamente a canales reales (**WhatsApp**, **Telegram**, **Webhooks HTTP**, **terminal interactiva**) con soporte nativo de *Function Calling* y transferencias fluidas estilo Swarm.
+`chatflow-agent` está diseñado para ofrecer máxima simplicidad y velocidad en la orquestación multiagente. Permite construir agentes autónomos especializados y conectarlos directamente a canales reales (**WhatsApp**, **Telegram**, **Webhooks HTTP**, **terminal interactiva**) con soporte nativo de *Function Calling* y transferencias fluidas estilo Swarm.
 
 ### Características Principales
 - **Núcleo ultra liviano:** Basado únicamente en `google-genai` y `pydantic`.
@@ -101,16 +101,16 @@ if __name__ == "__main__":
 
 ```bash
 # Core package only / Solo el núcleo
-pip install relay-agent
+pip install chatflow-agent
 
 # With WhatsApp support / Con soporte para WhatsApp
-pip install "relay-agent[whatsapp]"
+pip install "chatflow-agent[whatsapp]"
 
 # With Telegram support / Con soporte para Telegram
-pip install "relay-agent[telegram]"
+pip install "chatflow-agent[telegram]"
 
 # Full installation (all channels) / Instalación completa (todos los canales)
-pip install "relay-agent[all]"
+pip install "chatflow-agent[all]"
 ```
 
 ## License / Licencia
