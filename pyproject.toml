@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "relay-agent"
+version = "0.1.0"
+description = "Lightweight, async multi-agent framework with native handoffs powered by Gemini."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Gustavo", email = "developer@example.com" }
+]
+keywords = ["ai", "multi-agent", "swarm", "handoff", "gemini", "telegram", "webhook", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Chat",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "google-genai>=0.1.1",
+    "pydantic>=2.6.0",
+]
+
+[project.optional-dependencies]
+telegram = [
+    "python-telegram-bot>=21.0",
+]
+webhook = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
+]
+all = [
+    "relay-agent[telegram,webhook]",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+    "mypy>=1.9.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/relay_agent"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B"]
+ignore = ["B008"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+packages = ["relay_agent"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
