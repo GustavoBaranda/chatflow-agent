@@ -1,5 +1,6 @@
 """chatflow-agent: Lightweight, async multi-agent framework with native handoffs."""
 
+from chatflow_agent.core.tools import Tool, tool
 from chatflow_agent.exceptions import (
     AgentHandoffError,
     ChatFlowError,
@@ -23,6 +24,8 @@ __all__ = [
     "Handoff",
     "Message",
     "Role",
+    "Tool",
+    "tool",
     "ToolCall",
     "ToolResult",
     "ChatFlowError",
