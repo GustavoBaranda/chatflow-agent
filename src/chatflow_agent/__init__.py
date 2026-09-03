@@ -1,7 +1,9 @@
 """chatflow-agent: Lightweight, async multi-agent framework with native handoffs."""
 
 from chatflow_agent.core.agent import Agent
+from chatflow_agent.core.engine import GeminiEngine
 from chatflow_agent.core.memory import SessionContext, SessionStore
+from chatflow_agent.core.runner import Runner
 from chatflow_agent.core.tools import Tool, tool
 from chatflow_agent.exceptions import (
     AgentHandoffError,
@@ -24,9 +26,11 @@ __all__ = [
     "__version__",
     "Agent",
     "AgentResponse",
+    "GeminiEngine",
     "Handoff",
     "Message",
     "Role",
+    "Runner",
     "SessionContext",
     "SessionStore",
     "Tool",
