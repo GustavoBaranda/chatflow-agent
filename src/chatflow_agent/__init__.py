@@ -2,6 +2,7 @@
 
 from chatflow_agent.channels.base import BaseChannel, ChannelError
 from chatflow_agent.channels.cli import CLIChannel
+from chatflow_agent.channels.whatsapp import WhatsAppChannel
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engine import GeminiEngine
 from chatflow_agent.core.memory import SessionContext, SessionStore
@@ -42,6 +43,7 @@ __all__ = [
     "tool",
     "ToolCall",
     "ToolResult",
+    "WhatsAppChannel",
     "ChatFlowError",
     "DependencyError",
     "ToolExecutionError",
