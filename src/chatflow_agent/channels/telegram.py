@@ -1,7 +1,7 @@
 """Telegram channel adapter using python-telegram-bot."""
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from chatflow_agent.channels.base import BaseChannel
 from chatflow_agent.exceptions import DependencyError
@@ -17,7 +17,7 @@ class TelegramChannel(BaseChannel):
         self,
         token: str,
         start_message: str = "Hello! I am your AI multi-agent assistant. How can I help you today?",
-        allowed_updates: Optional[List[str]] = None,
+        allowed_updates: list[str] | None = None,
     ) -> None:
         super().__init__()
         self.token = token
@@ -28,13 +28,7 @@ class TelegramChannel(BaseChannel):
         try:
             from telegram import Update
             from telegram.constants import ChatAction
-            from telegram.ext import (
-                Application,
-                CommandHandler,
-                ContextTypes,
-                MessageHandler,
-                filters,
-            )
+            from telegram.ext import Application, filters
         except ImportError as err:
             raise DependencyError(
                 feature="TelegramChannel",

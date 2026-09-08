@@ -2,13 +2,9 @@
 
 import asyncio
 import inspect
-from functools import wraps
+from collections.abc import Callable
 from typing import (
     Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
     Union,
     get_args,
     get_origin,
@@ -40,9 +36,9 @@ def _python_type_to_gemini_type(py_type: Any) -> str:
             return _python_type_to_gemini_type(args[0])
         return "STRING"
 
-    if origin in (list, List):
+    if origin in (list, list):
         return "ARRAY"
-    if origin in (dict, Dict):
+    if origin in (dict, dict):
         return "OBJECT"
 
     return TYPE_MAP.get(py_type, "STRING")
@@ -54,8 +50,8 @@ class Tool:
     def __init__(
         self,
         func: Callable[..., Any],
-        name: Optional[str] = None,
-        description: Optional[str] = None,
+        name: str | None = None,
+        description: str | None = None,
     ) -> None:
         self.func = func
         self.name = name or func.__name__
@@ -64,17 +60,17 @@ class Tool:
         self.is_async = inspect.iscoroutinefunction(func)
         self.parameters_schema = self._build_parameters_schema()
 
-    def _build_parameters_schema(self) -> Dict[str, Any]:
+    def _build_parameters_schema(self) -> dict[str, Any]:
         """Introspect function signature and generate schema for parameters."""
-        properties: Dict[str, Any] = {}
-        required: List[str] = []
+        properties: dict[str, Any] = {}
+        required: list[str] = []
 
         for param_name, param in self.signature.parameters.items():
             if param_name in ("self", "cls"):
                 continue
 
             gemini_type = _python_type_to_gemini_type(param.annotation)
-            param_def: Dict[str, Any] = {
+            param_def: dict[str, Any] = {
                 "type": gemini_type,
             }
 
@@ -91,7 +87,7 @@ class Tool:
             "required": required,
         }
 
-    def to_gemini_declaration(self) -> Dict[str, Any]:
+    def to_gemini_declaration(self) -> dict[str, Any]:
         """Return the function declaration format expected by Google Gemini API."""
         return {
             "name": self.name,
@@ -131,10 +127,10 @@ class Tool:
 
 
 def tool(
-    name_or_func: Optional[Union[str, Callable[..., Any]]] = None,
+    name_or_func: str | Callable[..., Any] | None = None,
     *,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
+    name: str | None = None,
+    description: str | None = None,
 ) -> Any:
     """Decorator to register a function as an introspected Tool.
 

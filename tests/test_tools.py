@@ -1,7 +1,7 @@
 """Tests for chatflow-agent tool introspection and execution engine."""
 
+
 import pytest
-from typing import Dict, List, Optional
 
 from chatflow_agent.core.tools import Tool, tool
 from chatflow_agent.exceptions import ToolExecutionError
@@ -18,7 +18,7 @@ def sample_function(query: str, limit: int = 10, verbose: bool = False) -> dict:
     return {"query": query, "count": limit, "verbose": verbose}
 
 
-async def async_sample_function(order_id: str, tags: List[str]) -> str:
+async def async_sample_function(order_id: str, tags: list[str]) -> str:
     """Async process an order with specified tags."""
     return f"Order {order_id} tagged with {len(tags)} tags"
 

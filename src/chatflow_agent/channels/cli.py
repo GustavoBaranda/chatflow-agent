@@ -1,7 +1,7 @@
 """Interactive Command-Line Interface (CLI) channel for chatflow-agent."""
 
 import sys
-from typing import Any, Optional
+from typing import Any
 
 from chatflow_agent.channels.base import BaseChannel
 from chatflow_agent.types import AgentResponse

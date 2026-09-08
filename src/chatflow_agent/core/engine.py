@@ -1,7 +1,8 @@
 """Gemini LLM engine interface and payload formatting for chatflow-agent."""
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from google import genai
 from google.genai import types
 
@@ -15,9 +16,9 @@ class EngineTurnResult:
 
     def __init__(
         self,
-        text: Optional[str] = None,
-        tool_calls: Optional[List[ToolCall]] = None,
-        raw_response: Optional[Any] = None,
+        text: str | None = None,
+        tool_calls: list[ToolCall] | None = None,
+        raw_response: Any | None = None,
     ) -> None:
         self.text = text
         self.tool_calls = tool_calls or []
@@ -31,7 +32,7 @@ class EngineTurnResult:
 class GeminiEngine:
     """Coordinates API requests with Google Gemini using google-genai SDK."""
 
-    def __init__(self, api_key: Optional[str] = None) -> None:
+    def __init__(self, api_key: str | None = None) -> None:
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
         # Instantiate client if api_key is present or relying on default environment
         try:
@@ -40,12 +41,12 @@ class GeminiEngine:
             # Allow lazy initialization / mocking during testing
             self.client = None
 
-    def _format_history_to_contents(self, history: List[Message]) -> List[types.Content]:
+    def _format_history_to_contents(self, history: list[Message]) -> list[types.Content]:
         """Convert chatflow Message objects into Gemini Content payloads."""
-        contents: List[types.Content] = []
+        contents: list[types.Content] = []
 
         for msg in history:
-            parts: List[types.Part] = []
+            parts: list[types.Part] = []
 
             # 1. User text
             if msg.role == Role.USER and msg.content:
@@ -86,7 +87,7 @@ class GeminiEngine:
     async def generate_turn_async(
         self,
         agent: Agent,
-        history: List[Message],
+        history: list[Message],
     ) -> EngineTurnResult:
         """Call Gemini API asynchronously with active agent's tools and system instructions."""
         if not self.client:
@@ -99,7 +100,7 @@ class GeminiEngine:
         all_tools = agent.get_all_tools()
 
         # Build tools configuration if agent has any tools
-        gemini_tools: Optional[List[types.Tool]] = None
+        gemini_tools: list[types.Tool] | None = None
         if all_tools:
             declarations = [t.to_gemini_declaration() for t in all_tools]
             gemini_tools = [types.Tool(function_declarations=declarations)]
@@ -119,13 +120,13 @@ class GeminiEngine:
             raise ProviderError(f"Gemini API request failed: {err}") from err
 
         # Parse response parts
-        extracted_text: Optional[str] = None
-        extracted_calls: List[ToolCall] = []
+        extracted_text: str | None = None
+        extracted_calls: list[ToolCall] = []
 
         if response.candidates:
             candidate = response.candidates[0]
             if candidate.content and candidate.content.parts:
-                text_chunks: List[str] = []
+                text_chunks: list[str] = []
                 for idx, part in enumerate(candidate.content.parts):
                     if part.text:
                         text_chunks.append(part.text)

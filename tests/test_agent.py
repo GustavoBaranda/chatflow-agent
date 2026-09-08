@@ -1,8 +1,8 @@
 """Tests for chatflow-agent Agent class and synthetic handoff generation."""
 
 import pytest
+
 from chatflow_agent.core.agent import Agent
-from chatflow_agent.core.tools import Tool
 from chatflow_agent.types import Handoff
 
 

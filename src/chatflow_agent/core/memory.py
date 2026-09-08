@@ -1,6 +1,6 @@
 """Session memory management and context tracking for multi-agent conversations."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.types import Message, Role
@@ -14,13 +14,13 @@ class SessionContext:
         session_id: str,
         initial_agent: Agent,
         max_turns: int = 40,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         self.session_id = session_id
         self.active_agent = initial_agent
         self.max_turns = max_turns
-        self.history: List[Message] = []
-        self.metadata: Dict[str, Any] = metadata or {}
+        self.history: list[Message] = []
+        self.metadata: dict[str, Any] = metadata or {}
 
     def add_message(self, message: Message) -> None:
         """Append a message to the dialogue history and apply sliding window pruning."""
@@ -61,14 +61,14 @@ class SessionStore:
     """Thread-safe in-memory session registry indexable by session_id."""
 
     def __init__(self, default_max_turns: int = 40) -> None:
-        self._sessions: Dict[str, SessionContext] = {}
+        self._sessions: dict[str, SessionContext] = {}
         self.default_max_turns = default_max_turns
 
     def get_or_create(
         self,
         session_id: str,
         default_agent: Agent,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> SessionContext:
         """Retrieve an existing session context or instantiate a new one."""
         if session_id not in self._sessions:
@@ -80,7 +80,7 @@ class SessionStore:
             )
         return self._sessions[session_id]
 
-    def get(self, session_id: str) -> Optional[SessionContext]:
+    def get(self, session_id: str) -> SessionContext | None:
         """Fetch session by ID if it exists."""
         return self._sessions.get(session_id)
 
@@ -88,7 +88,7 @@ class SessionStore:
         """Remove a session from storage."""
         return self._sessions.pop(session_id, None) is not None
 
-    def list_sessions(self) -> List[str]:
+    def list_sessions(self) -> list[str]:
         """List all active session identifiers."""
         return list(self._sessions.keys())
 

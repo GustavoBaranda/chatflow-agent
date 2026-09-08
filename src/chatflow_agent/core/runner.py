@@ -1,7 +1,7 @@
 """Multi-agent Swarm-style execution Runner for chatflow-agent."""
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engine import GeminiEngine
@@ -12,7 +12,6 @@ from chatflow_agent.types import (
     Handoff,
     Message,
     Role,
-    ToolCall,
     ToolResult,
 )
 
@@ -23,9 +22,9 @@ class Runner:
     def __init__(
         self,
         starting_agent: Agent,
-        session_store: Optional[SessionStore] = None,
-        engine: Optional[GeminiEngine] = None,
-        api_key: Optional[str] = None,
+        session_store: SessionStore | None = None,
+        engine: GeminiEngine | None = None,
+        api_key: str | None = None,
         max_handoffs_per_turn: int = 5,
         max_tool_iterations: int = 10,
     ) -> None:
@@ -36,7 +35,7 @@ class Runner:
         self.max_tool_iterations = max_tool_iterations
 
         # Registry of all known agents (starting agent + all transitive handoffs)
-        self._agents_registry: Dict[str, Agent] = {}
+        self._agents_registry: dict[str, Agent] = {}
         self._register_agent_tree(self.starting_agent)
 
     def _register_agent_tree(self, root: Agent) -> None:
@@ -51,7 +50,7 @@ class Runner:
         """Manually register an agent to the runner index."""
         self._register_agent_tree(agent)
 
-    def get_session(self, session_id: str) -> Optional[SessionContext]:
+    def get_session(self, session_id: str) -> SessionContext | None:
         """Fetch session context by session_id."""
         return self.session_store.get(session_id)
 
@@ -59,7 +58,7 @@ class Runner:
         self,
         session_id: str,
         user_message: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AgentResponse:
         """Process a user message through the active agent and resolve tools/handoffs."""
         session = self.session_store.get_or_create(
@@ -71,8 +70,8 @@ class Runner:
         # 1. Append inbound user message to history
         session.add_message(Message(role=Role.USER, content=user_message))
 
-        tool_calls_executed: List[str] = []
-        last_handoff: Optional[Handoff] = None
+        tool_calls_executed: list[str] = []
+        last_handoff: Handoff | None = None
         handoff_counter = 0
 
         # 2. Main agent execution loop
@@ -94,7 +93,7 @@ class Runner:
                     )
                 )
 
-                tool_results: List[ToolResult] = []
+                tool_results: list[ToolResult] = []
                 available_tools = {t.name: t for t in current_agent.get_all_tools()}
 
                 for call in turn_result.tool_calls:
@@ -204,7 +203,7 @@ class Runner:
         self,
         session_id: str,
         user_message: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AgentResponse:
         """Synchronous convenience wrapper for run_async."""
         try:

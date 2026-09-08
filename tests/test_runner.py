@@ -1,26 +1,26 @@
 """Tests for chatflow-agent Runner loop, tool calling, and multi-agent handoffs."""
 
+
 import pytest
-from typing import Any, List, Optional
 
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engine import EngineTurnResult, GeminiEngine
 from chatflow_agent.core.runner import Runner
-from chatflow_agent.types import Handoff, Message, Role, ToolCall
+from chatflow_agent.types import Message, Role, ToolCall
 
 
 class MockEngine(GeminiEngine):
     """Mock engine that simulates Gemini turn evaluations deterministically."""
 
-    def __init__(self, turns_sequence: List[EngineTurnResult]) -> None:
+    def __init__(self, turns_sequence: list[EngineTurnResult]) -> None:
         super().__init__()
         self.turns = list(turns_sequence)
-        self.call_history: List[dict] = []
+        self.call_history: list[dict] = []
 
     async def generate_turn_async(
         self,
         agent: Agent,
-        history: List[Message],
+        history: list[Message],
     ) -> EngineTurnResult:
         self.call_history.append({"agent": agent.name, "history_len": len(history)})
         if not self.turns:

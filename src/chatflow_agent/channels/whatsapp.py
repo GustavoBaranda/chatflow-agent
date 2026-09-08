@@ -1,7 +1,7 @@
 """WhatsApp channel adapter using FastAPI and Meta Cloud API webhooks."""
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from chatflow_agent.channels.base import BaseChannel
 from chatflow_agent.exceptions import DependencyError
@@ -16,8 +16,8 @@ class WhatsAppChannel(BaseChannel):
     def __init__(
         self,
         verify_token: str,
-        access_token: Optional[str] = None,
-        phone_number_id: Optional[str] = None,
+        access_token: str | None = None,
+        phone_number_id: str | None = None,
         api_version: str = "v21.0",
     ) -> None:
         super().__init__()
@@ -28,10 +28,9 @@ class WhatsAppChannel(BaseChannel):
 
         # Verify optional dependencies
         try:
-            from fastapi import FastAPI, HTTPException, Query, Request, Response, status
-            from fastapi.responses import JSONResponse, PlainTextResponse
             import httpx
             import uvicorn
+            from fastapi import FastAPI
         except ImportError as err:
             raise DependencyError(
                 feature="WhatsAppChannel",
@@ -49,15 +48,15 @@ class WhatsAppChannel(BaseChannel):
         from fastapi.responses import JSONResponse, PlainTextResponse
 
         @self.app.get("/health")
-        async def health_check() -> Dict[str, str]:
+        async def health_check() -> dict[str, str]:
             return {"status": "healthy", "channel": "whatsapp"}
 
         @self.app.get("/webhook")
         async def verify_webhook(
             request: Request,
-            hub_mode: Optional[str] = Query(None, alias="hub.mode"),
-            hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
-            hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
+            hub_mode: str | None = Query(None, alias="hub.mode"),
+            hub_challenge: str | None = Query(None, alias="hub.challenge"),
+            hub_verify_token: str | None = Query(None, alias="hub.verify_token"),
         ) -> Response:
             """Meta webhook verification challenge endpoint."""
             if hub_mode == "subscribe" and hub_verify_token == self.verify_token:
@@ -103,8 +102,8 @@ class WhatsAppChannel(BaseChannel):
             )
 
     def _extract_message_and_sender(
-        self, payload: Dict[str, Any]
-    ) -> Optional[tuple[str, str]]:
+        self, payload: dict[str, Any]
+    ) -> tuple[str, str] | None:
         """Extract sender phone number and text message from payload.
 
         Supports both standard Meta Cloud API and direct/Evolution API webhooks.

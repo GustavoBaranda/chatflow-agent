@@ -1,8 +1,7 @@
 """Abstract BaseChannel definition for chatflow-agent."""
 
-import asyncio
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any
 
 from chatflow_agent.core.runner import Runner
 from chatflow_agent.exceptions import ChatFlowError
@@ -17,7 +16,7 @@ class BaseChannel(ABC):
     """Abstract base class for all communication channels (CLI, WhatsApp, Telegram, Webhook)."""
 
     def __init__(self) -> None:
-        self.runner: Optional[Runner] = None
+        self.runner: Runner | None = None
 
     def attach(self, runner: Runner) -> "BaseChannel":
         """Attach a multi-agent Runner instance to this channel."""
@@ -37,7 +36,7 @@ class BaseChannel(ABC):
         self,
         session_id: str,
         message: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AgentResponse:
         """Forward an incoming message to the attached runner asynchronously."""
         runner = self._ensure_runner_attached()
@@ -47,7 +46,7 @@ class BaseChannel(ABC):
         self,
         session_id: str,
         message: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AgentResponse:
         """Forward an incoming message to the attached runner synchronously."""
         runner = self._ensure_runner_attached()

@@ -1,7 +1,8 @@
 """Tests for TelegramChannel adapter and event handlers."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from chatflow_agent.channels.telegram import TelegramChannel
 from chatflow_agent.core.agent import Agent

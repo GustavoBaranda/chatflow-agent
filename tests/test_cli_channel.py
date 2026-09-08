@@ -1,6 +1,7 @@
 """Tests for BaseChannel and CLIChannel."""
 
 import pytest
+
 from chatflow_agent.channels.base import BaseChannel, ChannelError
 from chatflow_agent.channels.cli import CLIChannel
 from chatflow_agent.core.agent import Agent

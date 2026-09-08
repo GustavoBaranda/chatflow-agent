@@ -1,6 +1,5 @@
 """Exception hierarchy for chatflow-agent."""
 
-from typing import Optional
 
 
 class ChatFlowError(Exception):
@@ -10,7 +9,7 @@ class ChatFlowError(Exception):
 class DependencyError(ChatFlowError):
     """Raised when an optional channel or feature requires an uninstalled package."""
 
-    def __init__(self, feature: str, extra_package: str, install_command: Optional[str] = None) -> None:
+    def __init__(self, feature: str, extra_package: str, install_command: str | None = None) -> None:
         cmd = install_command or f'pip install "chatflow-agent[{extra_package}]"'
         message = (
             f"The feature '{feature}' requires optional dependencies from '{extra_package}'. "

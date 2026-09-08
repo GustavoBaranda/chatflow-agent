@@ -1,9 +1,10 @@
 """Agent abstraction and peer handoff orchestration for chatflow-agent."""
 
 import re
-from typing import Any, Callable, Dict, List, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
-from chatflow_agent.core.tools import Tool, tool
+from chatflow_agent.core.tools import Tool
 from chatflow_agent.types import Handoff
 
 
@@ -20,16 +21,16 @@ class Agent:
     def __init__(
         self,
         name: str,
-        instructions: Union[str, Callable[[], str]],
+        instructions: str | Callable[[], str],
         model: str = "gemini-2.5-flash",
-        tools: Optional[List[Union[Tool, Callable[..., Any]]]] = None,
-        handoffs: Optional[List["Agent"]] = None,
+        tools: list[Tool | Callable[..., Any]] | None = None,
+        handoffs: list["Agent"] | None = None,
     ) -> None:
         self.name = name
         self.instructions = instructions
         self.model = model
-        self.tools: List[Tool] = []
-        self.handoffs: List["Agent"] = []
+        self.tools: list[Tool] = []
+        self.handoffs: list[Agent] = []
 
         if tools:
             for t in tools:
@@ -45,7 +46,7 @@ class Agent:
             return self.instructions()
         return self.instructions
 
-    def add_tool(self, tool_or_callable: Union[Tool, Callable[..., Any]]) -> Tool:
+    def add_tool(self, tool_or_callable: Tool | Callable[..., Any]) -> Tool:
         """Register a tool or callable to this agent."""
         if isinstance(tool_or_callable, Tool):
             t = tool_or_callable
@@ -59,10 +60,10 @@ class Agent:
 
     def tool(
         self,
-        name_or_func: Optional[Union[str, Callable[..., Any]]] = None,
+        name_or_func: str | Callable[..., Any] | None = None,
         *,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
+        name: str | None = None,
+        description: str | None = None,
     ) -> Any:
         """Decorator to register a tool directly onto this agent instance.
 
@@ -103,7 +104,7 @@ class Agent:
             f"Target agent specialty: {target_agent.get_instructions()[:120]}..."
         )
 
-        def handoff_executor(reason: Optional[str] = None) -> Handoff:
+        def handoff_executor(reason: str | None = None) -> Handoff:
             """Transfer the conversation to another specialized agent."""
             return Handoff(
                 target_agent_name=target_agent.name,
@@ -112,9 +113,9 @@ class Agent:
 
         return Tool(func=handoff_executor, name=tool_name, description=desc)
 
-    def get_all_tools(self) -> List[Tool]:
+    def get_all_tools(self) -> list[Tool]:
         """Return all user tools combined with synthetic handoff tools."""
-        combined: List[Tool] = list(self.tools)
+        combined: list[Tool] = list(self.tools)
         for peer in self.handoffs:
             combined.append(self._create_handoff_tool(peer))
         return combined
