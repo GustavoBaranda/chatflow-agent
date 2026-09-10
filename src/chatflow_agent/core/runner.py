@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 from chatflow_agent.core.agent import Agent
-from chatflow_agent.core.engine import GeminiEngine
+from chatflow_agent.core.engines import BaseEngine, GeminiEngine, resolve_engine
 from chatflow_agent.core.memory import SessionContext, SessionStore
 from chatflow_agent.exceptions import AgentHandoffError
 from chatflow_agent.types import (
@@ -23,7 +23,7 @@ class Runner:
         self,
         starting_agent: Agent,
         session_store: SessionStore | None = None,
-        engine: GeminiEngine | None = None,
+        engine: BaseEngine | None = None,
         api_key: str | None = None,
         max_handoffs_per_turn: int = 5,
         max_tool_iterations: int = 10,
@@ -77,7 +77,8 @@ class Runner:
         # 2. Main agent execution loop
         for _ in range(self.max_tool_iterations):
             current_agent = session.active_agent
-            turn_result = await self.engine.generate_turn_async(
+            active_engine = resolve_engine(current_agent, default_engine=self.engine)
+            turn_result = await active_engine.generate_turn_async(
                 agent=current_agent,
                 history=session.history,
             )

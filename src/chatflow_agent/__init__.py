@@ -5,7 +5,7 @@ from chatflow_agent.channels.cli import CLIChannel
 from chatflow_agent.channels.telegram import TelegramChannel
 from chatflow_agent.channels.whatsapp import WhatsAppChannel
 from chatflow_agent.core.agent import Agent
-from chatflow_agent.core.engine import GeminiEngine
+from chatflow_agent.core.engines import AnthropicEngine, BaseEngine, GeminiEngine, OpenAIEngine
 from chatflow_agent.core.memory import SessionContext, SessionStore
 from chatflow_agent.core.runner import Runner
 from chatflow_agent.core.tools import Tool, tool
@@ -33,7 +33,10 @@ __all__ = [
     "BaseChannel",
     "ChannelError",
     "CLIChannel",
+    "AnthropicEngine",
+    "BaseEngine",
     "GeminiEngine",
+    "OpenAIEngine",
     "Handoff",
     "Message",
     "Role",

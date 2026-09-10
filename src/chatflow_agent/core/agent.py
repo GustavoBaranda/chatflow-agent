@@ -25,10 +25,18 @@ class Agent:
         model: str = "gemini-2.5-flash",
         tools: list[Tool | Callable[..., Any]] | None = None,
         handoffs: list["Agent"] | None = None,
+        provider: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        engine: Any | None = None,
     ) -> None:
         self.name = name
         self.instructions = instructions
         self.model = model
+        self.provider = provider
+        self.base_url = base_url
+        self.api_key = api_key
+        self.engine = engine
         self.tools: list[Tool] = []
         self.handoffs: list[Agent] = []
 
