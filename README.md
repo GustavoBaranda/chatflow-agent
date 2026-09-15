@@ -18,7 +18,7 @@
 
 ### Table of Contents
 1. [Overview & Architecture](#overview--architecture)
-2. [Supported Providers & API Keys](#supported-providers--api-keys)
+2. [API Keys & Configuration](#api-keys--configuration)
 3. [Installation](#installation)
 4. [Step-by-Step Quickstarts](#step-by-step-quickstarts)
    - [A. Cloud LLM (Gemini / OpenAI / Claude)](#a-cloud-llm-quickstart)
@@ -29,7 +29,7 @@
    - [Telegram Bot](#telegram-channel)
    - [Interactive Terminal (CLI)](#interactive-terminal-cli)
 6. [Session Memory & Persistence](#session-memory--persistence)
-7. [Guía en Español](#guía-completa-en-español)
+7. [Guía Completa en Español](#guía-completa-en-español)
 
 ---
 
@@ -58,25 +58,65 @@
 
 ---
 
-### Supported Providers & API Keys
+### API Keys & Configuration
 
-You can configure credentials either via **environment variables** or **directly in code**:
+You can provide API keys using any of the following 3 methods:
 
-| Provider | Supported Models | Environment Variable | In-Code Configuration |
-| :--- | :--- | :--- | :--- |
-| **Google Gemini** *(Default)* | `gemini-2.5-flash`, `gemini-2.5-pro` | `GEMINI_API_KEY` | `Agent(provider="gemini", api_key="...")` |
-| **Google Gemma / Ollama** | `gemma2:9b`, `gemma2:2b`, `llama3.2`, etc. | *None needed (Local)* | `Agent(provider="ollama", model="gemma2:9b")` |
-| **xAI Grok** | `grok-2`, `grok-2-mini` | `XAI_API_KEY` | `Agent(provider="grok", api_key="...")` |
-| **OpenAI** | `gpt-4o`, `gpt-4o-mini`, `o1` | `OPENAI_API_KEY` | `Agent(provider="openai", api_key="...")` |
-| **Anthropic Claude** | `claude-3-5-sonnet`, `claude-3-5-haiku` | `ANTHROPIC_API_KEY` | `Agent(provider="anthropic", api_key="...")` |
+#### 1. Direct in Python Code (Easiest)
+Pass your API key directly when instantiating the `Runner` or `Agent`:
+```python
+# Pass to Runner (used by all agents with that provider)
+runner = Runner(starting_agent=my_agent, api_key="AIzaSyYourGeminiKey")
 
-#### How to set environment variables:
-* **Windows (PowerShell):** `$env:GEMINI_API_KEY="your-api-key"`
-* **Linux / macOS:** `export GEMINI_API_KEY="your-api-key"`
-* **Direct in Python (No terminal setup required):**
-  ```python
-  runner = Runner(starting_agent=my_agent, api_key="your-api-key")
+# Or pass directly to a specific Agent:
+grok_agent = Agent(
+    name="GrokSpecialist",
+    provider="grok",
+    api_key="xai-your-key-here",
+    instructions="..."
+)
+```
+
+#### 2. Using a `.env` File
+Create a `.env` file in your project root:
+```env
+# Google Gemini (Get free key at https://aistudio.google.com/)
+GEMINI_API_KEY="AIzaSy..."
+
+# OpenAI (https://platform.openai.com/api-keys)
+OPENAI_API_KEY="sk-..."
+
+# xAI Grok (https://console.x.ai/)
+XAI_API_KEY="xai-..."
+
+# Anthropic Claude (https://console.anthropic.com/)
+ANTHROPIC_API_KEY="sk-ant-..."
+```
+Then in your script:
+```python
+from dotenv import load_dotenv
+load_dotenv()
+```
+
+#### 3. Via Terminal Environment Variables
+* **Windows (PowerShell):**
+  ```powershell
+  $env:GEMINI_API_KEY="AIzaSy..."
   ```
+* **Linux / macOS (Bash/Zsh):**
+  ```bash
+  export GEMINI_API_KEY="AIzaSy..."
+  ```
+
+#### Provider Credential Reference Table
+
+| Provider | Where to get Key | Environment Variable | In-Code Parameter | Free Tier Available? |
+| :--- | :--- | :--- | :--- | :--- |
+| **Google Gemini** | [Google AI Studio](https://aistudio.google.com/app/apikey) | `GEMINI_API_KEY` | `api_key="..."` | **Yes (Generous free tier)** |
+| **Google Gemma (Local)** | [Ollama](https://ollama.com) | *None needed* | `provider="ollama"` | **100% Free & Offline** |
+| **xAI Grok** | [xAI Console](https://console.x.ai/) | `XAI_API_KEY` | `api_key="..."` | Pay-as-you-go |
+| **OpenAI** | [OpenAI Platform](https://platform.openai.com/) | `OPENAI_API_KEY` | `api_key="..."` | Pay-as-you-go |
+| **Anthropic Claude** | [Anthropic Console](https://console.anthropic.com/) | `ANTHROPIC_API_KEY` | `api_key="..."` | Pay-as-you-go |
 
 ---
 
@@ -129,7 +169,7 @@ def get_order_status(order_id: str) -> dict:
     }
 
 async def main():
-    # Pass api_key here or rely on GEMINI_API_KEY environment variable
+    # Pass api_key directly or set GEMINI_API_KEY in environment/.env
     runner = Runner(starting_agent=support_agent)
 
     response = await runner.run_async(
@@ -313,17 +353,67 @@ Every conversation turn is tracked by `SessionContext`:
 
 ## Guía Completa en Español
 
-### Modelos y Proveedores Compatibles
+### Configuración de API Keys (Claves de Acceso)
 
-`chatflow-agent` te permite elegir libremente entre servicios en la nube o modelos que corren en tu propia máquina:
+Puedes configurar tus credenciales de cualquiera de estas **3 formas**:
 
-| Proveedor | Modelos Ejemplo | Configuración | Costo |
-| :--- | :--- | :--- | :--- |
-| **Google Gemini** | `gemini-2.5-flash`, `gemini-2.5-pro` | Variable `GEMINI_API_KEY` o en código | Gratis (tier estándar) |
-| **Google Gemma / Ollama** | `gemma2:9b`, `llama3.2`, `mistral` | `provider="ollama"` (sin clave) | **100% Gratis y Local** |
-| **xAI Grok** | `grok-2` | Variable `XAI_API_KEY` o en código | Según uso en xAI |
-| **OpenAI** | `gpt-4o`, `gpt-4o-mini` | Variable `OPENAI_API_KEY` o en código | Según uso en OpenAI |
-| **Anthropic Claude** | `claude-3-5-sonnet`, `claude-3-5-haiku` | Variable `ANTHROPIC_API_KEY` o en código | Según uso en Anthropic |
+#### Opción 1: Directo en tu Código Python (La más fácil)
+Pasa tu clave directamente al instanciar el `Runner` o el `Agent`:
+```python
+# Pasándola al Runner (la usan todos los agentes de ese proveedor):
+runner = Runner(starting_agent=mi_agente, api_key="AIzaSyTuClaveDeGemini")
+
+# O a un agente específico:
+agente_grok = Agent(
+    name="Grok",
+    provider="grok",
+    api_key="xai-tu-clave-aqui",
+    instructions="..."
+)
+```
+
+#### Opción 2: Usando un Archivo `.env` (Recomendado en Producción)
+Crea un archivo `.env` en la raíz de tu proyecto:
+```env
+# Google Gemini (Obtén tu clave gratis en https://aistudio.google.com/)
+GEMINI_API_KEY="AIzaSy..."
+
+# OpenAI (https://platform.openai.com/api-keys)
+OPENAI_API_KEY="sk-..."
+
+# xAI Grok (https://console.x.ai/)
+XAI_API_KEY="xai-..."
+
+# Anthropic Claude (https://console.anthropic.com/)
+ANTHROPIC_API_KEY="sk-ant-..."
+```
+Y en tu código Python:
+```python
+from dotenv import load_dotenv
+load_dotenv()
+```
+
+#### Opción 3: Variables de Entorno en la Terminal
+* **En Windows PowerShell:**
+  ```powershell
+  $env:GEMINI_API_KEY="AIzaSy..."
+  ```
+* **En Linux o macOS:**
+  ```bash
+  export GEMINI_API_KEY="AIzaSy..."
+  ```
+
+---
+
+### Tabla Comparativa de Proveedores y Claves
+
+| Proveedor | Dónde obtener la clave | Variable de Entorno | Parámetro en Python | ¿Capa Gratuita? |
+| :--- | :--- | :--- | :--- | :--- |
+| **Google Gemini** | [Google AI Studio](https://aistudio.google.com/app/apikey) | `GEMINI_API_KEY` | `api_key="..."` | **Sí (Muy generosa)** |
+| **Google Gemma (Local)** | [Ollama](https://ollama.com) | *No requiere clave* | `provider="ollama"` | **100% Gratis y Offline** |
+| **xAI Grok** | [xAI Console](https://console.x.ai/) | `XAI_API_KEY` | `api_key="..."` | Pago por uso |
+| **OpenAI** | [OpenAI Platform](https://platform.openai.com/) | `OPENAI_API_KEY` | `api_key="..."` | Pago por uso |
+| **Anthropic Claude** | [Anthropic Console](https://console.anthropic.com/) | `ANTHROPIC_API_KEY` | `api_key="..."` | Pago por uso |
 
 ---
 
@@ -370,7 +460,6 @@ if __name__ == "__main__":
 
 Para ejecutar:
 ```bash
-# Si tienes la clave como variable:
 python mi_asistente.py
 ```
 
