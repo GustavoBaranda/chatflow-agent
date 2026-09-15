@@ -1,6 +1,6 @@
 """Engine factory and dynamic resolver for multi-provider agent swarms."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from chatflow_agent.core.engines.anthropic import AnthropicEngine
 from chatflow_agent.core.engines.base import BaseEngine
@@ -31,7 +31,7 @@ def resolve_engine(agent: "Agent", default_engine: BaseEngine | None = None) -> 
     """
     # 1. Custom engine explicitly on agent
     if hasattr(agent, "engine") and agent.engine is not None:
-        return agent.engine
+        return cast(BaseEngine, agent.engine)
 
     provider = (getattr(agent, "provider", None) or "").lower()
     api_key = getattr(agent, "api_key", None)

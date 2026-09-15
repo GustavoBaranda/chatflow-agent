@@ -4,78 +4,138 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/chatflow-agent.svg)](https://pypi.org/project/chatflow-agent/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> Lightweight, async multi-agent framework with native handoffs powered by Google Gemini.  
-> Connect autonomous agents to **WhatsApp**, **Telegram**, and **Webhooks**.  
-> *Marco de trabajo multiagente asíncrono y ultra liviano con transferencias nativas (handoffs) impulsado por Google Gemini. Conecta agentes autónomos a **WhatsApp**, **Telegram** y **Webhooks**.*
+> Lightweight, async multi-agent framework with native handoffs.  
+> Connect autonomous agents to **WhatsApp**, **Telegram**, **Webhooks**, and **CLI**.  
+>  
+> *Framework multiagente asíncrono y liviano con transferencias nativas (handoffs).  
+> Conecta agentes autónomos a **WhatsApp**, **Telegram**, **Webhooks** y **Terminal**.*
 
 ---
 
 ## English
 
-### Overview
-`chatflow-agent` is designed for simplicity, speed, and seamless multi-agent orchestration. Build specialized autonomous agents and connect them directly to real-world channels (**WhatsApp**, **Telegram**, **Webhooks**, **CLI**) with native tool calling and Swarm-style peer handoffs.
+### Quick Installation
 
-### Key Features
-- **Ultra-light Core:** Built on top of `google-genai` and `pydantic` with zero bloated dependencies.
-- **Native Peer Handoffs:** Declarative agent transfers (`handoffs=[billing_agent, tech_agent]`) without complex graph definitions.
-- **WhatsApp & Telegram Ready:** Direct connectors for Telegram polling/webhooks and WhatsApp (via Meta Cloud API, Evolution API, or generic webhooks).
-- **Pythonic Tool Registry:** Register tools using the `@agent.tool` decorator; schema extraction is automated via type hints and docstrings.
-- **Pluggable Channels:** Run across chat platforms or locally via an interactive CLI.
+```bash
+# Core framework
+pip install chatflow-agent
 
-### Quickstart: WhatsApp (Webhook / Meta Cloud API)
+# With WhatsApp connector
+pip install "chatflow-agent[whatsapp]"
+
+# With Telegram connector
+pip install "chatflow-agent[telegram]"
+
+# All connectors included
+pip install "chatflow-agent[all]"
+```
+
+---
+
+### 1. Basic Quickstart (Copy & Paste)
+
+Set your Gemini API Key in your terminal:
+```bash
+# Linux / macOS
+export GEMINI_API_KEY="your-gemini-api-key"
+
+# Windows PowerShell
+$env:GEMINI_API_KEY="your-gemini-api-key"
+```
+
+Create `app.py` and run it:
+
 ```python
-from chatflow_agent import Agent, Runner, WhatsAppChannel
+import asyncio
+from chatflow_agent import Agent, Runner
 
-# 1. Define agents and tools as usual
+# 1. Define specialist agent
 support_agent = Agent(
-    name="WhatsApp Support",
-    instructions="You provide friendly 24/7 customer assistance.",
+    name="SupportSpecialist",
+    model="gemini-2.5-flash",
+    instructions="You help customers with order status and returns.",
 )
 
 @support_agent.tool
-def check_order(order_id: str) -> dict:
-    """Check shipment and delivery status of an order."""
-    return {"order_id": order_id, "status": "Out for delivery", "eta": "2 hours"}
+def get_order_status(order_id: str) -> dict:
+    """Fetches live status of a customer order."""
+    return {
+        "order_id": order_id,
+        "status": "In transit",
+        "expected_delivery": "Tomorrow by 5 PM",
+    }
 
-# 2. Attach runner to WhatsApp Channel
-runner = Runner(starting_agent=support_agent)
-whatsapp = WhatsAppChannel(
-    verify_token="YOUR_WEBHOOK_VERIFY_TOKEN",
-    access_token="YOUR_WHATSAPP_ACCESS_TOKEN",
-    phone_number_id="YOUR_PHONE_NUMBER_ID",
+# 2. Define triage / receptionist agent
+reception_agent = Agent(
+    name="Receptionist",
+    model="gemini-2.5-flash",
+    instructions="Greet the customer and transfer to SupportSpecialist if they ask about orders.",
+    handoffs=[support_agent],  # Direct Swarm handoff
 )
-whatsapp.attach(runner)
+
+# 3. Run conversation turn
+async def main():
+    runner = Runner(starting_agent=reception_agent)
+    response = await runner.run_async(
+        session_id="user_123",
+        user_message="Hi! Where is my order #ORD-9921?",
+    )
+    print(f"[{response.active_agent_name}]: {response.content}")
 
 if __name__ == "__main__":
-    whatsapp.run(port=8000)  # Starts webhook server ready for Meta / Evolution API
+    asyncio.run(main())
 ```
 
-### Quickstart: Telegram Bot
+---
+
+### 2. WhatsApp Channel (Meta Cloud API Webhook)
+
+Run a production-ready webhook server using FastAPI and Uvicorn:
+
 ```python
-from chatflow_agent import Agent, Runner, TelegramChannel
+from chatflow_agent import Agent, Runner
+from chatflow_agent.channels import WhatsAppChannel
 
-# 1. Define specialized agents
-billing_agent = Agent(
-    name="Billing Agent",
-    instructions="You handle invoices and billing inquiries.",
+support = Agent(
+    name="WhatsAppBot",
+    model="gemini-2.5-flash",
+    instructions="You are a 24/7 customer service representative on WhatsApp.",
 )
 
-@billing_agent.tool
-def get_invoice_status(invoice_id: str) -> dict:
-    """Retrieve payment status for a specific invoice."""
-    return {"invoice_id": invoice_id, "status": "PAID", "amount": 120.0}
+runner = Runner(starting_agent=support)
 
-# 2. Define root triage agent with handoff
-triage_agent = Agent(
-    name="Triage Agent",
-    instructions="Frontline triage. Route billing queries to Billing Agent.",
-    handoffs=[billing_agent],
+channel = WhatsAppChannel(
+    runner=runner,
+    verify_token="my_meta_secret_token",  # Set this in Meta App Dashboard
+    access_token="EAA...",                # Meta System User Token
+    phone_number_id="1234567890",         # Meta WhatsApp Phone Number ID
 )
 
-# 3. Run multi-agent orchestrator on Telegram
-runner = Runner(starting_agent=triage_agent)
-channel = TelegramChannel(token="YOUR_TELEGRAM_BOT_TOKEN")
-channel.attach(runner)
+if __name__ == "__main__":
+    # Starts server on http://localhost:8000/webhook
+    channel.run(host="0.0.0.0", port=8000)
+```
+
+---
+
+### 3. Telegram Bot Channel
+
+```python
+from chatflow_agent import Agent, Runner
+from chatflow_agent.channels import TelegramChannel
+
+sales = Agent(
+    name="SalesBot",
+    model="gemini-2.5-flash",
+    instructions="You answer product inquiries and help users buy items.",
+)
+
+runner = Runner(starting_agent=sales)
+
+channel = TelegramChannel(
+    runner=runner,
+    bot_token="YOUR_TELEGRAM_BOT_TOKEN",  # From @BotFather
+)
 
 if __name__ == "__main__":
     channel.run()
@@ -83,35 +143,212 @@ if __name__ == "__main__":
 
 ---
 
-## Español
+### 4. Multi-Provider AI (Gemma, Grok, OpenAI, Claude)
 
-### Descripción General
-`chatflow-agent` está diseñado para ofrecer máxima simplicidad y velocidad en la orquestación multiagente. Permite construir agentes autónomos especializados y conectarlos directamente a canales reales (**WhatsApp**, **Telegram**, **Webhooks HTTP**, **terminal interactiva**) con soporte nativo de *Function Calling* y transferencias fluidas estilo Swarm.
+`chatflow-agent` supports multiple LLMs across agents in the same session:
 
-### Características Principales
-- **Núcleo ultra liviano:** Basado únicamente en `google-genai` y `pydantic`.
-- **Integración con WhatsApp y Telegram:** Conectores directos para Telegram y WhatsApp (API oficial de Meta Cloud, Evolution API o Webhooks FastAPI).
-- **Handoffs nativos entre agentes:** Conexiones declarativas entre especialistas sin grafos complejos ni dependencias innecesarias.
-- **Registro idiomático de herramientas:** Usa el decorador `@agent.tool`; los esquemas JSON se generan automáticamente a partir de *type hints* y *docstrings*.
-- **Canales modulares desacoplados:** Instala solo lo que necesitas mediante dependencias opcionales (*extras*).
+```python
+from chatflow_agent import Agent
+
+# Offline local model with Ollama (requires Ollama running on localhost:11434)
+local_gemma = Agent(
+    name="LocalProcessor",
+    provider="ollama",
+    model="gemma2:9b",
+    instructions="Process private records locally.",
+)
+
+# xAI Grok (requires XAI_API_KEY)
+grok_agent = Agent(
+    name="GrokAnalyst",
+    provider="grok",
+    model="grok-2",
+    instructions="Perform deep technical research.",
+)
+
+# Anthropic Claude (requires ANTHROPIC_API_KEY)
+claude_agent = Agent(
+    name="ClaudeAuditor",
+    provider="anthropic",
+    model="claude-3-5-sonnet",
+    instructions="Validate strict regulatory compliance.",
+)
+```
 
 ---
 
-## Installation / Instalación
+## Español
+
+### Instalación
 
 ```bash
-# Core package only / Solo el núcleo
+# Instalación base
 pip install chatflow-agent
 
-# With WhatsApp support / Con soporte para WhatsApp
+# Con conector de WhatsApp (FastAPI + Uvicorn)
 pip install "chatflow-agent[whatsapp]"
 
-# With Telegram support / Con soporte para Telegram
+# Con conector de Telegram
 pip install "chatflow-agent[telegram]"
 
-# Full installation (all channels) / Instalación completa (todos los canales)
+# Con todos los canales
 pip install "chatflow-agent[all]"
 ```
 
-## License / Licencia
-MIT License.
+---
+
+### 1. Guía Rápida Funcional (Copiar y Pegar)
+
+Configura tu API Key de Gemini en la terminal:
+```bash
+# En Windows PowerShell
+$env:GEMINI_API_KEY="tu-clave-gemini"
+
+# En Linux o Mac
+export GEMINI_API_KEY="tu-clave-gemini"
+```
+
+Crea un archivo `ejemplo.py`:
+
+```python
+import asyncio
+from chatflow_agent import Agent, Runner
+
+# 1. Agente Especialista con Herramientas
+soporte = Agent(
+    name="Soporte",
+    model="gemini-2.5-flash",
+    instructions="Resuelves dudas sobre el estado de pedidos y envíos.",
+)
+
+@soporte.tool
+def consultar_pedido(id_pedido: str) -> dict:
+    """Consulta la información en vivo de un pedido."""
+    return {
+        "pedido": id_pedido,
+        "estado": "En reparto",
+        "entrega_estimada": "Hoy antes de las 18:00hs",
+    }
+
+# 2. Agente Recepcionista que deriva al especialista
+recepcion = Agent(
+    name="Recepcion",
+    model="gemini-2.5-flash",
+    instructions="Saluda amablemente y deriva a Soporte si preguntan por pedidos.",
+    handoffs=[soporte],  # Transferencia de control nativa
+)
+
+# 3. Bucle de ejecución
+async def main():
+    runner = Runner(starting_agent=recepcion)
+    
+    # El usuario escribe y la IA decide a qué agente pasar y qué herramienta llamar
+    respuesta = await runner.run_async(
+        session_id="cliente_01",
+        user_message="Hola, ¿dónde está mi pedido #1042?",
+    )
+    
+    print(f"Respondió [{respuesta.active_agent_name}]: {respuesta.content}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Ejecuta el archivo:
+```bash
+python ejemplo.py
+```
+
+---
+
+### 2. Conexión con WhatsApp (Meta Cloud API)
+
+Levanta un servidor Webhook listo para producción:
+
+```python
+from chatflow_agent import Agent, Runner
+from chatflow_agent.channels import WhatsAppChannel
+
+agente = Agent(
+    name="AtencionWhatsApp",
+    model="gemini-2.5-flash",
+    instructions="Atiendes a clientes por WhatsApp las 24 horas.",
+)
+
+runner = Runner(starting_agent=agente)
+
+canal_whatsapp = WhatsAppChannel(
+    runner=runner,
+    verify_token="mi_token_de_verificacion",  # El que colocas en Meta Developers
+    access_token="EAA...",                    # Token de acceso de Meta
+    phone_number_id="1234567890",             # ID de número de teléfono de WhatsApp
+)
+
+if __name__ == "__main__":
+    # Abre el servidor en http://localhost:8000/webhook
+    canal_whatsapp.run(host="0.0.0.0", port=8000)
+```
+
+---
+
+### 3. Conexión con Telegram
+
+```python
+from chatflow_agent import Agent, Runner
+from chatflow_agent.channels import TelegramChannel
+
+agente = Agent(
+    name="BotTelegram",
+    model="gemini-2.5-flash",
+    instructions="Atiendes consultas en Telegram de forma rápida.",
+)
+
+runner = Runner(starting_agent=agente)
+
+canal_telegram = TelegramChannel(
+    runner=runner,
+    bot_token="TU_TOKEN_DE_BOTFATHER",
+)
+
+if __name__ == "__main__":
+    canal_telegram.run()
+```
+
+---
+
+### 4. Soporte Multi-Proveedor (Opcional)
+
+Si quieres usar otros modelos además de Gemini:
+
+```python
+from chatflow_agent import Agent
+
+# Gemma Local (Gratis, requiere Ollama corriendo en tu PC)
+gemma_local = Agent(
+    name="GemmaLocal",
+    provider="ollama",          # Conecta a http://localhost:11434/v1
+    model="gemma2:9b",
+    instructions="Procesas datos confidenciales sin conexión a internet.",
+)
+
+# xAI Grok (Requiere variable XAI_API_KEY)
+grok_agent = Agent(
+    name="Grok",
+    provider="grok",
+    model="grok-2",
+    instructions="Especialista en análisis e investigación técnica.",
+)
+
+# Anthropic Claude (Requiere variable ANTHROPIC_API_KEY)
+claude_agent = Agent(
+    name="Claude",
+    provider="anthropic",
+    model="claude-3-5-sonnet",
+    instructions="Auditoría y validación de seguridad.",
+)
+```
+
+---
+
+## License
+Distributed under the **MIT License**.

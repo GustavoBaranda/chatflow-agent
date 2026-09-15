@@ -1,7 +1,7 @@
 """Gemini LLM engine implementation using google-genai SDK."""
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from google import genai
 from google.genai import types
@@ -19,6 +19,7 @@ class GeminiEngine(BaseEngine):
 
     def __init__(self, api_key: str | None = None) -> None:
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.client: genai.Client | None = None
         try:
             self.client = genai.Client(api_key=self.api_key) if self.api_key else genai.Client()
         except Exception:
@@ -82,10 +83,10 @@ class GeminiEngine(BaseEngine):
         contents = self._format_history_to_contents(history)
         all_tools = agent.get_all_tools()
 
-        gemini_tools: list[types.Tool] | None = None
+        gemini_tools: list[Any] | None = None
         if all_tools:
             declarations = [t.to_gemini_declaration() for t in all_tools]
-            gemini_tools = [types.Tool(function_declarations=declarations)]
+            gemini_tools = [types.Tool(function_declarations=cast(Any, declarations))]
 
         config = types.GenerateContentConfig(
             system_instruction=agent.get_instructions(),
@@ -113,10 +114,11 @@ class GeminiEngine(BaseEngine):
                         text_chunks.append(part.text)
                     if part.function_call:
                         call_id = f"call_{part.function_call.name}_{idx}"
+                        func_name = str(part.function_call.name or "")
                         extracted_calls.append(
                             ToolCall(
                                 id=call_id,
-                                name=part.function_call.name,
+                                name=func_name,
                                 args=dict(part.function_call.args or {}),
                             )
                         )
