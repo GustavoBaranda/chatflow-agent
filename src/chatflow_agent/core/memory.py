@@ -1,5 +1,7 @@
+
 """Session memory management and context tracking for multi-agent conversations."""
 
+import asyncio
 from typing import Any
 
 from chatflow_agent.core.agent import Agent
@@ -21,6 +23,14 @@ class SessionContext:
         self.max_turns = max_turns
         self.history: list[Message] = []
         self.metadata: dict[str, Any] = metadata or {}
+        self._lock: asyncio.Lock | None = None
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        """Asynchronous lock to serialize concurrent message processing for this session."""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     def add_message(self, message: Message) -> None:
         """Append a message to the dialogue history and apply sliding window pruning."""

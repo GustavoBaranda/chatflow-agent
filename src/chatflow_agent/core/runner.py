@@ -67,138 +67,139 @@ class Runner:
             metadata=metadata,
         )
 
-        # 1. Append inbound user message to history
-        session.add_message(Message(role=Role.USER, content=user_message))
+        async with session.lock:
+            # 1. Append inbound user message to history
+            session.add_message(Message(role=Role.USER, content=user_message))
 
-        tool_calls_executed: list[str] = []
-        last_handoff: Handoff | None = None
-        handoff_counter = 0
+            tool_calls_executed: list[str] = []
+            last_handoff: Handoff | None = None
+            handoff_counter = 0
 
-        # 2. Main agent execution loop
-        for _ in range(self.max_tool_iterations):
-            current_agent = session.active_agent
-            active_engine = resolve_engine(current_agent, default_engine=self.engine)
-            turn_result = await active_engine.generate_turn_async(
-                agent=current_agent,
-                history=session.history,
-            )
-
-            # If the model requested tool calls
-            if turn_result.has_tool_calls:
-                # Record model's intent in history
-                session.add_message(
-                    Message(
-                        role=Role.MODEL,
-                        content=turn_result.text,
-                        tool_calls=turn_result.tool_calls,
-                    )
+            # 2. Main agent execution loop
+            for _ in range(self.max_tool_iterations):
+                current_agent = session.active_agent
+                active_engine = resolve_engine(current_agent, default_engine=self.engine)
+                turn_result = await active_engine.generate_turn_async(
+                    agent=current_agent,
+                    history=session.history,
                 )
 
-                tool_results: list[ToolResult] = []
-                available_tools = {t.name: t for t in current_agent.get_all_tools()}
-
-                for call in turn_result.tool_calls:
-                    tool_calls_executed.append(call.name)
-                    tool_instance = available_tools.get(call.name)
-
-                    if not tool_instance:
-                        tool_results.append(
-                            ToolResult(
-                                tool_call_id=call.id,
-                                name=call.name,
-                                content=f"Error: Tool '{call.name}' not found on agent '{current_agent.name}'.",
-                                is_error=True,
-                            )
+                # If the model requested tool calls
+                if turn_result.has_tool_calls:
+                    # Record model's intent in history
+                    session.add_message(
+                        Message(
+                            role=Role.MODEL,
+                            content=turn_result.text,
+                            tool_calls=turn_result.tool_calls,
                         )
-                        continue
+                    )
 
-                    # Execute tool safely
-                    try:
-                        raw_output = await tool_instance.execute_async(**call.args)
-                    except Exception as err:
-                        tool_results.append(
-                            ToolResult(
-                                tool_call_id=call.id,
-                                name=call.name,
-                                content=f"Execution error: {err}",
-                                is_error=True,
-                            )
-                        )
-                        continue
+                    tool_results: list[ToolResult] = []
+                    available_tools = {t.name: t for t in current_agent.get_all_tools()}
 
-                    # Check if tool execution resulted in a Handoff
-                    if isinstance(raw_output, Handoff):
-                        target_name = raw_output.target_agent_name
-                        target_agent = self._agents_registry.get(target_name)
+                    for call in turn_result.tool_calls:
+                        tool_calls_executed.append(call.name)
+                        tool_instance = available_tools.get(call.name)
 
-                        if not target_agent:
-                            raise AgentHandoffError(
-                                f"Handoff target agent '{target_name}' is not registered in Runner."
-                            )
-
-                        # Switch active agent pointer
-                        session.set_active_agent(target_agent)
-                        last_handoff = raw_output
-                        handoff_counter += 1
-
-                        if handoff_counter > self.max_handoffs_per_turn:
+                        if not tool_instance:
                             tool_results.append(
                                 ToolResult(
                                     tool_call_id=call.id,
                                     name=call.name,
-                                    content="Maximum agent transfers exceeded for a single turn.",
+                                    content=f"Error: Tool '{call.name}' not found on agent '{current_agent.name}'.",
                                     is_error=True,
                                 )
                             )
-                            break
+                            continue
 
-                        tool_results.append(
-                            ToolResult(
-                                tool_call_id=call.id,
-                                name=call.name,
-                                content={
-                                    "status": "HANDOFF_SUCCESS",
-                                    "transferred_to": target_agent.name,
-                                    "reason": raw_output.reason or "Specialist routing",
-                                },
+                        # Execute tool safely
+                        try:
+                            raw_output = await tool_instance.execute_async(**call.args)
+                        except Exception as err:
+                            tool_results.append(
+                                ToolResult(
+                                    tool_call_id=call.id,
+                                    name=call.name,
+                                    content=f"Execution error: {err}",
+                                    is_error=True,
+                                )
                             )
-                        )
-                    else:
-                        tool_results.append(
-                            ToolResult(
-                                tool_call_id=call.id,
-                                name=call.name,
-                                content=raw_output,
+                            continue
+
+                        # Check if tool execution resulted in a Handoff
+                        if isinstance(raw_output, Handoff):
+                            target_name = raw_output.target_agent_name
+                            target_agent = self._agents_registry.get(target_name)
+
+                            if not target_agent:
+                                raise AgentHandoffError(
+                                    f"Handoff target agent '{target_name}' is not registered in Runner."
+                                )
+
+                            # Switch active agent pointer
+                            session.set_active_agent(target_agent)
+                            last_handoff = raw_output
+                            handoff_counter += 1
+
+                            if handoff_counter > self.max_handoffs_per_turn:
+                                tool_results.append(
+                                    ToolResult(
+                                        tool_call_id=call.id,
+                                        name=call.name,
+                                        content="Maximum agent transfers exceeded for a single turn.",
+                                        is_error=True,
+                                    )
+                                )
+                                break
+
+                            tool_results.append(
+                                ToolResult(
+                                    tool_call_id=call.id,
+                                    name=call.name,
+                                    content={
+                                        "status": "HANDOFF_SUCCESS",
+                                        "transferred_to": target_agent.name,
+                                        "reason": raw_output.reason or "Specialist routing",
+                                    },
+                                )
                             )
-                        )
+                        else:
+                            tool_results.append(
+                                ToolResult(
+                                    tool_call_id=call.id,
+                                    name=call.name,
+                                    content=raw_output,
+                                )
+                            )
 
-                # Append tool results to conversation history
-                session.add_message(Message(role=Role.TOOL, tool_results=tool_results))
-                # Continue loop: active agent evaluates the tool results
+                    # Append tool results to conversation history
+                    session.add_message(Message(role=Role.TOOL, tool_results=tool_results))
+                    # Continue loop: active agent evaluates the tool results
 
-            else:
-                # No more tool calls: final text response reached
-                final_text = turn_result.text or ""
-                session.add_message(Message(role=Role.MODEL, content=final_text))
+                else:
+                    # No more tool calls: final text response reached
+                    final_text = turn_result.text or ""
+                    session.add_message(Message(role=Role.MODEL, content=final_text))
 
-                return AgentResponse(
-                    content=final_text,
-                    active_agent_name=session.active_agent.name,
-                    tool_calls_executed=tool_calls_executed,
-                    handoff=last_handoff,
-                )
+                    return AgentResponse(
+                        content=final_text,
+                        active_agent_name=session.active_agent.name,
+                        tool_calls_executed=tool_calls_executed,
+                        handoff=last_handoff,
+                    )
 
-        # Fallback if max tool iterations exceeded
-        fallback_text = (
-            f"Execution iteration limit reached by agent '{session.active_agent.name}'."
-        )
-        session.add_message(Message(role=Role.MODEL, content=fallback_text))
-        return AgentResponse(
-            content=fallback_text,
-            active_agent_name=session.active_agent.name,
-            tool_calls_executed=tool_calls_executed,
-            handoff=last_handoff,
-        )
+            # Fallback if max tool iterations exceeded
+            fallback_text = (
+                f"Execution iteration limit reached by agent '{session.active_agent.name}'."
+            )
+            session.add_message(Message(role=Role.MODEL, content=fallback_text))
+            return AgentResponse(
+                content=fallback_text,
+                active_agent_name=session.active_agent.name,
+                tool_calls_executed=tool_calls_executed,
+                handoff=last_handoff,
+            )
 
     def run(
         self,
