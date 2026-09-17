@@ -11,7 +11,7 @@ logger = logging.getLogger("chatflow_agent.whatsapp")
 
 
 class WhatsAppChannel(BaseChannel):
-    """WhatsApp integration supporting Meta Cloud API and generic webhooks."""
+    """WhatsApp integration supporting Meta Cloud API and generic webhooks with resilience."""
 
     def __init__(
         self,
@@ -19,12 +19,21 @@ class WhatsAppChannel(BaseChannel):
         access_token: str | None = None,
         phone_number_id: str | None = None,
         api_version: str = "v21.0",
+        fallback_message: str = (
+            "Disculpa, estamos experimentando una demora temporal con nuestro servicio. "
+            "Por favor intenta nuevamente en unos momentos."
+        ),
+        unsupported_media_message: str = (
+            "Por el momento solo puedo procesar mensajes de texto."
+        ),
     ) -> None:
         super().__init__()
         self.verify_token = verify_token
         self.access_token = access_token
         self.phone_number_id = phone_number_id
         self.api_version = api_version
+        self.fallback_message = fallback_message
+        self.unsupported_media_message = unsupported_media_message
 
         # Verify optional dependencies
         try:
@@ -69,44 +78,71 @@ class WhatsAppChannel(BaseChannel):
 
         @self.app.post("/webhook")
         async def handle_incoming_message(request: Request) -> Response:
-            """Process incoming WhatsApp message events."""
+            """Process incoming WhatsApp message events with anti-500 error shield."""
             payload = await request.json()
-            message_data = self._extract_message_and_sender(payload)
+            extracted = self._extract_message_and_sender(payload)
 
-            if not message_data:
+            if not extracted:
                 # Return 200 to acknowledge status notifications (delivered, read, etc.)
                 return JSONResponse(content={"status": "ignored_or_status_update"})
 
-            sender_phone, user_text = message_data
+            sender_phone, user_text = extracted
 
-            # Dispatch to attached runner
-            response: AgentResponse = await self.dispatch_async(
-                session_id=sender_phone,
-                message=user_text,
-                metadata={"channel": "whatsapp", "phone": sender_phone},
-            )
+            # 1. Handle non-text media (audios, images, stickers, documents)
+            if user_text is None:
+                if self.access_token and self.phone_number_id:
+                    await self._send_outbound_whatsapp(
+                        to_phone=sender_phone, text=self.unsupported_media_message
+                    )
+                return JSONResponse(
+                    content={
+                        "status": "unsupported_media_handled",
+                        "sender": sender_phone,
+                        "reply": self.unsupported_media_message,
+                    }
+                )
+
+            # 2. Process message through attached runner with anti-500 error shield
+            reply_text: str
+            active_agent: str
+            try:
+                response: AgentResponse = await self.dispatch_async(
+                    session_id=sender_phone,
+                    message=user_text,
+                    metadata={"channel": "whatsapp", "phone": sender_phone},
+                )
+                reply_text = response.content
+                active_agent = response.active_agent_name
+            except Exception as err:
+                logger.error(f"Error dispatching WhatsApp message from {sender_phone}: {err}")
+                reply_text = self.fallback_message
+                active_agent = "fallback"
 
             # If Meta credentials are provided, send outbound reply to WhatsApp API
             if self.access_token and self.phone_number_id:
                 await self._send_outbound_whatsapp(
-                    to_phone=sender_phone, text=response.content
+                    to_phone=sender_phone, text=reply_text
                 )
 
+            # Always return HTTP 200 to Meta to avoid retry storms
             return JSONResponse(
                 content={
                     "status": "success",
                     "sender": sender_phone,
-                    "reply": response.content,
-                    "active_agent": response.active_agent_name,
+                    "reply": reply_text,
+                    "active_agent": active_agent,
                 }
             )
 
     def _extract_message_and_sender(
         self, payload: dict[str, Any]
-    ) -> tuple[str, str] | None:
-        """Extract sender phone number and text message from payload.
+    ) -> tuple[str, str | None] | None:
+        """Extract sender phone number and message from payload.
 
-        Supports both standard Meta Cloud API and direct/Evolution API webhooks.
+        Returns:
+            (phone, text) for text messages.
+            (phone, None) for non-text media messages.
+            None for status updates or empty payloads.
         """
         # 1. Standard Meta Cloud API webhook format
         entry = payload.get("entry")
@@ -118,10 +154,16 @@ class WhatsAppChannel(BaseChannel):
                 if isinstance(messages, list) and messages:
                     msg = messages[0]
                     sender = msg.get("from")
-                    # Text message
-                    text = msg.get("text", {}).get("body")
-                    if sender and text:
-                        return str(sender), str(text)
+                    if not sender:
+                        return None
+
+                    msg_type = msg.get("type", "text")
+                    if msg_type == "text":
+                        text = msg.get("text", {}).get("body")
+                        if text:
+                            return str(sender), str(text)
+                    # Non-text media message received
+                    return str(sender), None
 
         # 2. Generic / Evolution API webhook format
         sender = (
@@ -129,13 +171,15 @@ class WhatsAppChannel(BaseChannel):
             or payload.get("from")
             or payload.get("sender")
         )
-        text = (
-            payload.get("message")
-            or payload.get("text")
-            or payload.get("body")
-        )
-        if sender and text:
-            return str(sender), str(text)
+        if sender:
+            text = (
+                payload.get("message")
+                or payload.get("text")
+                or payload.get("body")
+            )
+            if text:
+                return str(sender), str(text)
+            return str(sender), None
 
         return None
 

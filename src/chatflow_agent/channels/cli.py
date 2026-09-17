@@ -28,7 +28,7 @@ class CLIChannel(BaseChannel):
         runner = self._ensure_runner_attached()
 
         print("=" * 65)
-        print(f"💬 ChatFlow CLI Session Started [Starting: {runner.starting_agent.name}]")
+        print(f"ChatFlow CLI Session Started [Starting: {runner.starting_agent.name}]")
         print("Type 'exit', 'quit' or 'salir' to end the session.")
         print("=" * 65)
 
@@ -51,7 +51,7 @@ class CLIChannel(BaseChannel):
                 response = self.dispatch(self.session_id, user_input)
                 # Show handoff indicator if a transfer occurred
                 if response.handoff:
-                    print(f"🔄 [Transferred to {response.handoff.target_agent_name}]")
+                    print(f"[Transferred to {response.handoff.target_agent_name}]")
                     if response.handoff.reason:
                         print(f"   Reason: {response.handoff.reason}")
 
@@ -59,4 +59,4 @@ class CLIChannel(BaseChannel):
                 print(f"\n[{response.active_agent_name}]: {response.content}")
 
             except Exception as err:
-                print(f"\n❌ Error during processing: {err}", file=sys.stderr)
+                print(f"\nError during processing: {err}", file=sys.stderr)

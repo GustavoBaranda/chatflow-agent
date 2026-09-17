@@ -17,11 +17,16 @@ class TelegramChannel(BaseChannel):
         self,
         token: str,
         start_message: str = "Hello! I am your AI multi-agent assistant. How can I help you today?",
+        fallback_message: str = (
+            "Disculpa, ocurrió un inconveniente al procesar tu solicitud. "
+            "Por favor intenta nuevamente en unos momentos."
+        ),
         allowed_updates: list[str] | None = None,
     ) -> None:
         super().__init__()
         self.token = token
         self.start_message = start_message
+        self.fallback_message = fallback_message
         self.allowed_updates = allowed_updates
 
         # Verify optional dependencies
@@ -71,7 +76,7 @@ class TelegramChannel(BaseChannel):
         await update.message.reply_text("Conversation memory has been reset.")
 
     async def _handle_message(self, update: Any, context: Any) -> None:
-        """Process standard incoming text messages from Telegram."""
+        """Process standard incoming text messages from Telegram with error resilience."""
         if not update.effective_chat or not update.message or not update.message.text:
             return
 
@@ -101,9 +106,7 @@ class TelegramChannel(BaseChannel):
             await update.message.reply_text(response.content)
         except Exception as err:
             logger.error(f"Error processing Telegram message: {err}")
-            await update.message.reply_text(
-                "An error occurred while processing your request."
-            )
+            await update.message.reply_text(self.fallback_message)
 
     def run(self, **kwargs: Any) -> None:
         """Start polling for Telegram updates."""
