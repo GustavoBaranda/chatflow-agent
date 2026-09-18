@@ -289,11 +289,13 @@ agent = Agent(name="WhatsAppConcierge", instructions="Answer customer inquiries.
 runner = Runner(starting_agent=agent)
 
 channel = WhatsAppChannel(
-    runner=runner,
     verify_token="my_custom_webhook_secret",  # Verification token configured in Meta App
     access_token="EAA...",                    # Meta Permanent/System User Token
     phone_number_id="109876543210987",        # WhatsApp Phone Number ID from Meta Dashboard
+    fallback_message="We are experiencing a temporary delay. Please try again shortly.",
+    unsupported_media_message="Currently I can only process text messages.",
 )
+channel.attach(runner)
 
 if __name__ == "__main__":
     # Exposes GET /webhook (verification handshake) and POST /webhook (incoming messages)
@@ -314,9 +316,10 @@ agent = Agent(name="TelegramBot", instructions="You assist Telegram users.")
 runner = Runner(starting_agent=agent)
 
 channel = TelegramChannel(
-    runner=runner,
-    bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",  # From @BotFather
+    token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",  # From @BotFather
+    fallback_message="Sorry, a temporary issue occurred. Please retry in a few moments.",
 )
+channel.attach(runner)
 
 if __name__ == "__main__":
     # Runs async polling; automatically handles /start, /reset, and typing indicators
@@ -336,9 +339,20 @@ from chatflow_agent.channels import CLIChannel
 agent = Agent(name="TerminalAssistant", instructions="Answer user questions concisely.")
 runner = Runner(starting_agent=agent)
 
-channel = CLIChannel(runner=runner, session_id="dev_test")
+channel = CLIChannel(session_id="dev_test")
+channel.attach(runner)
 channel.run()
 ```
+
+---
+
+### Production Resilience & Concurrency
+
+ChatFlow includes built-in safeguards engineered specifically for real-world messaging traffic:
+
+* **Per-Session Concurrency Lock (`asyncio.Lock`):** When a user sends multiple messages in rapid succession (e.g., three WhatsApp voice transcriptions or quick texts in 2 seconds), an async lock guarantees FIFO execution. Turns are processed in strict sequential order, preventing race conditions, overlapping tool executions, or corrupted conversation histories.
+* **Meta Anti-500 Error Shield:** Meta's webhook infrastructure retries delivery aggressively if your endpoint returns HTTP 500. `WhatsAppChannel` catches any upstream LLM outages or rate limits, returns **HTTP 200** to Meta to prevent retry storms, dispatches the configured `fallback_message` to the user, and logs clean diagnostic details.
+* **Unsupported Media Handling:** Audio voice notes, photos, and PDF files are safely intercepted with `unsupported_media_message` without throwing unhandled exceptions or disrupting ongoing chat sessions.
 
 ---
 
@@ -481,18 +495,26 @@ agente_ventas = Agent(
 
 runner = Runner(starting_agent=agente_ventas)
 
-# Conector oficial para Meta Cloud API
+# Conector oficial para Meta Cloud API con resiliencia de produccion
 servidor_whatsapp = WhatsAppChannel(
-    runner=runner,
-    verify_token="tu_token_verificacion_meta", # El token que configuras en Meta Developers
-    access_token="EAA...",                     # Token de acceso de sistema de Meta
-    phone_number_id="102938475610293",         # ID de número telefónico de WhatsApp
+    verify_token="tu_token_verificacion_meta", # Configurado en Meta Developers
+    access_token="EAA...",                     # Token de acceso de Meta
+    phone_number_id="102938475610293",         # ID del numero de WhatsApp Business
+    fallback_message="Disculpa, estamos experimentando una demora temporal. Por favor intenta en unos momentos.",
+    unsupported_media_message="Por el momento solo puedo procesar mensajes de texto.",
 )
+servidor_whatsapp.attach(runner)
 
 if __name__ == "__main__":
-    # Levanta el servidor en http://localhost:8000/webhook
+    # Levanta el webhook en http://localhost:8000/webhook
     servidor_whatsapp.run(host="0.0.0.0", port=8000)
 ```
+
+### Resiliencia y Concurrencia en Produccion
+
+* **Candado de Concurrencia (`asyncio.Lock`):** Si un cliente envia 3 mensajes seguidos en WhatsApp o Telegram, se encolan y procesan en estricto orden FIFO por usuario. Nunca se mezclan turnos ni se corrompe el historial.
+* **Escudo Anti-500 en WhatsApp:** Si la IA tiene una microcaida o se agota la cuota del proveedor, el webhook responde **HTTP 200** a Meta (evitando bombardeos de reintentos) y le envia al usuario un mensaje de contingencia amigable (`fallback_message`).
+* **Filtro de Mensajes Multimedia:** Audios, fotos y documentos son interceptados con un aviso claro (`unsupported_media_message`) sin interrumpir la sesion.
 
 ---
 
