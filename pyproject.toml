@@ -41,12 +41,6 @@ classifiers = [
     "Typing :: Typed",
 ]
 
-[project.urls]
-Homepage = "https://github.com/GustavoBaranda/chatflow-agent"
-"Source Code" = "https://github.com/GustavoBaranda/chatflow-agent"
-"Issue Tracker" = "https://github.com/GustavoBaranda/chatflow-agent/issues"
-"Changelog" = "https://github.com/GustavoBaranda/chatflow-agent/releases"
-
 dependencies = [
     "google-genai>=0.1.1",
     "pydantic>=2.6.0",
@@ -74,6 +68,12 @@ dev = [
     "ruff>=0.4.0",
     "mypy>=1.9.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/GustavoBaranda/chatflow-agent"
+"Source Code" = "https://github.com/GustavoBaranda/chatflow-agent"
+"Issue Tracker" = "https://github.com/GustavoBaranda/chatflow-agent/issues"
+"Changelog" = "https://github.com/GustavoBaranda/chatflow-agent/releases"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/chatflow_agent"]
