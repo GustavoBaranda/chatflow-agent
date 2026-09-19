@@ -1,6 +1,7 @@
 # chatflow-agent
 
 [![CI](https://github.com/GustavoBaranda/chatflow-agent/actions/workflows/test.yml/badge.svg)](https://github.com/GustavoBaranda/chatflow-agent/actions/workflows/test.yml)
+[![PyPI version](https://img.shields.io/pypi/v/chatflow-agent.svg)](https://pypi.org/project/chatflow-agent/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
@@ -517,6 +518,14 @@ if __name__ == "__main__":
 * **Candado de Concurrencia (`asyncio.Lock`):** Si un cliente envia 3 mensajes seguidos en WhatsApp o Telegram, se encolan y procesan en estricto orden FIFO por usuario. Nunca se mezclan turnos ni se corrompe el historial.
 * **Escudo Anti-500 en WhatsApp:** Si la IA tiene una microcaida o se agota la cuota del proveedor, el webhook responde **HTTP 200** a Meta (evitando bombardeos de reintentos) y le envia al usuario un mensaje de contingencia amigable (`fallback_message`).
 * **Filtro de Mensajes Multimedia:** Audios, fotos y documentos son interceptados con un aviso claro (`unsupported_media_message`) sin interrumpir la sesion.
+
+---
+
+## Author & Community
+Created and maintained by **[Gustavo Baranda](https://github.com/GustavoBaranda)**.
+
+If you find `chatflow-agent` useful for your projects, consider giving it a ⭐ on GitHub!  
+Contributions, issues, and feature requests are always welcome.
 
 ---
 

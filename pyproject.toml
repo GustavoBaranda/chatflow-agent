@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chatflow-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Lightweight, async multi-agent framework with native handoffs for Gemini, Gemma, Grok, OpenAI & Claude."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-    { name = "Gustavo", email = "developer@example.com" }
+    { name = "Gustavo Baranda" }
 ]
 keywords = [
     "ai",
@@ -40,6 +40,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://github.com/GustavoBaranda/chatflow-agent"
+"Source Code" = "https://github.com/GustavoBaranda/chatflow-agent"
+"Issue Tracker" = "https://github.com/GustavoBaranda/chatflow-agent/issues"
+"Changelog" = "https://github.com/GustavoBaranda/chatflow-agent/releases"
 
 dependencies = [
     "google-genai>=0.1.1",
