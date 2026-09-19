@@ -1,8 +1,10 @@
 # chatflow-agent
 
-[![PyPI version](https://img.shields.io/pypi/v/chatflow-agent.svg)](https://pypi.org/project/chatflow-agent/)
-[![Python versions](https://img.shields.io/pypi/pyversions/chatflow-agent.svg)](https://pypi.org/project/chatflow-agent/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/GustavoBaranda/chatflow-agent/actions/workflows/test.yml/badge.svg)](https://github.com/GustavoBaranda/chatflow-agent/actions/workflows/test.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![Checked with mypy](https://img.shields.io/badge/mypy-checked-blue.svg)](https://mypy-lang.org/)
 
 > **Lightweight, async multi-agent framework with native handoffs for real-world channels.**  
 > Supports **Google Gemini**, **Google Gemma (Local)**, **xAI Grok**, **OpenAI (GPT-4o)**, and **Anthropic Claude**.  
