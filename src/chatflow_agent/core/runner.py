@@ -5,7 +5,7 @@ from typing import Any
 
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import BaseEngine, GeminiEngine, resolve_engine
-from chatflow_agent.core.memory import SessionContext, SessionStore
+from chatflow_agent.core.memory import BaseSessionStore, SessionContext, SessionStore
 from chatflow_agent.exceptions import AgentHandoffError
 from chatflow_agent.types import (
     AgentResponse,
@@ -22,14 +22,14 @@ class Runner:
     def __init__(
         self,
         starting_agent: Agent,
-        session_store: SessionStore | None = None,
+        session_store: BaseSessionStore | SessionStore | None = None,
         engine: BaseEngine | None = None,
         api_key: str | None = None,
         max_handoffs_per_turn: int = 5,
         max_tool_iterations: int = 10,
     ) -> None:
         self.starting_agent = starting_agent
-        self.session_store = session_store or SessionStore()
+        self.session_store: BaseSessionStore | SessionStore = session_store or SessionStore()
         self.engine = engine or GeminiEngine(api_key=api_key)
         self.max_handoffs_per_turn = max_handoffs_per_turn
         self.max_tool_iterations = max_tool_iterations
@@ -37,6 +37,9 @@ class Runner:
         # Registry of all known agents (starting agent + all transitive handoffs)
         self._agents_registry: dict[str, Agent] = {}
         self._register_agent_tree(self.starting_agent)
+
+        if hasattr(self.session_store, "set_agent_resolver"):
+            self.session_store.set_agent_resolver(lambda name: self._agents_registry.get(name))
 
     def _register_agent_tree(self, root: Agent) -> None:
         """Traverse and index all agents in the handoff tree."""

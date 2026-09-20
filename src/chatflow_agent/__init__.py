@@ -6,7 +6,13 @@ from chatflow_agent.channels.telegram import TelegramChannel
 from chatflow_agent.channels.whatsapp import WhatsAppChannel
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import AnthropicEngine, BaseEngine, GeminiEngine, OpenAIEngine
-from chatflow_agent.core.memory import SessionContext, SessionStore
+from chatflow_agent.core.memory import (
+    BaseSessionStore,
+    SessionContext,
+    SessionStore,
+    SQLiteSessionContext,
+    SQLiteSessionStore,
+)
 from chatflow_agent.core.runner import Runner
 from chatflow_agent.core.tools import Tool, tool
 from chatflow_agent.exceptions import (
@@ -25,6 +31,9 @@ from chatflow_agent.types import (
     ToolResult,
 )
 
+# Alias for semantic consistency
+BaseSessionContext = SessionContext
+
 __version__ = "0.1.1"
 __all__ = [
     "__version__",
@@ -41,8 +50,12 @@ __all__ = [
     "Message",
     "Role",
     "Runner",
+    "BaseSessionContext",
+    "BaseSessionStore",
     "SessionContext",
     "SessionStore",
+    "SQLiteSessionContext",
+    "SQLiteSessionStore",
     "TelegramChannel",
     "Tool",
     "tool",
