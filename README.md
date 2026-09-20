@@ -2,18 +2,63 @@
 
 [![CI](https://github.com/GustavoBaranda/chatflow-agent/actions/workflows/test.yml/badge.svg)](https://github.com/GustavoBaranda/chatflow-agent/actions/workflows/test.yml)
 [![PyPI version](https://img.shields.io/pypi/v/chatflow-agent.svg)](https://pypi.org/project/chatflow-agent/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/chatflow-agent.svg?color=green)](https://pypistats.org/packages/chatflow-agent)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Checked with mypy](https://img.shields.io/badge/mypy-checked-blue.svg)](https://mypy-lang.org/)
 
-> **Lightweight, async multi-agent framework with native handoffs for real-world channels.**  
-> Supports **Google Gemini**, **Google Gemma (Local)**, **xAI Grok**, **OpenAI (GPT-4o)**, and **Anthropic Claude**.  
-> Connect autonomous swarms directly to **WhatsApp**, **Telegram**, **Webhooks**, and **CLI**.
->  
-> *Framework multiagente asíncrono y liviano con transferencias nativas (handoffs) para canales reales.*  
-> *Compatible con **Google Gemini**, **Google Gemma (Local)**, **xAI Grok**, **OpenAI** y **Anthropic Claude**.*  
-> *Conecta equipos de agentes autónomos a **WhatsApp**, **Telegram**, **Webhooks** y **Terminal**.*
+> **Build autonomous multi-agent swarms for WhatsApp, Telegram, and Webhooks in seconds without heavy dependency chains.**  
+> *Construye equipos de agentes autónomos para WhatsApp, Telegram y Webhooks en segundos sin lidiar con dependencias monstruosas.*
+
+```bash
+pip install chatflow-agent
+```
+
+[English Documentation](#english-documentation) | [Guía en Español](#guía-completa-en-español) | [PyPI Package](https://pypi.org/project/chatflow-agent/) | [Report Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
+
+---
+
+## Key Pillars (Why chatflow-agent?)
+
+* **Ultra-Lightweight Core:** Only 3 runtime dependencies (`google-genai`, `pydantic`, `httpx`). A tiny ~72 KB package footprint that installs in seconds on Docker, serverless, and cloud VPS environments.
+* **Omnichannel Native:** Production-ready connectors for **WhatsApp (Official Meta Cloud API)**, **Telegram**, **Webhooks (FastAPI)**, and interactive **CLI**.
+* **Multi-Provider Freedom:** Switch between **Google Gemini**, **Google Gemma (100% free local via Ollama)**, **xAI Grok**, **OpenAI (GPT-4o)**, and **Anthropic Claude** with a single parameter. Zero vendor lock-in.
+* **Production-Hardened Shields:** Native per-session concurrency locking (`asyncio.Lock`) prevents out-of-order race conditions from fast typers. Webhook anti-500 shield prevents Meta retry bombardment storms during LLM downtime.
+* **Autonomous Peer Handoffs:** Agents delegate conversations dynamically based on customer intent, without rigid state machines or complex graph builders.
+
+---
+
+## Quickstart in 10 Seconds
+
+```python
+import asyncio
+from chatflow_agent import Agent, Runner
+
+# 1. Define specialist agents
+tech_agent = Agent(name="TechSupport", model="gemini-2.5-flash", instructions="Help with bugs.")
+billing_agent = Agent(name="Billing", model="gemini-2.5-flash", instructions="Help with invoices.")
+
+# 2. Receptionist agent with autonomous peer handoffs
+receptionist = Agent(
+    name="Receptionist",
+    model="gemini-2.5-flash",
+    instructions="Greet the customer and route them to TechSupport or Billing.",
+    handoffs=[tech_agent, billing_agent],
+)
+
+async def main():
+    runner = Runner(starting_agent=receptionist)
+    result = await runner.run_async(
+        session_id="user_whatsapp_1",
+        user_message="Hi! I need help with an invoice error on my account.",
+    )
+    print(f"[{result.active_agent_name}]: {result.content}")
+    # Output: [Billing]: I would be glad to help check your invoice. Could you share your account ID?
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
 
 ---
 
@@ -524,7 +569,7 @@ if __name__ == "__main__":
 ## Author & Community
 Created and maintained by **[Gustavo Baranda](https://github.com/GustavoBaranda)**.
 
-If you find `chatflow-agent` useful for your projects, consider giving it a ⭐ on GitHub!  
+If you find `chatflow-agent` useful for your projects, consider giving it a star on GitHub!  
 Contributions, issues, and feature requests are always welcome.
 
 ---
