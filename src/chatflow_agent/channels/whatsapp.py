@@ -1,5 +1,7 @@
+
 """WhatsApp channel adapter using FastAPI and Meta Cloud API webhooks."""
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -67,6 +69,11 @@ class WhatsAppChannel(BaseChannel):
         unsupported_media_message: str = (
             "Por el momento solo puedo procesar mensajes de texto."
         ),
+        llm_timeout_seconds: float = 30.0,
+        max_outbound_retries: int = 3,
+        outbound_base_delay: float = 1.0,
+        outbound_max_delay: float = 30.0,
+        on_24h_window_expired: Any | None = None,
     ) -> None:
         super().__init__()
         # SEC-01: Fail-closed — require app_secret when signature verification is active.
@@ -90,6 +97,11 @@ class WhatsAppChannel(BaseChannel):
         self.api_version = api_version
         self.fallback_message = fallback_message
         self.unsupported_media_message = unsupported_media_message
+        self.llm_timeout_seconds = llm_timeout_seconds
+        self.max_outbound_retries = max_outbound_retries
+        self.outbound_base_delay = outbound_base_delay
+        self.outbound_max_delay = outbound_max_delay
+        self.on_24h_window_expired = on_24h_window_expired
 
         # Verify optional dependencies
         try:
@@ -260,12 +272,20 @@ class WhatsAppChannel(BaseChannel):
                 return
 
             try:
-                response: AgentResponse = await self.dispatch_async(
-                    session_id=sender_phone,
-                    message=user_text,
-                    metadata={"channel": "whatsapp", "phone": sender_phone, "wamid": wamid},
+                response: AgentResponse = await asyncio.wait_for(
+                    self.dispatch_async(
+                        session_id=sender_phone,
+                        message=user_text,
+                        metadata={"channel": "whatsapp", "phone": sender_phone, "wamid": wamid},
+                    ),
+                    timeout=self.llm_timeout_seconds,
                 )
                 reply_text = response.content
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"LLM dispatch timed out after {self.llm_timeout_seconds}s for wamid={wamid} from {sender_phone}"
+                )
+                reply_text = self.fallback_message
             except Exception as err:
                 logger.exception(
                     f"Error dispatching wamid={wamid} from {sender_phone}: {err}"
@@ -343,7 +363,7 @@ class WhatsAppChannel(BaseChannel):
             await self._send_single_outbound_whatsapp(to_phone=to_phone, text=chunk)
 
     async def _send_single_outbound_whatsapp(self, to_phone: str, text: str) -> None:
-        """Send a single text message chunk via Meta WhatsApp Cloud API."""
+        """Send a single text message chunk via Meta WhatsApp Cloud API with retries and 24h detection."""
         url = f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/messages"
         headers = {
             "Authorization": f"Bearer {self.access_token}",
@@ -356,15 +376,65 @@ class WhatsAppChannel(BaseChannel):
             "text": {"body": text},
         }
 
-        try:
-            async with self._httpx.AsyncClient() as client:
-                res = await client.post(url, json=body, headers=headers, timeout=10.0)
-                if res.status_code >= 400:
+        retries = 0
+        while True:
+            try:
+                async with self._httpx.AsyncClient() as client:
+                    res = await client.post(url, json=body, headers=headers, timeout=10.0)
+
+                    if res.status_code < 400:
+                        return
+
+                    # Handle 429 Too Many Requests with exponential backoff
+                    if res.status_code == 429:
+                        if retries < self.max_outbound_retries:
+                            delay = min(self.outbound_max_delay, self.outbound_base_delay * (2 ** retries))
+                            logger.warning(
+                                f"Rate limited by Meta (HTTP 429) for {to_phone}. Retrying in {delay:.1f}s (attempt {retries + 1}/{self.max_outbound_retries})..."
+                            )
+                            await asyncio.sleep(delay)
+                            retries += 1
+                            continue
+                        logger.error(f"Max retries exceeded for {to_phone} after HTTP 429.")
+                        return
+
+                    # Inspect Meta error payload for 24h window expiration (error code 131047)
+                    try:
+                        err_data = res.json().get("error", {})
+                        err_code = err_data.get("code")
+                        if err_code == 131047:
+                            logger.warning(
+                                f"24h messaging window expired for {to_phone}. Use template messages."
+                            )
+                            if self.on_24h_window_expired:
+                                if asyncio.iscoroutinefunction(self.on_24h_window_expired):
+                                    await self.on_24h_window_expired(to_phone)
+                                else:
+                                    self.on_24h_window_expired(to_phone)
+                            return
+                    except Exception:
+                        pass
+
+                    # Non-retriable 4xx/5xx: log error and exit without retrying
                     logger.error(
                         f"Failed to send outbound WhatsApp message: {res.status_code} - {res.text}"
                     )
-        except Exception as err:
-            logger.error(f"Error calling WhatsApp Cloud API: {err}")
+                    return
+
+            except (self._httpx.ConnectError, self._httpx.TimeoutException) as net_err:
+                if retries < self.max_outbound_retries:
+                    delay = min(self.outbound_max_delay, self.outbound_base_delay * (2 ** retries))
+                    logger.warning(
+                        f"Network error calling WhatsApp API: {net_err}. Retrying in {delay:.1f}s (attempt {retries + 1}/{self.max_outbound_retries})..."
+                    )
+                    await asyncio.sleep(delay)
+                    retries += 1
+                    continue
+                logger.error(f"Max retries exceeded for {to_phone} after network error: {net_err}")
+                return
+            except Exception as err:
+                logger.error(f"Error calling WhatsApp Cloud API: {err}")
+                return
 
     def run(self, host: str = "0.0.0.0", port: int = 8000, **kwargs: Any) -> None:
         """Launch the FastAPI webhook server using uvicorn."""
