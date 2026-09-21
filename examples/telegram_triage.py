@@ -48,10 +48,10 @@ runner = Runner(starting_agent=triage_agent)
 telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 channel = TelegramChannel(
     token=telegram_token,
-    start_message="👋 Welcome to ChatFlow Telegram Bot! How can we help you today?",
+    start_message="Welcome to ChatFlow Telegram Bot. How can we help you today?",
 )
 channel.attach(runner)
 
 if __name__ == "__main__":
-    print("🤖 Starting Telegram bot polling... Press Ctrl+C to stop.")
+    print("Starting Telegram bot polling... Press Ctrl+C to stop.")
     channel.run()
