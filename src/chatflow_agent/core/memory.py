@@ -55,7 +55,11 @@ class SessionContext:
         self.history.clear()
 
     def rollback_to(self, checkpoint_len: int) -> None:
-        """Roll back dialogue history to a previous checkpoint length."""
+        """Roll back dialogue history to a previous checkpoint length.
+
+        Note: Rollback reverts conversational dialogue history; it does NOT
+        revert external side effects of tools that were already executed.
+        """
         self.history = self.history[:checkpoint_len]
 
     def _prune_history(self) -> None:
@@ -323,7 +327,11 @@ class SQLiteSessionContext(SessionContext):
             )
 
     def rollback_to(self, checkpoint_len: int) -> None:
-        """Roll back dialogue history in memory and database to checkpoint length."""
+        """Roll back dialogue history in memory and database to checkpoint length.
+
+        Note: Rollback reverts conversational dialogue history; it does NOT
+        revert external side effects of tools that were already executed.
+        """
         with _get_sqlite_connection(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT id FROM chatflow_messages WHERE session_id = ? ORDER BY id ASC",
