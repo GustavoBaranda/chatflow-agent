@@ -13,6 +13,42 @@ from chatflow_agent.types import AgentResponse
 logger = logging.getLogger("chatflow_agent.whatsapp")
 
 
+def split_message(text: str, max_len: int = 4096) -> list[str]:
+    """Split long outbound text into sequential chunks within max_len.
+
+    Splits progressively by paragraph (\n\n), line (\n), sentence (. ), or word ( )
+    to preserve formatting and readability across messaging channels.
+    """
+    if len(text) <= max_len:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+
+    while len(remaining) > max_len:
+        candidate = remaining[:max_len]
+        split_idx = -1
+
+        for sep in ("\n\n", "\n", ". ", " "):
+            idx = candidate.rfind(sep)
+            if idx != -1:
+                split_idx = idx + len(sep)
+                break
+
+        if split_idx <= 0:
+            split_idx = max_len
+
+        chunk = remaining[:split_idx].rstrip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_idx:].lstrip()
+
+    if remaining:
+        chunks.append(remaining)
+
+    return chunks
+
+
 class WhatsAppChannel(BaseChannel):
     """WhatsApp integration supporting Meta Cloud API and generic webhooks with resilience."""
 
@@ -301,7 +337,13 @@ class WhatsAppChannel(BaseChannel):
         return None
 
     async def _send_outbound_whatsapp(self, to_phone: str, text: str) -> None:
-        """Send message back to user via Meta WhatsApp Cloud API."""
+        """Send message back to user via Meta WhatsApp Cloud API, chunking long replies."""
+        chunks = split_message(text, max_len=4096)
+        for chunk in chunks:
+            await self._send_single_outbound_whatsapp(to_phone=to_phone, text=chunk)
+
+    async def _send_single_outbound_whatsapp(self, to_phone: str, text: str) -> None:
+        """Send a single text message chunk via Meta WhatsApp Cloud API."""
         url = f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/messages"
         headers = {
             "Authorization": f"Bearer {self.access_token}",
