@@ -83,11 +83,20 @@ runner = Runner(
     session_store=session_store,
 )
 
-# 5. WhatsApp Channel configuration
+# 5. WhatsApp Channel configuration (fail-closed security)
+app_secret = os.environ.get("WHATSAPP_APP_SECRET")
+if not app_secret:
+    raise RuntimeError(
+        "WHATSAPP_APP_SECRET environment variable is missing.\n"
+        "For security, WhatsApp webhook signature verification is enabled by default.\n"
+        "Obtain your App Secret from Meta App Dashboard (App settings -> Basic -> App Secret) "
+        "and set WHATSAPP_APP_SECRET='your_secret' before running this service."
+    )
+
 whatsapp = WhatsAppChannel(
     verify_token=os.environ.get("WHATSAPP_VERIFY_TOKEN", "secure_verification_token"),
     access_token=os.environ.get("WHATSAPP_ACCESS_TOKEN"),
-    app_secret=os.environ.get("WHATSAPP_APP_SECRET", "dev_secret_for_local_testing"),  # In prod: set WHATSAPP_APP_SECRET
+    app_secret=app_secret,
     phone_number_id=os.environ.get("WHATSAPP_PHONE_ID"),
 )
 whatsapp.attach(runner)
