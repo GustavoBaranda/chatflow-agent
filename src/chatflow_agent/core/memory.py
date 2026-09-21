@@ -50,6 +50,10 @@ class SessionContext:
         """Reset the conversation dialogue history."""
         self.history.clear()
 
+    def rollback_to(self, checkpoint_len: int) -> None:
+        """Roll back dialogue history to a previous checkpoint length."""
+        self.history = self.history[:checkpoint_len]
+
     def _prune_history(self) -> None:
         """Keep dialogue history within max_turns by complete turns.
 
@@ -308,6 +312,21 @@ class SQLiteSessionContext(SessionContext):
                 (self.active_agent.name, self.session_id),
             )
 
+    def rollback_to(self, checkpoint_len: int) -> None:
+        """Roll back dialogue history in memory and database to checkpoint length."""
+        with _get_sqlite_connection(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id FROM chatflow_messages WHERE session_id = ? ORDER BY id ASC",
+                (self.session_id,),
+            ).fetchall()
+            if len(rows) > checkpoint_len:
+                cutoff_id = rows[checkpoint_len]["id"]
+                conn.execute(
+                    "DELETE FROM chatflow_messages WHERE session_id = ? AND id >= ?",
+                    (self.session_id, cutoff_id),
+                )
+        super().rollback_to(checkpoint_len)
+
     def set_active_agent(self, agent: Agent) -> None:
         """Switch current active agent and persist the pointer to SQLite."""
         super().set_active_agent(agent)
@@ -330,6 +349,7 @@ class SQLiteSessionContext(SessionContext):
                 """,
                 (self.active_agent.name, self.session_id),
             )
+
 
 
 class SQLiteSessionStore(BaseSessionStore):

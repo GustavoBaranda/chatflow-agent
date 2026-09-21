@@ -1,5 +1,8 @@
+
 """Gemini LLM engine implementation using google-genai SDK."""
 
+import asyncio
+import logging
 import os
 from typing import TYPE_CHECKING, Any, cast
 
@@ -10,6 +13,8 @@ from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult
 from chatflow_agent.exceptions import ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
 
+logger = logging.getLogger("chatflow_agent.engine.gemini")
+
 if TYPE_CHECKING:
     from chatflow_agent.core.agent import Agent
 
@@ -17,8 +22,19 @@ if TYPE_CHECKING:
 class GeminiEngine(BaseEngine):
     """Coordinates API requests with Google Gemini using google-genai SDK."""
 
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        timeout_seconds: float = 30.0,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        max_delay: float = 10.0,
+    ) -> None:
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.timeout_seconds = timeout_seconds
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+        self.max_delay = max_delay
         self.client: genai.Client | None = None
         try:
             self.client = genai.Client(api_key=self.api_key) if self.api_key else genai.Client()
@@ -93,14 +109,36 @@ class GeminiEngine(BaseEngine):
             tools=gemini_tools,
         )
 
-        try:
-            response = await self.client.aio.models.generate_content(
-                model=agent.model,
-                contents=contents,
-                config=config,
-            )
-        except Exception as err:
-            raise ProviderError(f"Gemini API request failed: {err}") from err
+        retries = 0
+        while True:
+            try:
+                response = await asyncio.wait_for(
+                    self.client.aio.models.generate_content(
+                        model=agent.model,
+                        contents=contents,
+                        config=config,
+                    ),
+                    timeout=self.timeout_seconds,
+                )
+                break
+            except Exception as err:
+                err_str = str(err).lower()
+                is_retriable = any(
+                    x in err_str
+                    for x in ("429", "resource_exhausted", "500", "502", "503", "504", "unavailable", "internal")
+                ) or isinstance(err, asyncio.TimeoutError)
+
+                if is_retriable and retries < self.max_retries:
+                    import random
+                    base = self.base_delay * (2 ** retries)
+                    delay = min(self.max_delay, base + random.uniform(0.0, 0.25 * base))
+                    logger.warning(
+                        f"Gemini API transient error ({err}). Retrying in {delay:.2f}s (attempt {retries + 1}/{self.max_retries})..."
+                    )
+                    await asyncio.sleep(delay)
+                    retries += 1
+                    continue
+                raise ProviderError(f"Gemini API request failed: {err}") from err
 
         extracted_text: str | None = None
         extracted_calls: list[ToolCall] = []
