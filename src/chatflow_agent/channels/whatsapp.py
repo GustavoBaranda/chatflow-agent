@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 from chatflow_agent.channels.base import BaseChannel
+from chatflow_agent.core.memory import DEFAULT_DEDUP_TTL_HOURS
 from chatflow_agent.exceptions import DependencyError
 from chatflow_agent.types import AgentResponse
 
@@ -81,6 +82,7 @@ class WhatsAppChannel(BaseChannel):
         outbound_base_delay: float = 1.0,
         outbound_max_delay: float = 30.0,
         on_24h_window_expired: Any | None = None,
+        dedup_ttl_hours: float = DEFAULT_DEDUP_TTL_HOURS,
     ) -> None:
         super().__init__()
         # SEC-01: Fail-closed — require app_secret when signature verification is active.
@@ -109,6 +111,7 @@ class WhatsAppChannel(BaseChannel):
         self.outbound_base_delay = outbound_base_delay
         self.outbound_max_delay = outbound_max_delay
         self.on_24h_window_expired = on_24h_window_expired
+        self.dedup_ttl_hours = dedup_ttl_hours
 
         # Verify optional dependencies
         try:
@@ -443,8 +446,10 @@ class WhatsAppChannel(BaseChannel):
                                         f"Error executing on_24h_window_expired hook for {masked}: {hook_err}"
                                     )
                             return
-                    except Exception:
-                        pass
+                    except Exception as parse_err:
+                        logger.warning(
+                            f"Unable to parse Meta error payload for {masked}: {parse_err} (raw: {res.text[:150]})"
+                        )
 
                     # Non-retriable 4xx/5xx: log error with masked phone and exit without retrying
                     logger.error(

@@ -12,6 +12,10 @@ from typing import Any
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.types import Message, Role
 
+# Canonical Single Source of Truth for message deduplication TTL
+DEFAULT_DEDUP_TTL_HOURS: int = 192  # 8 days (exceeds Meta's 7-day webhook retry window)
+DEFAULT_DEDUP_TTL_SECONDS: float = float(DEFAULT_DEDUP_TTL_HOURS * 3600)
+
 
 class SessionContext:
     """Stores conversation state, dialogue history, and active agent pointer for a session."""
@@ -149,14 +153,20 @@ class SessionStore(BaseSessionStore):
     Entries are capped at 10,000 and purged amortized every 5 minutes.
     """
 
-    _DEDUP_TTL_SECONDS: float = 8 * 24 * 3600   # 8 days > Meta's 7-day retry window
+    _DEDUP_TTL_SECONDS: float = DEFAULT_DEDUP_TTL_SECONDS
     _DEDUP_MAX_ENTRIES: int = 10_000
     _DEDUP_PURGE_INTERVAL: float = 300.0          # throttle: purge at most every 5 min
 
-    def __init__(self, default_max_turns: int = 40) -> None:
+    def __init__(
+        self,
+        default_max_turns: int = 40,
+        dedup_ttl_hours: float = DEFAULT_DEDUP_TTL_HOURS,
+    ) -> None:
         import time as _time
         self._sessions: dict[str, SessionContext] = {}
         self.default_max_turns = default_max_turns
+        self.dedup_ttl_hours = dedup_ttl_hours
+        self._dedup_ttl_seconds = dedup_ttl_hours * 3600.0
         self._processed_ids: dict[str, float] = {}   # {wamid: monotonic timestamp}
         self._last_purge: float = _time.monotonic()
 
@@ -166,7 +176,7 @@ class SessionStore(BaseSessionStore):
         ts = self._processed_ids.get(message_id)
         if ts is None:
             return False
-        if _time.monotonic() - ts > self._DEDUP_TTL_SECONDS:
+        if _time.monotonic() - ts > self._dedup_ttl_seconds:
             del self._processed_ids[message_id]
             return False
         return True
@@ -181,13 +191,13 @@ class SessionStore(BaseSessionStore):
 
         existing = self._processed_ids.get(message_id)
         if existing is not None:
-            if now - existing <= self._DEDUP_TTL_SECONDS:
-                return False  # within TTL — duplicate
-            del self._processed_ids[message_id]  # stale — allow re-registration
+            if now - existing <= self._dedup_ttl_seconds:
+                return False  # within TTL - duplicate
+            del self._processed_ids[message_id]  # stale - allow re-registration
 
         # Amortized purge
         if now - self._last_purge >= self._DEDUP_PURGE_INTERVAL:
-            cutoff = now - self._DEDUP_TTL_SECONDS
+            cutoff = now - self._dedup_ttl_seconds
             self._processed_ids = {k: v for k, v in self._processed_ids.items() if v > cutoff}
             self._last_purge = now
 
@@ -368,7 +378,7 @@ class SQLiteSessionStore(BaseSessionStore):
         self,
         db_path: str | Path = "chatflow.db",
         default_max_turns: int = 40,
-        dedup_ttl_hours: int = 192,
+        dedup_ttl_hours: float = DEFAULT_DEDUP_TTL_HOURS,
     ) -> None:
         self.db_path = str(db_path)
         self.default_max_turns = default_max_turns
