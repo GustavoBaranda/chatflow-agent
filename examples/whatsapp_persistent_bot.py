@@ -71,6 +71,7 @@ concierge_agent = Agent(
 )
 
 # 4. Initialize persistent SQLite session store and Runner
+# Note: SQLite with WAL mode is designed for single-process deployments (1 Uvicorn worker).
 # All conversation history and active agent states persist across restarts.
 session_store = SQLiteSessionStore(
     db_path="whatsapp_sessions.db",

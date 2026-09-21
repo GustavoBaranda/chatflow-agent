@@ -230,9 +230,13 @@ class SessionStore(BaseSessionStore):
 
 @contextmanager
 def _get_sqlite_connection(db_path: str) -> Generator[sqlite3.Connection, None, None]:
-    """Provide a transactional SQLite connection that closes cleanly across operating systems."""
+    """Provide a transactional SQLite connection configured with WAL and busy_timeout."""
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 10000")
+    if db_path != ":memory:":
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
     try:
         yield conn
         conn.commit()
@@ -296,8 +300,12 @@ class SQLiteSessionContext(SessionContext):
                     (self.session_id, cutoff_id),
                 )
             conn.execute(
-                "UPDATE chatflow_sessions SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
-                (self.session_id,),
+                """
+                UPDATE chatflow_sessions
+                SET active_agent_name = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE session_id = ?
+                """,
+                (self.active_agent.name, self.session_id),
             )
 
     def set_active_agent(self, agent: Agent) -> None:
@@ -315,27 +323,86 @@ class SQLiteSessionContext(SessionContext):
         with _get_sqlite_connection(self.db_path) as conn:
             conn.execute("DELETE FROM chatflow_messages WHERE session_id = ?", (self.session_id,))
             conn.execute(
-                "UPDATE chatflow_sessions SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
-                (self.session_id,),
+                """
+                UPDATE chatflow_sessions
+                SET active_agent_name = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE session_id = ?
+                """,
+                (self.active_agent.name, self.session_id),
             )
 
 
 class SQLiteSessionStore(BaseSessionStore):
     """Persistent SQLite session registry.
 
-    Stores conversation state, dialogue turns, and active agent pointers in a local
-    or volume-mounted SQLite database with zero external dependencies.
+    Stores conversation state, dialogue turns, active agent pointers, and deduplication
+    records in a local or volume-mounted SQLite database with zero external dependencies.
+
+    Note on Concurrency:
+        Configured with WAL mode and PRAGMA busy_timeout=10000 ms. Designed for
+        single-process deployments (1 Uvicorn worker). For multi-worker or multi-node
+        clusters, use an external distributed session store to avoid SQLite file lock contention.
     """
 
-    def __init__(self, db_path: str | Path = "chatflow.db", default_max_turns: int = 40) -> None:
+    def __init__(
+        self,
+        db_path: str | Path = "chatflow.db",
+        default_max_turns: int = 40,
+        dedup_ttl_hours: int = 192,
+    ) -> None:
         self.db_path = str(db_path)
         self.default_max_turns = default_max_turns
+        self.dedup_ttl_hours = dedup_ttl_hours
         self._agent_resolver: Callable[[str], Agent | None] | None = None
         self._init_db()
 
     def set_agent_resolver(self, resolver: Callable[[str], Agent | None]) -> None:
         """Register a resolver callback to map agent names from SQLite back to Agent instances."""
         self._agent_resolver = resolver
+
+    def is_message_processed(self, message_id: str) -> bool:
+        """Check if message_id was recorded within dedup_ttl_hours."""
+        with _get_sqlite_connection(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT message_id FROM chatflow_processed_messages
+                WHERE message_id = ?
+                  AND processed_at >= datetime('now', ?)
+                """,
+                (message_id, f"-{self.dedup_ttl_hours} hours"),
+            ).fetchone()
+            return row is not None
+
+    def record_processed_message(self, message_id: str) -> bool:
+        """Atomically record message_id if new; return False if duplicate within TTL.
+
+        Purges expired records older than dedup_ttl_hours.
+        """
+        with _get_sqlite_connection(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT message_id FROM chatflow_processed_messages
+                WHERE message_id = ?
+                  AND processed_at >= datetime('now', ?)
+                """,
+                (message_id, f"-{self.dedup_ttl_hours} hours"),
+            ).fetchone()
+            if row is not None:
+                return False
+
+            conn.execute(
+                "DELETE FROM chatflow_processed_messages WHERE processed_at < datetime('now', ?)",
+                (f"-{self.dedup_ttl_hours} hours",),
+            )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO chatflow_processed_messages (message_id, processed_at)
+                VALUES (?, CURRENT_TIMESTAMP)
+                """,
+                (message_id,),
+            )
+            return True
+
 
     def _init_db(self) -> None:
         """Initialize the SQLite tables and indexes."""
@@ -345,6 +412,7 @@ class SQLiteSessionStore(BaseSessionStore):
             parent.mkdir(parents=True, exist_ok=True)
 
         with _get_sqlite_connection(self.db_path) as conn:
+            conn.execute("PRAGMA user_version = 1")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS chatflow_sessions (
@@ -370,7 +438,18 @@ class SQLiteSessionStore(BaseSessionStore):
                 """
             )
             conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chatflow_processed_messages (
+                    message_id TEXT PRIMARY KEY,
+                    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chatflow_messages_session ON chatflow_messages(session_id, id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chatflow_processed_at ON chatflow_processed_messages(processed_at)"
             )
 
     def get_or_create(
@@ -379,49 +458,44 @@ class SQLiteSessionStore(BaseSessionStore):
         default_agent: Agent,
         metadata: dict[str, Any] | None = None,
     ) -> SessionContext:
-        """Retrieve existing session from SQLite or insert and initialize a new one."""
+        """Retrieve existing session from SQLite or atomically insert and initialize a new one."""
         with _get_sqlite_connection(self.db_path) as conn:
+            meta_json = json.dumps(metadata or {})
+            conn.execute(
+                """
+                INSERT INTO chatflow_sessions (session_id, active_agent_name, metadata_json)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_id) DO NOTHING
+                """,
+                (session_id, default_agent.name, meta_json),
+            )
             row = conn.execute(
                 "SELECT active_agent_name, metadata_json FROM chatflow_sessions WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
 
-            if row is None:
-                meta_json = json.dumps(metadata or {})
-                conn.execute(
-                    "INSERT INTO chatflow_sessions (session_id, active_agent_name, metadata_json) VALUES (?, ?, ?)",
-                    (session_id, default_agent.name, meta_json),
-                )
-                return SQLiteSessionContext(
-                    session_id=session_id,
-                    initial_agent=default_agent,
-                    db_path=self.db_path,
-                    max_turns=self.default_max_turns,
-                    metadata=metadata,
-                )
-            else:
-                agent_name = row["active_agent_name"]
-                meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
-                active_agent = default_agent
-                if self._agent_resolver:
-                    resolved = self._agent_resolver(agent_name)
-                    if resolved is not None:
-                        active_agent = resolved
+            agent_name = row["active_agent_name"]
+            meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+            active_agent = default_agent
+            if self._agent_resolver:
+                resolved = self._agent_resolver(agent_name)
+                if resolved is not None:
+                    active_agent = resolved
 
-                msg_rows = conn.execute(
-                    "SELECT message_json FROM chatflow_messages WHERE session_id = ? ORDER BY id ASC",
-                    (session_id,),
-                ).fetchall()
-                history = [Message.model_validate_json(r["message_json"]) for r in msg_rows]
+            msg_rows = conn.execute(
+                "SELECT message_json FROM chatflow_messages WHERE session_id = ? ORDER BY id ASC",
+                (session_id,),
+            ).fetchall()
+            history = [Message.model_validate_json(r["message_json"]) for r in msg_rows]
 
-                return SQLiteSessionContext(
-                    session_id=session_id,
-                    initial_agent=active_agent,
-                    db_path=self.db_path,
-                    max_turns=self.default_max_turns,
-                    metadata=meta,
-                    preloaded_history=history,
-                )
+            return SQLiteSessionContext(
+                session_id=session_id,
+                initial_agent=active_agent,
+                db_path=self.db_path,
+                max_turns=self.default_max_turns,
+                metadata=meta,
+                preloaded_history=history,
+            )
 
     def get(self, session_id: str) -> SessionContext | None:
         """Fetch session by ID if it exists in SQLite."""
