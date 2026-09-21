@@ -153,3 +153,38 @@ def test_wrong_verify_token_rejected() -> None:
                 "hub.challenge": "x"},
     )
     assert resp.status_code == 403
+
+
+def test_no_secrets_in_logs(caplog: pytest.LogCaptureFixture) -> None:
+    """Ensure credentials (app_secret, access_token) never leak into log messages."""
+    import logging
+    secret_app = "secret_app_key_sensitive_12345"
+    secret_token = "secret_access_token_sensitive_67890"
+
+    with caplog.at_level(logging.DEBUG):
+        channel = WhatsAppChannel(
+            verify_token="my_verify_tok",
+            access_token=secret_token,
+            app_secret=secret_app,
+            phone_number_id="123456",
+            verify_signature=True,
+        )
+        client = TestClient(channel.app)
+
+        # Trigger invalid signature request (generates warning log)
+        client.post(
+            "/webhook",
+            content=b'{"object":"whatsapp_business_account"}',
+            headers={"X-Hub-Signature-256": "sha256=invalid_hash", "Content-Type": "application/json"},
+        )
+
+        # Trigger invalid JSON payload (generates error log)
+        client.post(
+            "/webhook",
+            content=b"not_json",
+            headers={"Content-Type": "application/json"},
+        )
+
+    all_logs = caplog.text
+    assert secret_app not in all_logs, "app_secret must never be printed to logs"
+    assert secret_token not in all_logs, "access_token must never be printed to logs"
