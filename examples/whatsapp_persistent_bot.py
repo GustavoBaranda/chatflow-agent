@@ -86,6 +86,7 @@ runner = Runner(
 whatsapp = WhatsAppChannel(
     verify_token=os.environ.get("WHATSAPP_VERIFY_TOKEN", "secure_verification_token"),
     access_token=os.environ.get("WHATSAPP_ACCESS_TOKEN"),
+    app_secret=os.environ.get("WHATSAPP_APP_SECRET"),  # Required in production
     phone_number_id=os.environ.get("WHATSAPP_PHONE_ID"),
 )
 whatsapp.attach(runner)

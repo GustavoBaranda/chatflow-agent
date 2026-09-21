@@ -82,6 +82,7 @@ def test_whatsapp_anti_500_error_shield() -> None:
         access_token="mock_meta_token",
         phone_number_id="123456",
         fallback_message="Servicio temporalmente no disponible.",
+        verify_signature=False,
     )
     channel.attach(runner)
 
@@ -127,6 +128,7 @@ def test_whatsapp_unsupported_media_handling() -> None:
         access_token="mock_meta_token",
         phone_number_id="123456",
         unsupported_media_message="Solo se admiten mensajes de texto por ahora.",
+        verify_signature=False,
     )
     channel.attach(runner)
 

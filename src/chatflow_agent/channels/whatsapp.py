@@ -1,5 +1,7 @@
 """WhatsApp channel adapter using FastAPI and Meta Cloud API webhooks."""
 
+import hashlib
+import hmac
 import logging
 from typing import Any
 
@@ -18,6 +20,8 @@ class WhatsAppChannel(BaseChannel):
         verify_token: str,
         access_token: str | None = None,
         phone_number_id: str | None = None,
+        app_secret: str | None = None,
+        verify_signature: bool = True,
         api_version: str = "v21.0",
         fallback_message: str = (
             "Disculpa, estamos experimentando una demora temporal con nuestro servicio. "
@@ -28,9 +32,24 @@ class WhatsAppChannel(BaseChannel):
         ),
     ) -> None:
         super().__init__()
+        # SEC-01: Fail-closed — require app_secret when signature verification is active.
+        # BREAKING CHANGE from v0.1.x: app_secret was previously optional and silently ignored.
+        if verify_signature and not app_secret:
+            raise ValueError(
+                "WhatsAppChannel requires 'app_secret' when verify_signature=True (the default). "
+                "Provide your Meta app secret via app_secret=os.environ['WHATSAPP_APP_SECRET'], "
+                "or explicitly pass verify_signature=False for local development/testing only."
+            )
+        if not verify_signature:
+            logger.warning(
+                "SECURITY WARNING: Webhook signature verification is DISABLED "
+                "(verify_signature=False). Do NOT use this in production."
+            )
         self.verify_token = verify_token
         self.access_token = access_token
         self.phone_number_id = phone_number_id
+        self.app_secret = app_secret
+        self.verify_signature = verify_signature
         self.api_version = api_version
         self.fallback_message = fallback_message
         self.unsupported_media_message = unsupported_media_message
@@ -67,8 +86,14 @@ class WhatsAppChannel(BaseChannel):
             hub_challenge: str | None = Query(None, alias="hub.challenge"),
             hub_verify_token: str | None = Query(None, alias="hub.verify_token"),
         ) -> Response:
-            """Meta webhook verification challenge endpoint."""
-            if hub_mode == "subscribe" and hub_verify_token == self.verify_token:
+            """Meta webhook verification challenge endpoint with constant-time token comparison."""
+            # SEC-02: Use constant-time comparison to prevent timing attacks on verify_token
+            token_matches = False
+            if hub_verify_token and self.verify_token:
+                token_matches = hmac.compare_digest(
+                    hub_verify_token.encode(), self.verify_token.encode()
+                )
+            if hub_mode == "subscribe" and token_matches:
                 logger.info("WhatsApp webhook verified successfully.")
                 return PlainTextResponse(content=hub_challenge or "")
             raise HTTPException(
@@ -78,8 +103,35 @@ class WhatsAppChannel(BaseChannel):
 
         @self.app.post("/webhook")
         async def handle_incoming_message(request: Request) -> Response:
-            """Process incoming WhatsApp message events with anti-500 error shield."""
-            payload = await request.json()
+            """Process incoming WhatsApp message events with HMAC validation and anti-500 shield."""
+            raw_body = await request.body()
+
+            # SEC-01: Validate X-Hub-Signature-256 when verify_signature is active
+            if self.verify_signature and self.app_secret:
+                sig_header = request.headers.get("X-Hub-Signature-256", "")
+                if not sig_header.startswith("sha256="):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Missing or malformed X-Hub-Signature-256 header",
+                    )
+                expected = "sha256=" + hmac.new(
+                    self.app_secret.encode(), raw_body, hashlib.sha256
+                ).hexdigest()
+                if not hmac.compare_digest(sig_header.encode(), expected.encode()):
+                    logger.warning("Rejected webhook: X-Hub-Signature-256 mismatch.")
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Invalid X-Hub-Signature-256 signature",
+                    )
+
+            try:
+                payload = __import__("json").loads(raw_body.decode("utf-8")) if raw_body else {}
+            except Exception as err:
+                logger.error(f"Failed to decode JSON webhook payload: {err}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid JSON payload",
+                ) from err
             extracted = self._extract_message_and_sender(payload)
 
             if not extracted:

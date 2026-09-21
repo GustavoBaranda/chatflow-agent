@@ -25,7 +25,7 @@ def configured_channel() -> WhatsAppChannel:
         starting_agent=agent,
         engine=MockEngine("Hello from ChatFlow WhatsApp!"),
     )
-    channel = WhatsAppChannel(verify_token="test_secret_token_123")
+    channel = WhatsAppChannel(verify_token="test_secret_token_123", verify_signature=False)
     channel.attach(runner)
     return channel
 
