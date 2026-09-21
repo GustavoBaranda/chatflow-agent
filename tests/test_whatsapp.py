@@ -92,8 +92,12 @@ def test_meta_cloud_api_message_post(configured_channel: WhatsAppChannel) -> Non
     data = res.json()
     assert data["status"] == "success"
     assert data["sender"] == "5491112345678"
-    assert data["reply"] == "Hello from ChatFlow WhatsApp!"
-    assert data["active_agent"] == "WhatsApp Bot"
+    assert data["messages_queued"] == 1
+    # BG task ran synchronously inside TestClient — verify session state
+    session = configured_channel.runner.get_session("5491112345678")
+    assert session is not None
+    assert session.history[-1].content == "Hello from ChatFlow WhatsApp!"
+    assert session.active_agent.name == "WhatsApp Bot"
 
 
 def test_generic_webhook_format_post(configured_channel: WhatsAppChannel) -> None:
@@ -104,7 +108,11 @@ def test_generic_webhook_format_post(configured_channel: WhatsAppChannel) -> Non
     data = res.json()
     assert data["status"] == "success"
     assert data["sender"] == "5491199887766"
-    assert data["reply"] == "Hello from ChatFlow WhatsApp!"
+    assert data["messages_queued"] == 1
+    session = configured_channel.runner.get_session("5491199887766")
+    assert session is not None
+    assert session.history[-1].content == "Hello from ChatFlow WhatsApp!"
+    assert session.active_agent.name == "WhatsApp Bot"
 
 
 def test_status_update_webhook_ignored(configured_channel: WhatsAppChannel) -> None:

@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import json
 import logging
 from typing import Any
 
@@ -72,7 +73,7 @@ class WhatsAppChannel(BaseChannel):
 
     def _setup_routes(self) -> None:
         """Register webhook endpoints on the FastAPI application."""
-        from fastapi import HTTPException, Query, Request, Response, status
+        from fastapi import BackgroundTasks, HTTPException, Query, Request, Response, status
         from fastapi.responses import JSONResponse, PlainTextResponse
 
         @self.app.get("/health")
@@ -102,8 +103,10 @@ class WhatsAppChannel(BaseChannel):
             )
 
         @self.app.post("/webhook")
-        async def handle_incoming_message(request: Request) -> Response:
-            """Process incoming WhatsApp message events with HMAC validation and anti-500 shield."""
+        async def handle_incoming_message(
+            request: Request, background_tasks: BackgroundTasks
+        ) -> Response:
+            """Validate HMAC, deduplicate by wamid, and dispatch processing to background tasks."""
             raw_body = await request.body()
 
             # SEC-01: Validate X-Hub-Signature-256 when verify_signature is active
@@ -125,66 +128,128 @@ class WhatsAppChannel(BaseChannel):
                     )
 
             try:
-                payload = __import__("json").loads(raw_body.decode("utf-8")) if raw_body else {}
+                payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
             except Exception as err:
                 logger.error(f"Failed to decode JSON webhook payload: {err}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Invalid JSON payload",
                 ) from err
-            extracted = self._extract_message_and_sender(payload)
 
-            if not extracted:
-                # Return 200 to acknowledge status notifications (delivered, read, etc.)
+            extracted_messages = self._extract_messages(payload)
+            if not extracted_messages:
                 return JSONResponse(content={"status": "ignored_or_status_update"})
 
-            sender_phone, user_text = extracted
+            runner = self.runner
+            queued_count = 0
+            first_sender = extracted_messages[0][1]
 
-            # 1. Handle non-text media (audios, images, stickers, documents)
+            for wamid, sender_phone, user_text in extracted_messages:
+                # BUS-01/ARCH-01: Record wamid atomically BEFORE enqueuing background task.
+                # Semantics: at-most-once. If process crashes during BG execution the turn
+                # is lost and Meta's retry (up to 7 days) will be discarded. OK with 1 worker.
+                if runner and hasattr(runner, "session_store") and runner.session_store:
+                    is_new = runner.session_store.record_processed_message(wamid)
+                    if not is_new:
+                        logger.info(f"Skipping duplicate wamid: {wamid}")
+                        continue
+
+                queued_count += 1
+                background_tasks.add_task(
+                    self._process_message_background,
+                    wamid=wamid,
+                    sender_phone=sender_phone,
+                    user_text=user_text,
+                )
+
+            return JSONResponse(
+                content={
+                    "status": "success",
+                    "sender": first_sender,
+                    "messages_queued": queued_count,
+                }
+            )
+
+
+
+    def _extract_messages(
+        self, payload: dict[str, Any]
+    ) -> list[tuple[str, str, str | None]]:
+        """Extract all (wamid, sender_phone, text_or_None) from a webhook payload.
+
+        Handles Meta Cloud API (entry[].changes[].value.messages[]) and generic formats.
+        Returns an empty list for status-update notifications.
+        """
+        results: list[tuple[str, str, str | None]] = []
+
+        # 1. Standard Meta Cloud API format
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
+                for msg in change.get("value", {}).get("messages", []):
+                    wamid = msg.get("id") or f"gen_{hash(str(msg))}"
+                    sender = msg.get("from")
+                    if not sender:
+                        continue
+                    if msg.get("type", "text") == "text":
+                        body = msg.get("text", {}).get("body")
+                        results.append((str(wamid), str(sender), str(body) if body else None))
+                    else:
+                        results.append((str(wamid), str(sender), None))
+
+        # 2. Generic / Evolution API format
+        if not results:
+            sender = (
+                payload.get("phone") or payload.get("from") or payload.get("sender")
+            )
+            if sender:
+                wamid = (
+                    payload.get("id") or payload.get("wamid")
+                    or f"gen_{hash(str(payload))}"
+                )
+                body = payload.get("message") or payload.get("text") or payload.get("body")
+                results.append((str(wamid), str(sender), str(body) if body else None))
+
+        return results
+
+    async def _process_message_background(
+        self, wamid: str, sender_phone: str, user_text: str | None
+    ) -> None:
+        """Process one WhatsApp message asynchronously with full anti-500 error shield."""
+        try:
             if user_text is None:
                 if self.access_token and self.phone_number_id:
                     await self._send_outbound_whatsapp(
                         to_phone=sender_phone, text=self.unsupported_media_message
                     )
-                return JSONResponse(
-                    content={
-                        "status": "unsupported_media_handled",
-                        "sender": sender_phone,
-                        "reply": self.unsupported_media_message,
-                    }
-                )
+                return
 
-            # 2. Process message through attached runner with anti-500 error shield
-            reply_text: str
-            active_agent: str
             try:
                 response: AgentResponse = await self.dispatch_async(
                     session_id=sender_phone,
                     message=user_text,
-                    metadata={"channel": "whatsapp", "phone": sender_phone},
+                    metadata={"channel": "whatsapp", "phone": sender_phone, "wamid": wamid},
                 )
                 reply_text = response.content
-                active_agent = response.active_agent_name
             except Exception as err:
-                logger.error(f"Error dispatching WhatsApp message from {sender_phone}: {err}")
-                reply_text = self.fallback_message
-                active_agent = "fallback"
-
-            # If Meta credentials are provided, send outbound reply to WhatsApp API
-            if self.access_token and self.phone_number_id:
-                await self._send_outbound_whatsapp(
-                    to_phone=sender_phone, text=reply_text
+                logger.exception(
+                    f"Error dispatching wamid={wamid} from {sender_phone}: {err}"
                 )
+                reply_text = self.fallback_message
 
-            # Always return HTTP 200 to Meta to avoid retry storms
-            return JSONResponse(
-                content={
-                    "status": "success",
-                    "sender": sender_phone,
-                    "reply": reply_text,
-                    "active_agent": active_agent,
-                }
-            )
+            if self.access_token and self.phone_number_id:
+                await self._send_outbound_whatsapp(to_phone=sender_phone, text=reply_text)
+
+        except Exception as unhandled:
+            logger.exception(f"Unhandled error in BG task wamid={wamid}: {unhandled}")
+            if self.access_token and self.phone_number_id:
+                try:
+                    await self._send_outbound_whatsapp(
+                        to_phone=sender_phone, text=self.fallback_message
+                    )
+                except Exception as fb_err:
+                    logger.exception(
+                        f"Failed to deliver fallback to {sender_phone}: {fb_err}"
+                    )
 
     def _extract_message_and_sender(
         self, payload: dict[str, Any]
