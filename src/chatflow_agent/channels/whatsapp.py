@@ -15,6 +15,13 @@ from chatflow_agent.types import AgentResponse
 logger = logging.getLogger("chatflow_agent.whatsapp")
 
 
+def _mask_phone(phone: str) -> str:
+    """Mask phone number for GDPR/privacy compliance in logs (e.g. 5491***678)."""
+    if len(phone) <= 6:
+        return "***"
+    return f"{phone[:4]}***{phone[-3:]}"
+
+
 def split_message(text: str, max_len: int = 4096) -> list[str]:
     """Split long outbound text into sequential chunks within max_len.
 
@@ -364,6 +371,9 @@ class WhatsAppChannel(BaseChannel):
 
     async def _send_single_outbound_whatsapp(self, to_phone: str, text: str) -> None:
         """Send a single text message chunk via Meta WhatsApp Cloud API with retries and 24h detection."""
+        import random
+
+        masked = _mask_phone(to_phone)
         url = f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/messages"
         headers = {
             "Authorization": f"Bearer {self.access_token}",
@@ -385,17 +395,33 @@ class WhatsAppChannel(BaseChannel):
                     if res.status_code < 400:
                         return
 
-                    # Handle 429 Too Many Requests with exponential backoff
+                    # Handle 429 Too Many Requests: respect Retry-After header + jitter
                     if res.status_code == 429:
                         if retries < self.max_outbound_retries:
-                            delay = min(self.outbound_max_delay, self.outbound_base_delay * (2 ** retries))
+                            retry_after_str = res.headers.get("Retry-After")
+                            parsed_retry_after: float | None = None
+                            if retry_after_str:
+                                try:
+                                    parsed_retry_after = float(retry_after_str)
+                                except (ValueError, TypeError):
+                                    parsed_retry_after = None
+
+                            if parsed_retry_after is not None:
+                                base_delay = parsed_retry_after
+                            else:
+                                base_delay = self.outbound_base_delay * (2 ** retries)
+
+                            jitter = random.uniform(0.0, 0.25 * base_delay)
+                            delay = min(self.outbound_max_delay, base_delay + jitter)
+
                             logger.warning(
-                                f"Rate limited by Meta (HTTP 429) for {to_phone}. Retrying in {delay:.1f}s (attempt {retries + 1}/{self.max_outbound_retries})..."
+                                f"Rate limited by Meta (HTTP 429) for {masked}. "
+                                f"Retrying in {delay:.2f}s (attempt {retries + 1}/{self.max_outbound_retries})..."
                             )
                             await asyncio.sleep(delay)
                             retries += 1
                             continue
-                        logger.error(f"Max retries exceeded for {to_phone} after HTTP 429.")
+                        logger.error(f"Max retries exceeded for {masked} after HTTP 429.")
                         return
 
                     # Inspect Meta error payload for 24h window expiration (error code 131047)
@@ -404,36 +430,54 @@ class WhatsAppChannel(BaseChannel):
                         err_code = err_data.get("code")
                         if err_code == 131047:
                             logger.warning(
-                                f"24h messaging window expired for {to_phone}. Use template messages."
+                                f"24h messaging window expired for {masked}. Use template messages."
                             )
                             if self.on_24h_window_expired:
-                                if asyncio.iscoroutinefunction(self.on_24h_window_expired):
-                                    await self.on_24h_window_expired(to_phone)
-                                else:
-                                    self.on_24h_window_expired(to_phone)
+                                try:
+                                    if asyncio.iscoroutinefunction(self.on_24h_window_expired):
+                                        await self.on_24h_window_expired(to_phone)
+                                    else:
+                                        self.on_24h_window_expired(to_phone)
+                                except Exception as hook_err:
+                                    logger.error(
+                                        f"Error executing on_24h_window_expired hook for {masked}: {hook_err}"
+                                    )
                             return
                     except Exception:
                         pass
 
-                    # Non-retriable 4xx/5xx: log error and exit without retrying
+                    # Non-retriable 4xx/5xx: log error with masked phone and exit without retrying
                     logger.error(
-                        f"Failed to send outbound WhatsApp message: {res.status_code} - {res.text}"
+                        f"Failed to send outbound WhatsApp message to {masked}: {res.status_code} - {res.text}"
                     )
                     return
 
-            except (self._httpx.ConnectError, self._httpx.TimeoutException) as net_err:
+            # ONLY retry on connect errors (connection failed before request could be accepted by Meta)
+            except (self._httpx.ConnectError, self._httpx.ConnectTimeout) as net_err:
                 if retries < self.max_outbound_retries:
-                    delay = min(self.outbound_max_delay, self.outbound_base_delay * (2 ** retries))
+                    base_delay = self.outbound_base_delay * (2 ** retries)
+                    jitter = random.uniform(0.0, 0.25 * base_delay)
+                    delay = min(self.outbound_max_delay, base_delay + jitter)
                     logger.warning(
-                        f"Network error calling WhatsApp API: {net_err}. Retrying in {delay:.1f}s (attempt {retries + 1}/{self.max_outbound_retries})..."
+                        f"Connect error calling WhatsApp API for {masked}: {net_err}. "
+                        f"Retrying in {delay:.2f}s (attempt {retries + 1}/{self.max_outbound_retries})..."
                     )
                     await asyncio.sleep(delay)
                     retries += 1
                     continue
-                logger.error(f"Max retries exceeded for {to_phone} after network error: {net_err}")
+                logger.error(f"Max retries exceeded for {masked} after connect error: {net_err}")
                 return
+
+            # Read/Write timeouts must NOT retry because Meta may have already received and delivered the message
+            except (self._httpx.ReadTimeout, self._httpx.WriteTimeout) as timeout_err:
+                logger.error(
+                    f"Read/write timeout sending outbound message to {masked}: {timeout_err}. "
+                    "Not retrying to prevent duplicate message dispatch."
+                )
+                return
+
             except Exception as err:
-                logger.error(f"Error calling WhatsApp Cloud API: {err}")
+                logger.error(f"Error calling WhatsApp Cloud API for {masked}: {err}")
                 return
 
     def run(self, host: str = "0.0.0.0", port: int = 8000, **kwargs: Any) -> None:

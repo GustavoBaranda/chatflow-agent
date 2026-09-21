@@ -33,7 +33,7 @@ async def test_outbound_retry_on_429_rate_limit() -> None:
         phone_number_id="12345",
         verify_signature=False,
         max_outbound_retries=3,
-        outbound_base_delay=0.01,  # Fast for unit tests
+        outbound_base_delay=0.01,
     )
 
     resp_429 = httpx.Response(status_code=429, text="Rate limit exceeded")
@@ -47,6 +47,39 @@ async def test_outbound_retry_on_429_rate_limit() -> None:
         await channel._send_single_outbound_whatsapp("5491100000000", "Hello!")
 
     assert mock_client.post.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_outbound_retry_respects_retry_after_header() -> None:
+    """Outbound retry must parse and respect Retry-After response header."""
+    channel = WhatsAppChannel(
+        verify_token="tok",
+        access_token="test_token",
+        phone_number_id="12345",
+        verify_signature=False,
+        max_outbound_retries=2,
+        outbound_base_delay=0.01,
+    )
+
+    resp_429 = httpx.Response(
+        status_code=429,
+        text="Rate limit",
+        headers={"Retry-After": "0.02"},
+    )
+    resp_200 = httpx.Response(status_code=200, json={"messages": [{"id": "ok"}]})
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(side_effect=[resp_429, resp_200])
+
+    with patch("httpx.AsyncClient") as mock_cls, patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        mock_cls.return_value.__aenter__.return_value = mock_client
+        await channel._send_single_outbound_whatsapp("5491100000000", "Hello!")
+
+        assert mock_client.post.call_count == 2
+        assert mock_sleep.call_count == 1
+        # First retry sleep delay should be >= 0.02 (parsed Retry-After)
+        slept = mock_sleep.call_args[0][0]
+        assert slept >= 0.02, f"Expected sleep >= 0.02s from Retry-After, got {slept}"
 
 
 @pytest.mark.asyncio
@@ -73,6 +106,29 @@ async def test_outbound_retry_on_network_connect_error() -> None:
         await channel._send_single_outbound_whatsapp("5491100000000", "Hello!")
 
     assert mock_client.post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_outbound_no_retry_on_read_timeout() -> None:
+    """ReadTimeout must NOT retry because Meta may have already received and delivered the message."""
+    channel = WhatsAppChannel(
+        verify_token="tok",
+        access_token="test_token",
+        phone_number_id="12345",
+        verify_signature=False,
+        max_outbound_retries=3,
+        outbound_base_delay=0.01,
+    )
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(side_effect=httpx.ReadTimeout("Read timed out waiting for Meta response"))
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value.__aenter__.return_value = mock_client
+        await channel._send_single_outbound_whatsapp("5491100000000", "Hello!")
+
+    # Must NOT retry: call_count is strictly 1
+    assert mock_client.post.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -131,6 +187,36 @@ async def test_24h_window_expired_error_code_131047() -> None:
 
 
 @pytest.mark.asyncio
+async def test_24h_window_hook_exception_does_not_crash() -> None:
+    """If on_24h_window_expired raises an exception, it must be caught safely."""
+    def failing_hook(phone: str) -> None:
+        raise RuntimeError("Hook crashed unexpectedly!")
+
+    channel = WhatsAppChannel(
+        verify_token="tok",
+        access_token="test_token",
+        phone_number_id="12345",
+        verify_signature=False,
+        on_24h_window_expired=failing_hook,
+    )
+
+    resp_meta_24h = httpx.Response(
+        status_code=400,
+        json={"error": {"code": 131047, "message": "Re-engagement message"}},
+    )
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=resp_meta_24h)
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value.__aenter__.return_value = mock_client
+        # Must execute cleanly without unhandled exception
+        await channel._send_single_outbound_whatsapp("5491199999999", "Ping")
+
+    assert mock_client.post.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_llm_dispatch_timeout_triggers_fallback() -> None:
     """Slow LLM dispatch exceeding llm_timeout_seconds must fall back to fallback_message."""
     engine = SlowEngine(delay_seconds=0.3)
@@ -142,7 +228,7 @@ async def test_llm_dispatch_timeout_triggers_fallback() -> None:
         access_token="test_tok",
         phone_number_id="12345",
         verify_signature=False,
-        llm_timeout_seconds=0.05,  # Times out quickly
+        llm_timeout_seconds=0.05,
         fallback_message="Custom fallback message: timeout occurred",
     )
     channel.attach(runner)
