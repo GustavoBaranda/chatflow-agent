@@ -51,19 +51,42 @@ class SessionContext:
         self.history.clear()
 
     def _prune_history(self) -> None:
-        """Keep the dialogue history within the max_turns threshold.
+        """Keep dialogue history within max_turns by complete turns.
 
-        Retains system messages at the beginning if present, and keeps the most recent turns.
+        Preserves system prompt at the beginning. Discards older turns forward so the
+        conversation window always begins with a Role.USER message, guaranteeing that
+        tool_call and tool_result pairs are never severed.
         """
-        max_messages = self.max_turns * 2  # 1 turn ~= 1 user message + 1 model response
-        if len(self.history) > max_messages:
-            # Separate any leading system messages
-            system_messages = [m for m in self.history if m.role == Role.SYSTEM]
-            non_system_messages = [m for m in self.history if m.role != Role.SYSTEM]
+        system_messages = [m for m in self.history if m.role == Role.SYSTEM]
+        non_system = [m for m in self.history if m.role != Role.SYSTEM]
 
-            # Slice the most recent turns
-            retained_turns = non_system_messages[-max_messages:]
-            self.history = system_messages + retained_turns
+        # Group non-system messages into complete user turns (each turn starts with Role.USER)
+        turns: list[list[Message]] = []
+        current_turn: list[Message] = []
+
+        for msg in non_system:
+            if msg.role == Role.USER:
+                if current_turn:
+                    turns.append(current_turn)
+                current_turn = [msg]
+            else:
+                if current_turn:
+                    current_turn.append(msg)
+                else:
+                    # Discard forward any non-USER message until first USER message appears
+                    continue
+
+        if current_turn:
+            turns.append(current_turn)
+
+        # Retain only the most recent max_turns complete turns
+        retained_turns = turns[-self.max_turns :] if len(turns) > self.max_turns else turns
+
+        flattened: list[Message] = []
+        for turn in retained_turns:
+            flattened.extend(turn)
+
+        self.history = system_messages + flattened
 
     def __repr__(self) -> str:
         return (
@@ -250,20 +273,28 @@ class SQLiteSessionContext(SessionContext):
                 """,
                 (self.session_id, message.role.value, message.content, message.model_dump_json()),
             )
-            # Prune old SQLite rows beyond max_turns * 2
-            max_messages = self.max_turns * 2
-            conn.execute(
+            # Prune old turns from SQLite: find the earliest user message ID to retain
+            # To keep max_turns complete turns, the oldest retained user message is at offset max_turns - 1
+            retain_offset = max(0, self.max_turns - 1)
+            cutoff_row = conn.execute(
                 """
-                DELETE FROM chatflow_messages
-                WHERE session_id = ? AND id NOT IN (
-                    SELECT id FROM chatflow_messages
-                    WHERE session_id = ?
-                    ORDER BY id DESC
-                    LIMIT ?
-                )
+                SELECT id FROM chatflow_messages
+                WHERE session_id = ? AND role = 'user'
+                ORDER BY id DESC
+                LIMIT 1 OFFSET ?
                 """,
-                (self.session_id, self.session_id, max_messages),
-            )
+                (self.session_id, retain_offset),
+            ).fetchone()
+
+            if cutoff_row is not None:
+                cutoff_id = cutoff_row["id"]
+                conn.execute(
+                    """
+                    DELETE FROM chatflow_messages
+                    WHERE session_id = ? AND role != 'system' AND id < ?
+                    """,
+                    (self.session_id, cutoff_id),
+                )
             conn.execute(
                 "UPDATE chatflow_sessions SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
                 (self.session_id,),
