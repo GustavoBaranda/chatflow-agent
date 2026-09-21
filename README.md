@@ -511,6 +511,8 @@ channel = WhatsAppChannel(
 
     access_token="EAA...",                    # Meta Permanent/System User Token
 
+    app_secret="a1b2c3d4...",                 # Meta App Secret (App Dashboard -> App settings -> Basic)
+
     phone_number_id="109876543210987",        # WhatsApp Phone Number ID from Meta Dashboard
 
     fallback_message="We are experiencing a temporary delay. Please try again shortly.",
@@ -1071,6 +1073,8 @@ canal_whatsapp = WhatsAppChannel(
     verify_token="tu_token_verificacion_meta", # Configurado en tu app de Meta Developers
 
     access_token="EAA...",                     # Token permanente de System User en Meta
+
+    app_secret="a1b2c3d4...",                  # Meta App Secret (Panel de Meta -> Configuración -> Básica)
 
     phone_number_id="109876543210987",         # WhatsApp Phone Number ID del panel de Meta
 

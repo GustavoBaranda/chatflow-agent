@@ -54,7 +54,7 @@ runner = Runner(starting_agent=triage_agent)
 whatsapp = WhatsAppChannel(
     verify_token=os.environ.get("WHATSAPP_VERIFY_TOKEN", "my_secure_webhook_token"),
     access_token=os.environ.get("WHATSAPP_ACCESS_TOKEN"),
-    app_secret=os.environ.get("WHATSAPP_APP_SECRET"),  # Required in production
+    app_secret=os.environ.get("WHATSAPP_APP_SECRET", "dev_secret_for_local_testing"),  # In prod: set WHATSAPP_APP_SECRET
     phone_number_id=os.environ.get("WHATSAPP_PHONE_ID"),
 )
 whatsapp.attach(runner)
