@@ -14,7 +14,7 @@
 pip install chatflow-agent
 ```
 
-[English Documentation](#english-documentation) | [Guia en Espanol](#guia-completa-en-espanol) | [PyPI Package](https://pypi.org/project/chatflow-agent/) | [Report Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
+[English Documentation](#english-documentation) | [Guía en Español](#guía-completa-en-español) | [PyPI Package](https://pypi.org/project/chatflow-agent/) | [Report Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
 
 ---
 
@@ -665,7 +665,7 @@ Ready-to-run reference implementations are available in the [`examples/`](exampl
 
 ---
 
-## Guia Completa en Espanol
+## Guía Completa en Español
 
 ### Pilares Clave (Por que chatflow-agent?)
 

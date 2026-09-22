@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 Format / Formato: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)  
 Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
-[English](#english) | [Espanol](#espanol)
+[English](#english) | [Español](#español)
 
 ---
 
@@ -120,7 +120,7 @@ now means 20 user-initiated turns, not 20 messages.
 
 ---
 
-## Espanol
+## Español
 
 ## [No publicado] — rama: fix/production-hardening
 
@@ -224,4 +224,4 @@ significa 20 turnos iniciados por el usuario, no 20 mensajes sueltos.
 
 ### Documentacion
 
-- **Paridad Bilingue al 100%:** Documentacion integral en espanol e ingles en README.md y CHANGELOG.md.
+- **Paridad Bilingue al 100%:** Documentacion integral en español e inglés en README.md y CHANGELOG.md.
