@@ -1,7 +1,7 @@
 # Changelog / Registro de Cambios
 
 All notable changes to this project will be documented in this file.  
-*Todos los cambios notables en este proyecto seran documentados en este archivo.*
+*Todos los cambios notables en este proyecto serán documentados en este archivo.*
 
 Format / Formato: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)  
 Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
@@ -12,216 +12,68 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## English
 
-## [Unreleased] — branch: fix/production-hardening
-
-### ⚠ BREAKING CHANGES
-
-#### `WhatsAppChannel` requires `app_secret` by default (SEC-01)
-
-`WhatsAppChannel` now raises `ValueError` at startup if `app_secret` is not
-provided and `verify_signature` is not explicitly set to `False`.
-
-**Before (v0.1.x):**
-```python
-# app_secret was optional and silently ignored
-channel = WhatsAppChannel(verify_token="...", access_token="...")
-```
-
-**After:**
-```python
-# app_secret is required; omitting it raises ValueError
-channel = WhatsAppChannel(
-    verify_token=os.environ["WHATSAPP_VERIFY_TOKEN"],
-    access_token=os.environ["WHATSAPP_ACCESS_TOKEN"],
-    app_secret=os.environ["WHATSAPP_APP_SECRET"],   # <-- now required
-    phone_number_id=os.environ["WHATSAPP_PHONE_ID"],
-)
-# For local development/testing only:
-channel = WhatsAppChannel(
-    verify_token="...",
-    verify_signature=False,   # emits SECURITY WARNING in logs
-)
-```
-
-#### Webhook response body changed (BUS-01)
-
-The POST `/webhook` response body no longer contains `reply` or `active_agent`
-fields. Processing is now asynchronous.
-
-**Before:** `{"status":"success","sender":"...","reply":"...","active_agent":"..."}`  
-**After:**  `{"status":"success","sender":"...","messages_queued": N}`
-
-#### `max_turns` now counts user conversation turns, not individual messages (DATA-01)
-
-Previously `max_turns` counted individual `Message` objects (user + model + tool
-messages). Now it counts complete user conversation turns (each turn = one user
-message plus its associated model/tool responses). A setting of `max_turns=20`
-now means 20 user-initiated turns, not 20 messages.
-
----
+## [0.3.0] - 2026-09-21
 
 ### Security
+- **WhatsApp Webhook Signature Verification Enforced (SEC-01):** Fixed vulnerability where inbound POST `/webhook` requests were processed without verifying Meta's `X-Hub-Signature-256` HMAC header, allowing unauthenticated attackers to forge messages. `WhatsAppChannel` now enforces a strict fail-closed policy: `app_secret` is required by default, validating requests with constant-time `hmac.compare_digest` and rejecting invalid or missing signatures with HTTP 403.
+- **Timing Attack Mitigation (SEC-02):** GET `/webhook` challenge verification now uses constant-time `hmac.compare_digest` for verify tokens.
+- **Credential Masking in Logs:** Sensitive tokens, app secrets, and credentials are automatically redacted across all logging handlers.
+- **Fail-Closed Starter Templates:** Example scripts (`whatsapp_service.py`, `whatsapp_persistent_bot.py`) raise `RuntimeError` if `WHATSAPP_APP_SECRET` is unset rather than falling back to an insecure development secret.
 
-- **HMAC-SHA256 Webhook Verification (SEC-01):** Reads raw request body before JSON
-  decoding; validates `X-Hub-Signature-256` with constant-time `hmac.compare_digest`.
-  Fails with HTTP 403 if the header is missing or invalid.
-- **Constant-Time Verify Token Check (SEC-02):** GET `/webhook` challenge handler uses
-  `hmac.compare_digest` to prevent timing attacks on the verify token.
-- **Credential Masking in Logs:** Sensitive tokens, app secrets, and credentials are
-  automatically masked in logging output.
-- **Fail-Closed Starter Examples:** Starter templates (`examples/whatsapp_service.py` and
-  `examples/whatsapp_persistent_bot.py`) raise `RuntimeError` if `WHATSAPP_APP_SECRET`
-  is missing instead of defaulting to an insecure dev secret.
+### ⚠ BREAKING CHANGES
+1. **`WhatsAppChannel` requires `app_secret` by default (SEC-01):** Omitting `app_secret` raises `ValueError` on startup unless `verify_signature=False` is explicitly set (local testing only).
+2. **Webhook response payload changed (BUS-01):** POST `/webhook` returns `{"status":"success","sender":"...","messages_queued": N}`. Inference and messaging are now dispatched asynchronously in background tasks.
+3. **`max_turns` counts complete user conversation turns (DATA-01):** `max_turns` now enforces complete user dialogue turns (user message + model responses + tool results) rather than individual message objects.
 
-### Performance & Reliability
+### Added / Fixed
+- **Background Webhook Dispatch (BUS-01):** Webhooks respond HTTP 200 to Meta immediately, preventing timeout retries on slow LLM calls.
+- **At-Most-Once Deduplication (ARCH-01):** Atomic message ID tracking in SQLite with an 8-day TTL (`DEFAULT_DEDUP_TTL_HOURS = 192`) safely discards Meta retries.
+- **Multi-Message Batch Extraction:** Webhooks with multiple message payloads are unpacked and dispatched independently.
+- **Selective Outbound Retry Backoff with Jitter:** Outbound HTTP retries are strictly limited to `ConnectError`, `ConnectTimeout`, and HTTP 429, honoring the `Retry-After` header.
+- **Meta 24h Window Expiration Handling:** Detects Meta error code `131047`, executes optional `on_24h_window_expired` callback safely (try/except), and logs masked recipient numbers.
+- **Outbound Message Splitting:** Messages exceeding Meta's 4,096-character limit are automatically split across paragraph and sentence boundaries into sequential chunks.
+- **Mid-Turn Failure Rollback:** Automatically reverts dialogue history to the last consistent turn in memory and SQLite on mid-turn engine failure and guarantees fallback delivery to WhatsApp.
+- **Turn-Based Pruning & Memory Integrity (DATA-01):** FIFO pruning preserves system prompts and atomic tool call/result pairs.
+- **SQLite Concurrency & WAL Mode:** Configured `PRAGMA busy_timeout = 10000` and `PRAGMA journal_mode = WAL` for atomic multi-reader concurrency. Existing databases transition automatically without schema recreation.
+- **Documentation Parity:** 100% bilingual parity across README and CHANGELOG.
 
-- **Async Webhook Processing via `BackgroundTasks` (BUS-01):** Returns HTTP 200 to Meta
-  immediately; agent inference and outbound messaging run in a background task.
-  Prevents Meta retry storms caused by slow LLM responses (Meta times out at 15 s).
-- **At-Most-Once Dedup by `wamid` (ARCH-01):** Message IDs are atomically recorded in
-  `chatflow_processed_messages` before the background task is enqueued. Duplicate
-  deliveries from Meta retries (up to 7 days per Meta docs) are safely discarded.
-  TTL defaults to 8 days (`DEFAULT_DEDUP_TTL_HOURS = 192`) to prevent unbounded growth.
-- **Multi-Message Batch Extraction:** Webhook payloads with multiple messages in
-  `entry[].changes[].value.messages` are fully extracted; each message is individually
-  deduplicated and independently dispatched.
-- **Anti-500 Shield & Fallback Delivery:** Background task wraps the full flow in resilient
-  error handling; delivers a user-facing fallback message on failures without HTTP 500 crashes.
-- **Selective Outbound Retry Backoff with Jitter:** Outbound HTTP retries to Meta Cloud API
-  are strictly limited to network connection errors (`ConnectError`, `ConnectTimeout`) and
-  HTTP `429` rate limits with exponential backoff and jitter. Reads and write timeouts
-  do not retry to prevent duplicate user deliveries. Respects `Retry-After` response header.
-- **Meta 24h Window Expiration Handling:** Detects Meta error code `131047` ("message
-  sent outside 24h window"), safely executes optional `on_24h_window_expired` callback
-  wrapped in try/except, and logs masked recipient telephone numbers.
-- **Outbound Message Splitting:** Messages exceeding Meta's 4,096-character limit are
-  automatically split across paragraph and sentence boundaries into sequential chunks.
-- **Mid-Turn Failure Rollback:** Automatically rolls back dialogue history to the last
-  consistent turn in memory and SQLite on mid-turn engine failure, ensuring fallback
-  dispatch without orphaned partial turns.
-
-### Storage & Memory Integrity
-
-- **Turn-Based Pruning (DATA-01):** `max_turns` now counts complete user conversation
-  turns. The pruning algorithm preserves the system prompt and guarantees that
-  `tool_calls` / `tool_results` pairs are never severed.
-- **SQLite Schema Versioning (MAINT-01):** `PRAGMA user_version = 1` and table
-  `chatflow_processed_messages` for persistent deduplication with TTL purge.
-- **SQLite Concurrency & Seamless WAL:** `PRAGMA busy_timeout = 10000` + `PRAGMA journal_mode=WAL`
-  to prevent lock contention. Existing SQLite databases transition automatically to WAL
-  mode without requiring manual schema migrations or data recreation.
-- **Turn Rollback Semantics:** Documented that turn rollback reverts conversational dialogue
-  history; external side effects of already executed tools are not rolled back.
-
-### Documentation
-
-- **100% Bilingual Parity:** Comprehensive English and Spanish documentation across
-  README.md and CHANGELOG.md.
+### Migration Guide
+If you are upgrading from v0.2.0:
+1. **Set `WHATSAPP_APP_SECRET`:** Add your Meta App Secret to your environment variables and pass it to `WhatsAppChannel(..., app_secret=os.environ["WHATSAPP_APP_SECRET"])`. For local testing without signature validation, explicitly pass `verify_signature=False`.
+2. **Update Webhook Payload Parsing:** If any internal client monitored the POST `/webhook` response body, update it to expect `{"status": "success", "messages_queued": N}` instead of the synchronous `reply` field.
+3. **Reduce `max_turns` Setting:** If your configuration previously used inflated `max_turns` values to account for individual messages (e.g. `max_turns=40` which held ~10 real turns), reduce it to the number of full turns you actually want to retain (e.g., lower to `max_turns=10`). Keeping the old number will retain roughly 4x more context than before.
 
 ---
 
 ## Español
 
-## [No publicado] — rama: fix/production-hardening
-
-### ⚠ CAMBIOS CON RUPTURA DE COMPATIBILIDAD (BREAKING CHANGES)
-
-#### `WhatsAppChannel` requiere `app_secret` por defecto (SEC-01)
-
-`WhatsAppChannel` ahora lanza `ValueError` al inicializarse si no se proporciona
-`app_secret` y no se ha configurado explicitamente `verify_signature=False`.
-
-**Antes (v0.1.x):**
-```python
-# app_secret era opcional y se ignoraba en silencio
-channel = WhatsAppChannel(verify_token="...", access_token="...")
-```
-
-**Despues:**
-```python
-# app_secret es obligatorio; omitirlo lanza ValueError
-channel = WhatsAppChannel(
-    verify_token=os.environ["WHATSAPP_VERIFY_TOKEN"],
-    access_token=os.environ["WHATSAPP_ACCESS_TOKEN"],
-    app_secret=os.environ["WHATSAPP_APP_SECRET"],   # <-- ahora obligatorio
-    phone_number_id=os.environ["WHATSAPP_PHONE_ID"],
-)
-# Solo para desarrollo local y pruebas:
-channel = WhatsAppChannel(
-    verify_token="...",
-    verify_signature=False,   # emite ADVERTENCIA DE SEGURIDAD en logs
-)
-```
-
-#### Cambio en el cuerpo de respuesta del Webhook (BUS-01)
-
-El cuerpo de respuesta de POST `/webhook` ya no contiene los campos `reply` ni
-`active_agent`. El procesamiento ahora es completamente asincrono.
-
-**Antes:** `{"status":"success","sender":"...","reply":"...","active_agent":"..."}`  
-**Despues:** `{"status":"success","sender":"...","messages_queued": N}`
-
-#### `max_turns` ahora cuenta turnos completos de usuario, no mensajes individuales (DATA-01)
-
-Anteriormente `max_turns` contaba objetos `Message` individuales (mensajes de usuario + modelo + tools).
-Ahora cuenta turnos completos de conversacion del usuario (cada turno = un mensaje de usuario mas
-sus respuestas asociadas de modelo y herramientas). Una configuracion de `max_turns=20` ahora
-significa 20 turnos iniciados por el usuario, no 20 mensajes sueltos.
-
----
+## [0.3.0] - 2026-09-21
 
 ### Seguridad
+- **Verificación Obligatoria de Firma en Webhook de WhatsApp (SEC-01):** Se corrigió una vulnerabilidad en `WhatsAppChannel` donde las peticiones POST `/webhook` entrantes se procesaban sin validar la cabecera HMAC `X-Hub-Signature-256` de Meta, permitiendo a un atacante enviar mensajes falsificados suplantando números de usuario. `WhatsAppChannel` ahora aplica una política estricta *fail-closed*: exige `app_secret` por defecto, valida la firma con `hmac.compare_digest` en tiempo constante y rechaza cualquier petición sin firma válida con HTTP 403.
+- **Mitigación de Ataques de Temporización (SEC-02):** La verificación del handshake GET `/webhook` utiliza `hmac.compare_digest` en tiempo constante para validar el token.
+- **Enmascaramiento de Credenciales en Logs:** Tokens, secretos de aplicación y números telefónicos se enmascaran automáticamente en toda la salida de depuración y logs.
+- **Plantillas con Validación Estricta (Fail-Closed):** Los ejemplos (`whatsapp_service.py` y `whatsapp_persistent_bot.py`) lanzan `RuntimeError` si falta `WHATSAPP_APP_SECRET` en vez de usar un secreto de desarrollo inseguro por defecto.
 
-- **Verificacion de Webhooks con HMAC-SHA256 (SEC-01):** Lee el cuerpo binario crudo antes de la
-  deserializacion JSON; valida la firma `X-Hub-Signature-256` con `hmac.compare_digest` en tiempo constante.
-  Rechaza con HTTP 403 si la cabecera falta o no coincide.
-- **Validacion de Verify Token en Tiempo Constante (SEC-02):** El endpoint GET `/webhook` utiliza
-  `hmac.compare_digest` para neutralizar ataques de temporizacion sobre el token de verificacion.
-- **Enmascaramiento de Credenciales en Logs:** Tokens sensibles, secretos y credenciales son
-  enmascarados automaticamente en los registros de auditoria y logs de depuracion.
-- **Ejemplos con Validacion Estricta (Fail-Closed):** Las plantillas de ejemplo (`examples/whatsapp_service.py`
-  y `examples/whatsapp_persistent_bot.py`) lanzan `RuntimeError` si falta `WHATSAPP_APP_SECRET`, evitando
-  secretos de prueba inseguros por defecto.
+### ⚠ CAMBIOS CON RUPTURA DE COMPATIBILIDAD (BREAKING CHANGES)
+1. **`WhatsAppChannel` exige `app_secret` por defecto (SEC-01):** Si se omite `app_secret`, se lanza `ValueError` al arrancar el servidor a menos que se configure explícitamente `verify_signature=False` (solo para pruebas locales).
+2. **Cambio en el cuerpo de respuesta del Webhook (BUS-01):** El POST `/webhook` ahora responde `{"status":"success","sender":"...","messages_queued": N}`. La inferencia y el envío saliente se procesan asíncronamente en segundo plano.
+3. **`max_turns` ahora cuenta turnos completos de usuario (DATA-01):** `max_turns` mide ciclos conversacionales completos (mensaje del usuario + respuestas del modelo + herramientas asociadas) en vez de objetos de mensaje individuales.
 
-### Rendimiento y Confiabilidad
+### Agregado / Corregido
+- **Despacho Asíncrono de Webhooks (BUS-01):** Responde HTTP 200 a Meta inmediatamente, evitando tormentas de reintentos por latencia del LLM.
+- **Deduplicación At-Most-Once (ARCH-01):** Registro atómico por `wamid` en SQLite con TTL de 8 días (`DEFAULT_DEDUP_TTL_HOURS = 192`) que descarta reintentos duplicados de Meta.
+- **Extracción de Lotes Multi-Mensaje:** Procesamiento y despacho independiente para webhooks que contienen múltiples mensajes simultáneos.
+- **Reintentos Salientes Selectivos con Jitter:** Limitados estrictamente a errores de conexión de red y HTTP 429 con jitter, respetando el encabezado `Retry-After`.
+- **Manejo de Ventana de 24h de Meta:** Detección del código de error `131047`, ejecución protegida con try/except del hook `on_24h_window_expired` y log con teléfono enmascarado.
+- **División Automática de Mensajes Salientes:** Fragmentación automática de mensajes que exceden el límite de 4.096 caracteres de Meta respetando párrafos y oraciones.
+- **Rollback ante Fallas a Mitad de Turno:** Reversión automática del historial conversacional al último turno consistente en memoria y SQLite ante fallas del LLM, garantizando la entrega del mensaje de fallback.
+- **Integridad de Memoria y Poda por Turnos (DATA-01):** Poda FIFO que preserva el prompt del sistema y mantiene indivisibles los pares de llamadas y resultados de herramientas.
+- **Concurrencia SQLite y Modo WAL:** `PRAGMA busy_timeout = 10000` y `PRAGMA journal_mode = WAL` para concurrencia multi-lector sin contención. Bases existentes transicionan automáticamente sin recreación de tablas.
+- **Paridad Bilingüe en Documentación:** Paridad 100% en inglés y español en README y CHANGELOG.
 
-- **Procesamiento Asincrono de Webhooks con `BackgroundTasks` (BUS-01):** Retorna HTTP 200 a Meta
-  de forma inmediata; la inferencia del agente y el envio saliente se ejecutan en segundo plano.
-  Evita tormentas de reintentos causadas por latencia en el LLM (Meta aplica timeout a los 15 s).
-- **Deduplicacion At-Most-Once por `wamid` (ARCH-01):** Los identificadores de mensaje se registran
-  atomicamente en `chatflow_processed_messages` antes de encolar la tarea. Los reintentos duplicados
-  de Meta (hasta 7 dias segun la documentacion oficial) se descartan limpiamente.
-  El TTL por defecto es de 8 dias (`DEFAULT_DEDUP_TTL_HOURS = 192`) para evitar crecimiento indefinido.
-- **Extraccion por Lotes Multi-Mensaje:** Cargas de webhook con multiples mensajes en
-  `entry[].changes[].value.messages` son procesadas individualmente, deduplicadas y despachadas de forma aislada.
-- **Escudo Anti-500 y Entrega de Fallback:** Tarea en segundo plano envuelta en manejo resiliente de errores;
-  garantiza la entrega de un mensaje de fallback amigable al usuario sin provocar caidas con error HTTP 500.
-- **Reintento Saliente Selectivo con Jitter:** Los reintentos hacia la Meta Cloud API se limitan
-  estrictamente a errores de conexion de red (`ConnectError`, `ConnectTimeout`) y codigos HTTP `429` (rate limit)
-  con backoff exponencial y jitter. Los timeouts de lectura o escritura no reintentan para evitar duplicacion.
-  Respeta el encabezado `Retry-After`.
-- **Manejo de Ventana de 24h de Meta:** Detecta el codigo de error `131047` ("mensaje enviado fuera de la ventana
-  de 24 horas"), ejecuta el callback seguro `on_24h_window_expired` protegido con try/except y registra el log
-  con el numero de telefono enmascarado.
-- **Division Automatica de Mensajes Salientes:** Mensajes que superan el limite de 4.096 caracteres de Meta
-  son segmentados automaticamente respetando saltos de parrafo y limites de oraciones.
-- **Rollback ante Fallas a Mitad de Turno:** Revierte automaticamente el historial conversacional al ultimo
-  turno consistente en memoria y SQLite ante excepciones del motor LLM, garantizando un estado limpio y
-  asegurando el envio del mensaje de contingencia al usuario por WhatsApp.
-
-### Almacenamiento e Integridad de Memoria
-
-- **Poda por Turnos Completos (DATA-01):** `max_turns` respeta los turnos de conversacion completos. El algoritmo
-  de poda preserva el prompt de sistema y garantiza que los pares atomicos `tool_calls` / `tool_results` nunca
-  queden huerfanos.
-- **Versionado de Esquema SQLite (MAINT-01):** `PRAGMA user_version = 1` y tabla
-  `chatflow_processed_messages` para deduplicacion persistente con purga automatica por TTL.
-- **Concurrencia SQLite y Transicion Transparente a WAL:** `PRAGMA busy_timeout = 10000` + `PRAGMA journal_mode=WAL`
-  para eliminar contencion de bloqueos. Las bases de datos existentes pasan automaticamente a modo WAL sin
-  requerir migracion manual ni recreacion de tablas.
-- **Semantica de Rollback de Turno:** Se documenta expresamente que el rollback revierte el historial conversacional
-  y no los efectos secundarios externos de herramientas que ya fueron ejecutadas.
-
-### Documentacion
-
-- **Paridad Bilingue al 100%:** Documentacion integral en español e inglés en README.md y CHANGELOG.md.
+### Guía de Migración
+Si ya instalaste o integraste la versión v0.2.0:
+1. **Configurá `WHATSAPP_APP_SECRET`:** Agregá tu App Secret de Meta a las variables de entorno y pasalo a `WhatsAppChannel(..., app_secret=os.environ["WHATSAPP_APP_SECRET"])`. Si estás testeando localmente sin firma, pasá explícitamente `verify_signature=False`.
+2. **Actualizá el parseo de respuesta del Webhook:** Si tenías clientes o scripts esperando el campo sincrónico `reply` en el JSON de respuesta de POST `/webhook`, actualizalos para esperar `{"status": "success", "messages_queued": N}`.
+3. **Reducí el valor de `max_turns`:** Si tu configuración anterior inflaba `max_turns` para contar mensajes sueltos (por ejemplo, `max_turns=40` para retener unos ~10 turnos reales), reducilo al número real de turnos deseados (por ejemplo, bajalo a `max_turns=10`). Mantener el número anterior retendrá aproximadamente 4 veces más contexto que antes.
