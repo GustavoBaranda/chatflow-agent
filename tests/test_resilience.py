@@ -82,6 +82,7 @@ def test_whatsapp_anti_500_error_shield() -> None:
         access_token="mock_meta_token",
         phone_number_id="123456",
         fallback_message="Servicio temporalmente no disponible.",
+        verify_signature=False,
     )
     channel.attach(runner)
 
@@ -113,8 +114,8 @@ def test_whatsapp_anti_500_error_shield() -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert data["active_agent"] == "fallback"
-    assert data["reply"] == "Servicio temporalmente no disponible."
+    # BG task enqueued (TestClient runs them synchronously) — no 500 raised
+    assert data["messages_queued"] == 1
 
 
 def test_whatsapp_unsupported_media_handling() -> None:
@@ -127,6 +128,7 @@ def test_whatsapp_unsupported_media_handling() -> None:
         access_token="mock_meta_token",
         phone_number_id="123456",
         unsupported_media_message="Solo se admiten mensajes de texto por ahora.",
+        verify_signature=False,
     )
     channel.attach(runner)
 
@@ -157,8 +159,8 @@ def test_whatsapp_unsupported_media_handling() -> None:
     response = client.post("/webhook", json=audio_payload)
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "unsupported_media_handled"
-    assert data["reply"] == "Solo se admiten mensajes de texto por ahora."
+    assert data["status"] == "success"
+    assert data["messages_queued"] == 1
 
 
 @pytest.mark.asyncio

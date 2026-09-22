@@ -14,7 +14,7 @@
 pip install chatflow-agent
 ```
 
-[English Documentation](#english-documentation) | [Guia en Espanol](#guia-completa-en-espanol) | [PyPI Package](https://pypi.org/project/chatflow-agent/) | [Report Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
+[English Documentation](#english-documentation) | [Guía en Español](#guía-completa-en-español) | [PyPI Package](https://pypi.org/project/chatflow-agent/) | [Report Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
 
 ---
 
@@ -110,9 +110,13 @@ if __name__ == "__main__":
 
    - [Interactive Terminal (CLI)](#interactive-terminal-cli)
 
-6. [Session Memory & Persistence](#session-memory--persistence)
+6. [Production Resilience & Concurrency](#production-resilience--concurrency)
 
-7. [Guía Completa en Español](#guía-completa-en-español)
+7. [Session Memory & Persistence](#session-memory--persistence)
+
+8. [Production Starter Templates](#production-starter-templates)
+
+9. [Guía Completa en Español](#guía-completa-en-español)
 
 ---
 
@@ -511,6 +515,8 @@ channel = WhatsAppChannel(
 
     access_token="EAA...",                    # Meta Permanent/System User Token
 
+    app_secret="a1b2c3d4...",                 # Meta App Secret (App Dashboard -> App settings -> Basic)
+
     phone_number_id="109876543210987",        # WhatsApp Phone Number ID from Meta Dashboard
 
     fallback_message="We are experiencing a temporary delay. Please try again shortly.",
@@ -599,6 +605,8 @@ ChatFlow includes built-in safeguards engineered specifically for real-world mes
 
 * **Unsupported Media Handling:** Audio voice notes, photos, and PDF files are safely intercepted with `unsupported_media_message` without throwing unhandled exceptions or disrupting ongoing chat sessions.
 
+* **Turn Failure Rollback:** If an LLM request times out, rate limits, or crashes mid-turn, ChatFlow automatically rolls back dialogue history to the last consistent turn in memory and SQLite (note: rollback reverts conversational history; external side effects of already executed tools are not rolled back), ensuring clean context without orphaned partial turns.
+
 ---
 
 ### Session Memory & Persistence
@@ -659,7 +667,54 @@ Ready-to-run reference implementations are available in the [`examples/`](exampl
 
 ---
 
-## Guia Completa en Espanol
+## Guía Completa en Español
+
+### Pilares Clave (Por que chatflow-agent?)
+
+* **Nucleo Ultra-Ligero:** Solo 3 dependencias de ejecucion (`google-genai`, `pydantic`, `httpx`). Un paquete diminuto de ~72 KB que se instala en segundos en contenedores Docker, entornos serverless y servidores VPS.
+
+* **Nativo Omnicanal:** Conectores listos para produccion para **WhatsApp (Meta Cloud API Oficial)**, **Telegram**, **Webhooks (FastAPI)** y **CLI** interactiva.
+
+* **Libertad Multi-Proveedor:** Alterna entre **Google Gemini**, **Google Gemma (100% gratis y local via Ollama)**, **xAI Grok**, **OpenAI (GPT-4o)** y **Anthropic Claude** con un unico parametro. Cero ataduras a proveedores.
+
+* **Escudos Reforzados para Produccion:** Bloqueo de concurrencia nativo por sesion (`asyncio.Lock`) que previene condiciones de carrera por usuarios que escriben rapido. Escudo anti-500 en webhooks para evitar tormentas de reintentos de Meta durante caidas del LLM.
+
+* **Handoffs Autonomos entre Agentes:** Los agentes delegan conversaciones dinamicamente segun la intencion del usuario, sin maquinas de estado rigidas ni grafos complejos.
+
+---
+
+### Inicio Rapido en 10 Segundos
+
+```python
+import asyncio
+from chatflow_agent import Agent, Runner
+
+# 1. Definir agentes especialistas
+tech_agent = Agent(name="TechSupport", model="gemini-2.5-flash", instructions="Ayuda con errores tecnicos.")
+billing_agent = Agent(name="Billing", model="gemini-2.5-flash", instructions="Ayuda con facturacion y pagos.")
+
+# 2. Agente recepcionista con handoffs autonomos
+receptionist = Agent(
+    name="Receptionist",
+    model="gemini-2.5-flash",
+    instructions="Saluda cordialmente al cliente y derivalo a TechSupport o Billing segun su consulta.",
+    handoffs=[tech_agent, billing_agent],
+)
+
+async def main():
+    runner = Runner(starting_agent=receptionist)
+    result = await runner.run_async(
+        session_id="usuario_whatsapp_1",
+        user_message="Hola! Necesito ayuda con un error en la factura de mi cuenta.",
+    )
+    print(f"[{result.active_agent_name}]: {result.content}")
+    # Salida: [Billing]: Con gusto te ayudo a revisar tu factura. ¿Me podrias indicar tu numero de cuenta?
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
 
 ### Tabla de Contenidos
 
@@ -690,6 +745,8 @@ Ready-to-run reference implementations are available in the [`examples/`](exampl
 7. [Memoria de Sesiones y Persistencia en SQLite](#memoria-de-sesiones-y-persistencia-en-sqlite-1)
 
 8. [Plantillas de Produccion Listas para Usar](#plantillas-de-produccion-listas-para-usar-1)
+
+9. [Documentación en Inglés](#english-documentation)
 
 ---
 
@@ -791,27 +848,27 @@ ANTHROPIC_API_KEY="sk-ant-..."
 
 #### Opcion 3: Variables de Entorno en la Terminal
 
-```bash
+* **Windows (PowerShell):**
 
-# En Linux / macOS
+  ```powershell
+  $env:GEMINI_API_KEY="AIzaSy..."
+  ```
 
-export GEMINI_API_KEY="AIzaSy..."
+* **Linux / macOS (Bash/Zsh):**
 
-# En Windows PowerShell
+  ```bash
+  export GEMINI_API_KEY="AIzaSy..."
+  ```
 
-$env:GEMINI_API_KEY="AIzaSy..."
+#### Tabla Comparativa de Proveedores y Credenciales
 
-```
-
-#### Tabla Comparativa de Proveedores y Variables
-
-| Proveedor | Parametro `provider` | Variable de Entorno | Modelo por Defecto | Nivel de Costo |
+| Proveedor | Donde obtener la Clave | Variable de Entorno | Parametro en Codigo | Nivel Gratuito Disponible |
 | :--- | :--- | :--- | :--- | :--- |
-| **Google Gemini** | `"gemini"` *(por defecto)* | `GEMINI_API_KEY` | `gemini-2.5-flash` | Nivel gratuito generoso en AI Studio |
-| **Google Gemma (Local)**| `"ollama"` | *No requiere clave* | `gemma2:9b` o `gemma2:2b`| **100% Gratis y Offline** |
-| **xAI Grok** | `"grok"` | `XAI_API_KEY` | `grok-2` | Pago por uso |
-| **OpenAI** | `"openai"` | `OPENAI_API_KEY` | `gpt-4o-mini` | Pago por uso |
-| **Anthropic** | `"anthropic"` | `ANTHROPIC_API_KEY` | `claude-3-5-sonnet` | Pago por uso |
+| **Google Gemini** | [Google AI Studio](https://aistudio.google.com/app/apikey) | `GEMINI_API_KEY` | `api_key="..."` | **Si (Nivel gratuito generoso)** |
+| **Google Gemma (Local)** | [Ollama](https://ollama.com) | *No requiere clave* | `provider="ollama"` | **100% Gratis y Offline** |
+| **xAI Grok** | [Consola de xAI](https://console.x.ai/) | `XAI_API_KEY` | `api_key="..."` | Pago por uso |
+| **OpenAI** | [Plataforma OpenAI](https://platform.openai.com/) | `OPENAI_API_KEY` | `api_key="..."` | Pago por uso |
+| **Anthropic Claude** | [Consola Anthropic](https://console.anthropic.com/) | `ANTHROPIC_API_KEY` | `api_key="..."` | Pago por uso |
 
 ---
 
@@ -1072,6 +1129,8 @@ canal_whatsapp = WhatsAppChannel(
 
     access_token="EAA...",                     # Token permanente de System User en Meta
 
+    app_secret="a1b2c3d4...",                  # Meta App Secret (Panel de Meta -> Configuración -> Básica)
+
     phone_number_id="109876543210987",         # WhatsApp Phone Number ID del panel de Meta
 
     fallback_message="Disculpa, estamos experimentando una demora temporal. Por favor intenta en unos momentos.",
@@ -1164,6 +1223,8 @@ canal_cli.run()
 
 * **Manejo Seguro de Archivos Multimedia:** Audios, fotos y documentos son interceptados con un aviso claro (`unsupported_media_message`) sin generar excepciones no controladas ni interrumpir la sesion en curso.
 
+* **Rollback ante Fallas en el Turno:** Si una solicitud al LLM excede el tiempo de espera o falla a mitad de turno, ChatFlow revierte automaticamente el historial de conversacion al ultimo turno consistente en memoria y SQLite (nota: revierte el historial conversacional; no deshace efectos secundarios externos de tools ya ejecutadas), garantizando un contexto limpio sin turnos huerfanos.
+
 ---
 
 ### Memoria de Sesiones y Persistencia en SQLite
@@ -1224,17 +1285,18 @@ En el directorio [`examples/`](examples/) encontraras proyectos completos listos
 
 ---
 
-## Author & Community
+## Author & Community / Autor y Comunidad
 
-Created and maintained by **[Gustavo Baranda](https://github.com/GustavoBaranda)**.
+Created and maintained by / Creado y mantenido por **[Gustavo Baranda](https://github.com/GustavoBaranda)**.
 
 If you find `chatflow-agent` useful for your projects, consider giving it a star on GitHub!  
+*Si encuentras util `chatflow-agent` para tus proyectos, considera darle una estrella en GitHub!*
 
-Contributions, issues, and feature requests are always welcome.
+Contributions, issues, and feature requests are always welcome.  
+*Contribuciones, reportes de errores y solicitudes de caracteristicas son siempre bienvenidos.*
 
 ---
 
-## License
+## License / Licencia
 
-Distributed under the **MIT License**.
-
+Distributed under the **MIT License** / Distribuido bajo la **Licencia MIT**.

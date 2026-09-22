@@ -12,6 +12,10 @@ from typing import Any
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.types import Message, Role
 
+# Canonical Single Source of Truth for message deduplication TTL
+DEFAULT_DEDUP_TTL_HOURS: int = 192  # 8 days (exceeds Meta's 7-day webhook retry window)
+DEFAULT_DEDUP_TTL_SECONDS: float = float(DEFAULT_DEDUP_TTL_HOURS * 3600)
+
 
 class SessionContext:
     """Stores conversation state, dialogue history, and active agent pointer for a session."""
@@ -50,20 +54,51 @@ class SessionContext:
         """Reset the conversation dialogue history."""
         self.history.clear()
 
-    def _prune_history(self) -> None:
-        """Keep the dialogue history within the max_turns threshold.
+    def rollback_to(self, checkpoint_len: int) -> None:
+        """Roll back dialogue history to a previous checkpoint length.
 
-        Retains system messages at the beginning if present, and keeps the most recent turns.
+        Note: Rollback reverts conversational dialogue history; it does NOT
+        revert external side effects of tools that were already executed.
         """
-        max_messages = self.max_turns * 2  # 1 turn ~= 1 user message + 1 model response
-        if len(self.history) > max_messages:
-            # Separate any leading system messages
-            system_messages = [m for m in self.history if m.role == Role.SYSTEM]
-            non_system_messages = [m for m in self.history if m.role != Role.SYSTEM]
+        self.history = self.history[:checkpoint_len]
 
-            # Slice the most recent turns
-            retained_turns = non_system_messages[-max_messages:]
-            self.history = system_messages + retained_turns
+    def _prune_history(self) -> None:
+        """Keep dialogue history within max_turns by complete turns.
+
+        Preserves system prompt at the beginning. Discards older turns forward so the
+        conversation window always begins with a Role.USER message, guaranteeing that
+        tool_call and tool_result pairs are never severed.
+        """
+        system_messages = [m for m in self.history if m.role == Role.SYSTEM]
+        non_system = [m for m in self.history if m.role != Role.SYSTEM]
+
+        # Group non-system messages into complete user turns (each turn starts with Role.USER)
+        turns: list[list[Message]] = []
+        current_turn: list[Message] = []
+
+        for msg in non_system:
+            if msg.role == Role.USER:
+                if current_turn:
+                    turns.append(current_turn)
+                current_turn = [msg]
+            else:
+                if current_turn:
+                    current_turn.append(msg)
+                else:
+                    # Discard forward any non-USER message until first USER message appears
+                    continue
+
+        if current_turn:
+            turns.append(current_turn)
+
+        # Retain only the most recent max_turns complete turns
+        retained_turns = turns[-self.max_turns :] if len(turns) > self.max_turns else turns
+
+        flattened: list[Message] = []
+        for turn in retained_turns:
+            flattened.extend(turn)
+
+        self.history = system_messages + flattened
 
     def __repr__(self) -> str:
         return (
@@ -106,12 +141,77 @@ class BaseSessionStore(ABC):
         raise NotImplementedError
 
 
-class SessionStore(BaseSessionStore):
-    """Thread-safe in-memory session registry indexable by session_id."""
+    def is_message_processed(self, message_id: str) -> bool:
+        """Return True if message_id was already recorded."""
+        return False
 
-    def __init__(self, default_max_turns: int = 40) -> None:
+    def record_processed_message(self, message_id: str) -> bool:
+        """Atomically record message_id. Returns True if new, False if duplicate."""
+        return True
+
+
+class SessionStore(BaseSessionStore):
+    """Thread-safe in-memory session registry with at-most-once dedup (TTL + cap).
+
+    Deduplication covers Meta's 7-day retry window using an 8-day default TTL.
+    Entries are capped at 10,000 and purged amortized every 5 minutes.
+    """
+
+    _DEDUP_TTL_SECONDS: float = DEFAULT_DEDUP_TTL_SECONDS
+    _DEDUP_MAX_ENTRIES: int = 10_000
+    _DEDUP_PURGE_INTERVAL: float = 300.0          # throttle: purge at most every 5 min
+
+    def __init__(
+        self,
+        default_max_turns: int = 40,
+        dedup_ttl_hours: float = DEFAULT_DEDUP_TTL_HOURS,
+    ) -> None:
+        import time as _time
         self._sessions: dict[str, SessionContext] = {}
         self.default_max_turns = default_max_turns
+        self.dedup_ttl_hours = dedup_ttl_hours
+        self._dedup_ttl_seconds = dedup_ttl_hours * 3600.0
+        self._processed_ids: dict[str, float] = {}   # {wamid: monotonic timestamp}
+        self._last_purge: float = _time.monotonic()
+
+    def is_message_processed(self, message_id: str) -> bool:
+        """Return True if message_id is within TTL."""
+        import time as _time
+        ts = self._processed_ids.get(message_id)
+        if ts is None:
+            return False
+        if _time.monotonic() - ts > self._dedup_ttl_seconds:
+            del self._processed_ids[message_id]
+            return False
+        return True
+
+    def record_processed_message(self, message_id: str) -> bool:
+        """Atomically record message_id. Returns True if new, False if duplicate.
+
+        Applies amortized TTL purge and caps entries at _DEDUP_MAX_ENTRIES.
+        """
+        import time as _time
+        now = _time.monotonic()
+
+        existing = self._processed_ids.get(message_id)
+        if existing is not None:
+            if now - existing <= self._dedup_ttl_seconds:
+                return False  # within TTL - duplicate
+            del self._processed_ids[message_id]  # stale - allow re-registration
+
+        # Amortized purge
+        if now - self._last_purge >= self._DEDUP_PURGE_INTERVAL:
+            cutoff = now - self._dedup_ttl_seconds
+            self._processed_ids = {k: v for k, v in self._processed_ids.items() if v > cutoff}
+            self._last_purge = now
+
+        # Cap enforcement
+        if len(self._processed_ids) >= self._DEDUP_MAX_ENTRIES:
+            oldest = min(self._processed_ids, key=lambda k: self._processed_ids[k])
+            del self._processed_ids[oldest]
+
+        self._processed_ids[message_id] = now
+        return True
 
     def get_or_create(
         self,
@@ -148,9 +248,13 @@ class SessionStore(BaseSessionStore):
 
 @contextmanager
 def _get_sqlite_connection(db_path: str) -> Generator[sqlite3.Connection, None, None]:
-    """Provide a transactional SQLite connection that closes cleanly across operating systems."""
+    """Provide a transactional SQLite connection configured with WAL and busy_timeout."""
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 10000")
+    if db_path != ":memory:":
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
     try:
         yield conn
         conn.commit()
@@ -191,24 +295,55 @@ class SQLiteSessionContext(SessionContext):
                 """,
                 (self.session_id, message.role.value, message.content, message.model_dump_json()),
             )
-            # Prune old SQLite rows beyond max_turns * 2
-            max_messages = self.max_turns * 2
+            # Prune old turns from SQLite: find the earliest user message ID to retain
+            # To keep max_turns complete turns, the oldest retained user message is at offset max_turns - 1
+            retain_offset = max(0, self.max_turns - 1)
+            cutoff_row = conn.execute(
+                """
+                SELECT id FROM chatflow_messages
+                WHERE session_id = ? AND role = 'user'
+                ORDER BY id DESC
+                LIMIT 1 OFFSET ?
+                """,
+                (self.session_id, retain_offset),
+            ).fetchone()
+
+            if cutoff_row is not None:
+                cutoff_id = cutoff_row["id"]
+                conn.execute(
+                    """
+                    DELETE FROM chatflow_messages
+                    WHERE session_id = ? AND role != 'system' AND id < ?
+                    """,
+                    (self.session_id, cutoff_id),
+                )
             conn.execute(
                 """
-                DELETE FROM chatflow_messages
-                WHERE session_id = ? AND id NOT IN (
-                    SELECT id FROM chatflow_messages
-                    WHERE session_id = ?
-                    ORDER BY id DESC
-                    LIMIT ?
-                )
+                UPDATE chatflow_sessions
+                SET active_agent_name = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE session_id = ?
                 """,
-                (self.session_id, self.session_id, max_messages),
+                (self.active_agent.name, self.session_id),
             )
-            conn.execute(
-                "UPDATE chatflow_sessions SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+
+    def rollback_to(self, checkpoint_len: int) -> None:
+        """Roll back dialogue history in memory and database to checkpoint length.
+
+        Note: Rollback reverts conversational dialogue history; it does NOT
+        revert external side effects of tools that were already executed.
+        """
+        with _get_sqlite_connection(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id FROM chatflow_messages WHERE session_id = ? ORDER BY id ASC",
                 (self.session_id,),
-            )
+            ).fetchall()
+            if len(rows) > checkpoint_len:
+                cutoff_id = rows[checkpoint_len]["id"]
+                conn.execute(
+                    "DELETE FROM chatflow_messages WHERE session_id = ? AND id >= ?",
+                    (self.session_id, cutoff_id),
+                )
+        super().rollback_to(checkpoint_len)
 
     def set_active_agent(self, agent: Agent) -> None:
         """Switch current active agent and persist the pointer to SQLite."""
@@ -225,27 +360,87 @@ class SQLiteSessionContext(SessionContext):
         with _get_sqlite_connection(self.db_path) as conn:
             conn.execute("DELETE FROM chatflow_messages WHERE session_id = ?", (self.session_id,))
             conn.execute(
-                "UPDATE chatflow_sessions SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
-                (self.session_id,),
+                """
+                UPDATE chatflow_sessions
+                SET active_agent_name = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE session_id = ?
+                """,
+                (self.active_agent.name, self.session_id),
             )
+
 
 
 class SQLiteSessionStore(BaseSessionStore):
     """Persistent SQLite session registry.
 
-    Stores conversation state, dialogue turns, and active agent pointers in a local
-    or volume-mounted SQLite database with zero external dependencies.
+    Stores conversation state, dialogue turns, active agent pointers, and deduplication
+    records in a local or volume-mounted SQLite database with zero external dependencies.
+
+    Note on Concurrency:
+        Configured with WAL mode and PRAGMA busy_timeout=10000 ms. Designed for
+        single-process deployments (1 Uvicorn worker). For multi-worker or multi-node
+        clusters, use an external distributed session store to avoid SQLite file lock contention.
     """
 
-    def __init__(self, db_path: str | Path = "chatflow.db", default_max_turns: int = 40) -> None:
+    def __init__(
+        self,
+        db_path: str | Path = "chatflow.db",
+        default_max_turns: int = 40,
+        dedup_ttl_hours: float = DEFAULT_DEDUP_TTL_HOURS,
+    ) -> None:
         self.db_path = str(db_path)
         self.default_max_turns = default_max_turns
+        self.dedup_ttl_hours = dedup_ttl_hours
         self._agent_resolver: Callable[[str], Agent | None] | None = None
         self._init_db()
 
     def set_agent_resolver(self, resolver: Callable[[str], Agent | None]) -> None:
         """Register a resolver callback to map agent names from SQLite back to Agent instances."""
         self._agent_resolver = resolver
+
+    def is_message_processed(self, message_id: str) -> bool:
+        """Check if message_id was recorded within dedup_ttl_hours."""
+        with _get_sqlite_connection(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT message_id FROM chatflow_processed_messages
+                WHERE message_id = ?
+                  AND processed_at >= datetime('now', ?)
+                """,
+                (message_id, f"-{self.dedup_ttl_hours} hours"),
+            ).fetchone()
+            return row is not None
+
+    def record_processed_message(self, message_id: str) -> bool:
+        """Atomically record message_id if new; return False if duplicate within TTL.
+
+        Purges expired records older than dedup_ttl_hours.
+        """
+        with _get_sqlite_connection(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT message_id FROM chatflow_processed_messages
+                WHERE message_id = ?
+                  AND processed_at >= datetime('now', ?)
+                """,
+                (message_id, f"-{self.dedup_ttl_hours} hours"),
+            ).fetchone()
+            if row is not None:
+                return False
+
+            conn.execute(
+                "DELETE FROM chatflow_processed_messages WHERE processed_at < datetime('now', ?)",
+                (f"-{self.dedup_ttl_hours} hours",),
+            )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO chatflow_processed_messages (message_id, processed_at)
+                VALUES (?, CURRENT_TIMESTAMP)
+                """,
+                (message_id,),
+            )
+            return True
+
 
     def _init_db(self) -> None:
         """Initialize the SQLite tables and indexes."""
@@ -255,6 +450,7 @@ class SQLiteSessionStore(BaseSessionStore):
             parent.mkdir(parents=True, exist_ok=True)
 
         with _get_sqlite_connection(self.db_path) as conn:
+            conn.execute("PRAGMA user_version = 1")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS chatflow_sessions (
@@ -280,7 +476,18 @@ class SQLiteSessionStore(BaseSessionStore):
                 """
             )
             conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chatflow_processed_messages (
+                    message_id TEXT PRIMARY KEY,
+                    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chatflow_messages_session ON chatflow_messages(session_id, id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chatflow_processed_at ON chatflow_processed_messages(processed_at)"
             )
 
     def get_or_create(
@@ -289,49 +496,44 @@ class SQLiteSessionStore(BaseSessionStore):
         default_agent: Agent,
         metadata: dict[str, Any] | None = None,
     ) -> SessionContext:
-        """Retrieve existing session from SQLite or insert and initialize a new one."""
+        """Retrieve existing session from SQLite or atomically insert and initialize a new one."""
         with _get_sqlite_connection(self.db_path) as conn:
+            meta_json = json.dumps(metadata or {})
+            conn.execute(
+                """
+                INSERT INTO chatflow_sessions (session_id, active_agent_name, metadata_json)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_id) DO NOTHING
+                """,
+                (session_id, default_agent.name, meta_json),
+            )
             row = conn.execute(
                 "SELECT active_agent_name, metadata_json FROM chatflow_sessions WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
 
-            if row is None:
-                meta_json = json.dumps(metadata or {})
-                conn.execute(
-                    "INSERT INTO chatflow_sessions (session_id, active_agent_name, metadata_json) VALUES (?, ?, ?)",
-                    (session_id, default_agent.name, meta_json),
-                )
-                return SQLiteSessionContext(
-                    session_id=session_id,
-                    initial_agent=default_agent,
-                    db_path=self.db_path,
-                    max_turns=self.default_max_turns,
-                    metadata=metadata,
-                )
-            else:
-                agent_name = row["active_agent_name"]
-                meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
-                active_agent = default_agent
-                if self._agent_resolver:
-                    resolved = self._agent_resolver(agent_name)
-                    if resolved is not None:
-                        active_agent = resolved
+            agent_name = row["active_agent_name"]
+            meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+            active_agent = default_agent
+            if self._agent_resolver:
+                resolved = self._agent_resolver(agent_name)
+                if resolved is not None:
+                    active_agent = resolved
 
-                msg_rows = conn.execute(
-                    "SELECT message_json FROM chatflow_messages WHERE session_id = ? ORDER BY id ASC",
-                    (session_id,),
-                ).fetchall()
-                history = [Message.model_validate_json(r["message_json"]) for r in msg_rows]
+            msg_rows = conn.execute(
+                "SELECT message_json FROM chatflow_messages WHERE session_id = ? ORDER BY id ASC",
+                (session_id,),
+            ).fetchall()
+            history = [Message.model_validate_json(r["message_json"]) for r in msg_rows]
 
-                return SQLiteSessionContext(
-                    session_id=session_id,
-                    initial_agent=active_agent,
-                    db_path=self.db_path,
-                    max_turns=self.default_max_turns,
-                    metadata=meta,
-                    preloaded_history=history,
-                )
+            return SQLiteSessionContext(
+                session_id=session_id,
+                initial_agent=active_agent,
+                db_path=self.db_path,
+                max_turns=self.default_max_turns,
+                metadata=meta,
+                preloaded_history=history,
+            )
 
     def get(self, session_id: str) -> SessionContext | None:
         """Fetch session by ID if it exists in SQLite."""

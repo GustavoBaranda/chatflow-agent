@@ -193,3 +193,84 @@ async def test_sqlite_runner_survives_reboot(tmp_path: Path, test_agents: tuple[
     session = runner2.get_session("customer_99")
     assert session is not None
     assert session.active_agent.name == "Billing"
+
+
+def test_sqlite_pragmas_and_version(tmp_path: Path) -> None:
+    """Verify SQLite WAL journal mode, busy_timeout, synchronous normal, and user_version."""
+    import sqlite3
+
+    from chatflow_agent.core.memory import _get_sqlite_connection
+
+    db_path = tmp_path / "pragmas.db"
+    _ = SQLiteSessionStore(db_path=db_path)
+
+    # Verify persistent DB-level pragmas with a raw connection
+    raw_conn = sqlite3.connect(str(db_path))
+    user_version = raw_conn.execute("PRAGMA user_version").fetchone()[0]
+    assert user_version == 1, f"Expected user_version=1, got {user_version}"
+    journal_mode = raw_conn.execute("PRAGMA journal_mode").fetchone()[0].lower()
+    assert journal_mode == "wal", f"Expected journal_mode=wal, got {journal_mode}"
+    raw_conn.close()
+
+    # Verify connection-level pragmas set by _get_sqlite_connection
+    with _get_sqlite_connection(str(db_path)) as conn:
+        busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        assert busy_timeout == 10000, f"Expected busy_timeout=10000, got {busy_timeout}"
+        sync_mode = conn.execute("PRAGMA synchronous").fetchone()[0]
+        assert sync_mode == 1, f"Expected synchronous=NORMAL (1), got {sync_mode}"
+
+
+def test_sqlite_deduplication_by_wamid_with_ttl(tmp_path: Path) -> None:
+    """Verify SQLite deduplication of message IDs and TTL purge."""
+    db_path = tmp_path / "dedup.db"
+    store = SQLiteSessionStore(db_path=db_path, dedup_ttl_hours=1)
+
+    assert store.is_message_processed("wamid_abc") is False
+    assert store.record_processed_message("wamid_abc") is True
+    assert store.is_message_processed("wamid_abc") is True
+
+    # Duplicate call should return False
+    assert store.record_processed_message("wamid_abc") is False
+
+    # Another distinct wamid
+    assert store.record_processed_message("wamid_def") is True
+    assert store.is_message_processed("wamid_def") is True
+
+
+def test_sqlite_atomic_message_and_agent_update(tmp_path: Path, test_agents: tuple[Agent, Agent]) -> None:
+    """Verify active_agent_name is updated atomically when messages are appended."""
+    triage, billing = test_agents
+    db_path = tmp_path / "atomic.db"
+    store = SQLiteSessionStore(db_path=db_path)
+
+    ctx = store.get_or_create("session_atomic", default_agent=triage)
+    assert ctx.active_agent.name == "Triage"
+
+    # Switch agent in memory and append message
+    ctx.set_active_agent(billing)
+    ctx.add_message(Message(role=Role.USER, content="Hello Billing!"))
+
+    # Reload fresh from disk
+    store2 = SQLiteSessionStore(db_path=db_path)
+    agents_map = {"Triage": triage, "Billing": billing}
+    store2.set_agent_resolver(lambda name: agents_map.get(name))
+    reloaded = store2.get_or_create("session_atomic", default_agent=triage)
+    assert reloaded.active_agent.name == "Billing"
+
+
+def test_sqlite_concurrency_writes_no_lock_error(tmp_path: Path, test_agents: tuple[Agent, Agent]) -> None:
+    """Verify concurrent writes across threads do not fail with database locked."""
+    import concurrent.futures
+    triage, _ = test_agents
+    db_path = tmp_path / "concurrent.db"
+    store = SQLiteSessionStore(db_path=db_path)
+
+    def worker(worker_id: int) -> None:
+        ctx = store.get_or_create(f"concurrent_session_{worker_id % 3}", default_agent=triage)
+        for i in range(10):
+            ctx.add_message(Message(role=Role.USER, content=f"Worker {worker_id} msg {i}"))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(worker, wid) for wid in range(15)]
+        for f in concurrent.futures.as_completed(futures):
+            f.result()  # Should not raise sqlite3.OperationalError: database is locked
