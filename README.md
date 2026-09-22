@@ -116,6 +116,8 @@ if __name__ == "__main__":
 
 8. [Production Starter Templates](#production-starter-templates)
 
+9. [Guía Completa en Español](#guía-completa-en-español)
+
 ---
 
 ### Overview & Architecture
@@ -743,6 +745,8 @@ if __name__ == "__main__":
 7. [Memoria de Sesiones y Persistencia en SQLite](#memoria-de-sesiones-y-persistencia-en-sqlite-1)
 
 8. [Plantillas de Produccion Listas para Usar](#plantillas-de-produccion-listas-para-usar-1)
+
+9. [Documentación en Inglés](#english-documentation)
 
 ---
 
