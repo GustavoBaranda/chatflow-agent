@@ -12,6 +12,11 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## English
 
+## [0.3.1] - 2026-09-25
+
+### Security
+- **WhatsApp Webhook Request Body Size Limit (SEC-01):** Fixed vulnerability where inbound `POST /webhook` requests did not validate the payload size prior to buffering, enabling potential Denial of Service (DoS via Out-of-Memory / OOM). The endpoint now validates the `Content-Length` header before reading the body, enforcing a configurable limit (default: 1 MB via `DEFAULT_MAX_BODY_SIZE`) and rejecting oversized payloads with HTTP 413, missing headers with HTTP 411, and malformed headers with HTTP 400.
+
 ## [0.3.0] - 2026-09-21
 
 ### Security
@@ -46,6 +51,11 @@ If you are upgrading from v0.2.0:
 ---
 
 ## Español
+
+## [0.3.1] - 2026-09-25
+
+### Seguridad
+- **Límite de Tamaño en Request Body del Webhook de WhatsApp (SEC-01):** Se corrigió una vulnerabilidad donde las peticiones entrantes `POST /webhook` no validaban el tamaño del payload antes de cargarlo en memoria, permitiendo ataques de Denegación de Servicio por agotamiento de memoria (DoS / OOM). Ahora se valida el encabezado `Content-Length` antes de leer el cuerpo, aplicando un límite configurable (por defecto 1 MB mediante `DEFAULT_MAX_BODY_SIZE`) y rechazando payloads excesivos con HTTP 413, encabezados ausentes con HTTP 411 y encabezados malformados con HTTP 400.
 
 ## [0.3.0] - 2026-09-21
 

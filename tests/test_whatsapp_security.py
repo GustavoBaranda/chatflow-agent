@@ -188,3 +188,82 @@ def test_no_secrets_in_logs(caplog: pytest.LogCaptureFixture) -> None:
     all_logs = caplog.text
     assert secret_app not in all_logs, "app_secret must never be printed to logs"
     assert secret_token not in all_logs, "access_token must never be printed to logs"
+
+
+
+def test_webhook_rejects_payload_exceeding_max_body_size() -> None:
+    """Ensure payloads larger than max_body_size return HTTP 413."""
+    channel = WhatsAppChannel(
+        verify_token="test_token",
+        access_token="test_access",
+        app_secret="test_secret",
+        phone_number_id="123456",
+        max_body_size=1024,
+    )
+    runner = Runner(starting_agent=Agent(name="Echo", instructions="test", model="gemini-2.5-flash"))
+    channel.attach(runner)
+    client = TestClient(channel.app)
+
+    oversized_content = b"x" * 2048
+    resp = client.post("/webhook", content=oversized_content)
+    assert resp.status_code == 413
+    assert "exceeds maximum limit" in resp.json()["detail"]
+
+
+def test_webhook_accepts_payload_within_max_body_size() -> None:
+    """Ensure payloads within max_body_size are accepted and processed normally."""
+    channel = WhatsAppChannel(
+        verify_token="test_token",
+        access_token="test_access",
+        app_secret="test_secret",
+        phone_number_id="123456",
+        max_body_size=1 * 1024 * 1024,
+    )
+    runner = Runner(starting_agent=Agent(name="Echo", instructions="test", model="gemini-2.5-flash"))
+    channel.attach(runner)
+    client = TestClient(channel.app)
+
+    body = json.dumps({
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "changes": [{
+                "value": {
+                    "messages": [{
+                        "id": "wamid_size_ok_1",
+                        "from": "5491122334455",
+                        "type": "text",
+                        "text": {"body": "hola"}
+                    }]
+                }
+            }]
+        }]
+    }).encode("utf-8")
+
+    sig = "sha256=" + hmac.new(b"test_secret", body, hashlib.sha256).hexdigest()
+    resp = client.post(
+        "/webhook",
+        content=body,
+        headers={"X-Hub-Signature-256": sig},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "success"
+
+
+def test_webhook_rejects_missing_content_length() -> None:
+    """Ensure webhook rejects requests missing Content-Length header with HTTP 411."""
+    channel = WhatsAppChannel(verify_token="token", app_secret="secret")
+    channel.attach(Runner(starting_agent=Agent(name="Echo", instructions="test", model="gemini-2.5-flash")))
+    client = TestClient(channel.app)
+    resp = client.post("/webhook", content=b"data", headers={"Content-Length": ""})
+    assert resp.status_code == 411
+    assert "Missing Content-Length" in resp.json()["detail"]
+
+
+def test_webhook_rejects_invalid_content_length() -> None:
+    """Ensure webhook rejects requests with non-numeric Content-Length with HTTP 400."""
+    channel = WhatsAppChannel(verify_token="token", app_secret="secret")
+    channel.attach(Runner(starting_agent=Agent(name="Echo", instructions="test", model="gemini-2.5-flash")))
+    client = TestClient(channel.app)
+    resp = client.post("/webhook", content=b"data", headers={"Content-Length": "invalid_number"})
+    assert resp.status_code == 400
+    assert "Invalid Content-Length" in resp.json()["detail"]

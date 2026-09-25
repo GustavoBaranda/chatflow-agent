@@ -15,6 +15,8 @@ from chatflow_agent.types import AgentResponse
 
 logger = logging.getLogger("chatflow_agent.whatsapp")
 
+DEFAULT_MAX_BODY_SIZE = 1 * 1024 * 1024  # 1 MB maximum allowed webhook payload size
+
 
 def _mask_phone(phone: str) -> str:
     """Mask phone number for GDPR/privacy compliance in logs (e.g. 5491***678)."""
@@ -83,6 +85,7 @@ class WhatsAppChannel(BaseChannel):
         outbound_max_delay: float = 30.0,
         on_24h_window_expired: Any | None = None,
         dedup_ttl_hours: float = DEFAULT_DEDUP_TTL_HOURS,
+        max_body_size: int = DEFAULT_MAX_BODY_SIZE,
     ) -> None:
         super().__init__()
         # SEC-01: Fail-closed — require app_secret when signature verification is active.
@@ -112,6 +115,7 @@ class WhatsAppChannel(BaseChannel):
         self.outbound_max_delay = outbound_max_delay
         self.on_24h_window_expired = on_24h_window_expired
         self.dedup_ttl_hours = dedup_ttl_hours
+        self.max_body_size = max_body_size
 
         # Verify optional dependencies
         try:
@@ -164,8 +168,39 @@ class WhatsAppChannel(BaseChannel):
         async def handle_incoming_message(
             request: Request, background_tasks: BackgroundTasks
         ) -> Response:
-            """Validate HMAC, deduplicate by wamid, and dispatch processing to background tasks."""
+            """Validate Content-Length, HMAC, deduplicate by wamid, and dispatch processing to background tasks."""
+            # SEC-01: Validate Content-Length before buffering body to prevent OOM DoS
+            content_length_header = request.headers.get("Content-Length")
+            if not content_length_header:
+                raise HTTPException(
+                    status_code=status.HTTP_411_LENGTH_REQUIRED,
+                    detail="Missing Content-Length header",
+                )
+
+            try:
+                content_length = int(content_length_header)
+            except (ValueError, TypeError) as err:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid Content-Length header",
+                ) from err
+
+            status_413 = getattr(
+                status, "HTTP_413_CONTENT_TOO_LARGE", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            )
+
+            if content_length < 0 or content_length > self.max_body_size:
+                raise HTTPException(
+                    status_code=status_413,
+                    detail=f"Payload size exceeds maximum limit of {self.max_body_size} bytes",
+                )
+
             raw_body = await request.body()
+            if len(raw_body) > self.max_body_size:
+                raise HTTPException(
+                    status_code=status_413,
+                    detail=f"Payload body exceeds maximum limit of {self.max_body_size} bytes",
+                )
 
             # SEC-01: Validate X-Hub-Signature-256 when verify_signature is active
             if self.verify_signature and self.app_secret:
