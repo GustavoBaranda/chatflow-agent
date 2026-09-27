@@ -68,6 +68,29 @@ class TelegramChannel(BaseChannel):
         if not update.effective_chat or not update.message:
             return
 
+        # Restrict /reset in group and supergroup chats to creators and administrators
+        if getattr(update.effective_chat, "type", None) in ("group", "supergroup"):
+            is_admin = False
+            if update.effective_user and hasattr(context, "bot") and context.bot:
+                try:
+                    member = await context.bot.get_chat_member(
+                        chat_id=update.effective_chat.id,
+                        user_id=update.effective_user.id,
+                    )
+                    if getattr(member, "status", None) in ("creator", "administrator"):
+                        is_admin = True
+                except Exception as err:
+                    logger.error(
+                        f"Failed to verify chat member permissions for /reset: {err}"
+                    )
+                    is_admin = False
+
+            if not is_admin:
+                await update.message.reply_text(
+                    "Only group admins can reset the conversation."
+                )
+                return
+
         chat_id = str(update.effective_chat.id)
         if self.runner:
             session = self.runner.get_session(chat_id)
