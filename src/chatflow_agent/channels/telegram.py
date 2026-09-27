@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from chatflow_agent.channels.base import BaseChannel
+from chatflow_agent.channels.base import BaseChannel, split_message
 from chatflow_agent.exceptions import DependencyError
 from chatflow_agent.types import AgentResponse
 
@@ -126,7 +126,9 @@ class TelegramChannel(BaseChannel):
                     "username": user_name,
                 },
             )
-            await update.message.reply_text(response.content)
+            chunks = split_message(response.content, max_len=4096)
+            for chunk in chunks:
+                await update.message.reply_text(chunk)
         except Exception as err:
             logger.error(f"Error processing Telegram message: {err}")
             await update.message.reply_text(self.fallback_message)

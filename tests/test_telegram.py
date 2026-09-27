@@ -63,6 +63,33 @@ async def test_telegram_message_dispatch(telegram_channel: TelegramChannel) -> N
 
 
 @pytest.mark.asyncio
+async def test_telegram_message_dispatch_splits_long_messages() -> None:
+    """Outbound responses exceeding 4096 characters must be split and sent in multiple chunks (SEC-08)."""
+    long_response = ("Part 1: " + "A" * 2500) + "\n\n" + ("Part 2: " + "B" * 2500)
+    agent = Agent(name="LongBot", instructions="Test")
+    runner = Runner(starting_agent=agent, engine=MockEngine(long_response))
+    channel = TelegramChannel(token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11")
+    channel.attach(runner)
+
+    update = MagicMock()
+    update.effective_chat = MagicMock(id=987654)
+    update.effective_user = MagicMock(username="tester")
+    update.message = AsyncMock(text="Tell me a long story")
+    context = MagicMock()
+    context.bot = AsyncMock()
+
+    await channel._handle_message(update, context)
+
+    # Must be called twice because 5000+ characters were split into 2 chunks under 4096 chars
+    assert update.message.reply_text.call_count == 2
+    calls = update.message.reply_text.call_args_list
+    assert calls[0].args[0].startswith("Part 1:")
+    assert len(calls[0].args[0]) <= 4096
+    assert calls[1].args[0].startswith("Part 2:")
+    assert len(calls[1].args[0]) <= 4096
+
+
+@pytest.mark.asyncio
 async def test_telegram_reset_handler(telegram_channel: TelegramChannel) -> None:
     update = MagicMock()
     update.effective_chat = MagicMock(id=987654)

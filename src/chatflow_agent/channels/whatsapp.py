@@ -8,7 +8,7 @@ import json
 import logging
 from typing import Any
 
-from chatflow_agent.channels.base import BaseChannel
+from chatflow_agent.channels.base import BaseChannel, split_message
 from chatflow_agent.core.memory import DEFAULT_DEDUP_TTL_HOURS
 from chatflow_agent.exceptions import DependencyError
 from chatflow_agent.types import AgentResponse
@@ -25,40 +25,7 @@ def _mask_phone(phone: str) -> str:
     return f"{phone[:4]}***{phone[-3:]}"
 
 
-def split_message(text: str, max_len: int = 4096) -> list[str]:
-    """Split long outbound text into sequential chunks within max_len.
-
-    Splits progressively by paragraph (\n\n), line (\n), sentence (. ), or word ( )
-    to preserve formatting and readability across messaging channels.
-    """
-    if len(text) <= max_len:
-        return [text]
-
-    chunks: list[str] = []
-    remaining = text
-
-    while len(remaining) > max_len:
-        candidate = remaining[:max_len]
-        split_idx = -1
-
-        for sep in ("\n\n", "\n", ". ", " "):
-            idx = candidate.rfind(sep)
-            if idx != -1:
-                split_idx = idx + len(sep)
-                break
-
-        if split_idx <= 0:
-            split_idx = max_len
-
-        chunk = remaining[:split_idx].rstrip()
-        if chunk:
-            chunks.append(chunk)
-        remaining = remaining[split_idx:].lstrip()
-
-    if remaining:
-        chunks.append(remaining)
-
-    return chunks
+__all__ = ["WhatsAppChannel", "split_message"]
 
 
 class WhatsAppChannel(BaseChannel):
