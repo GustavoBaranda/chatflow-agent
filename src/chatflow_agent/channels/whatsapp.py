@@ -308,6 +308,7 @@ class WhatsAppChannel(BaseChannel):
         self, wamid: str, sender_phone: str, user_text: str | None
     ) -> None:
         """Process one WhatsApp message asynchronously with full anti-500 error shield."""
+        masked_phone = _mask_phone(sender_phone)
         try:
             if user_text is None:
                 if self.access_token and self.phone_number_id:
@@ -328,12 +329,12 @@ class WhatsAppChannel(BaseChannel):
                 reply_text = response.content
             except asyncio.TimeoutError:
                 logger.error(
-                    f"LLM dispatch timed out after {self.llm_timeout_seconds}s for wamid={wamid} from {sender_phone}"
+                    f"LLM dispatch timed out after {self.llm_timeout_seconds}s for wamid={wamid} from {masked_phone}"
                 )
                 reply_text = self.fallback_message
             except Exception as err:
                 logger.exception(
-                    f"Error dispatching wamid={wamid} from {sender_phone}: {err}"
+                    f"Error dispatching wamid={wamid} from {masked_phone}: {err}"
                 )
                 reply_text = self.fallback_message
 
@@ -349,7 +350,7 @@ class WhatsAppChannel(BaseChannel):
                     )
                 except Exception as fb_err:
                     logger.exception(
-                        f"Failed to deliver fallback to {sender_phone}: {fb_err}"
+                        f"Failed to deliver fallback to {masked_phone}: {fb_err}"
                     )
 
     def _extract_message_and_sender(

@@ -267,3 +267,89 @@ def test_webhook_rejects_invalid_content_length() -> None:
     resp = client.post("/webhook", content=b"data", headers={"Content-Length": "invalid_number"})
     assert resp.status_code == 400
     assert "Invalid Content-Length" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_exception_logs_mask_phone_number(caplog: pytest.LogCaptureFixture) -> None:
+    """Ensure raw phone number never appears in logs when exceptions or timeouts occur (SEC-03)."""
+    import asyncio
+    import logging
+    from unittest.mock import AsyncMock, patch
+
+    raw_phone = "5491198765432"
+    masked_expected = "5491***432"
+
+    class FailingEngine(GeminiEngine):
+        async def generate_turn_async(self, agent, history):
+            raise RuntimeError("Database connection crashed")
+
+    agent = Agent(name="Bot", instructions="test")
+    runner = Runner(starting_agent=agent, engine=FailingEngine())
+    ch = WhatsAppChannel(
+        verify_token="tok",
+        access_token="test_tok",
+        phone_number_id="12345",
+        verify_signature=False,
+    )
+    ch.attach(runner)
+
+    # 1. Test dispatch exception masking
+    with caplog.at_level(logging.DEBUG, logger="chatflow_agent.whatsapp"):
+        await ch._process_message_background(
+            wamid="wamid.sec03_test_err",
+            sender_phone=raw_phone,
+            user_text="Hola que tal",
+        )
+
+    assert raw_phone not in caplog.text
+    assert masked_expected in caplog.text
+
+    # 2. Test timeout exception masking
+    class TimeoutEngine(GeminiEngine):
+        async def generate_turn_async(self, agent, history):
+            await asyncio.sleep(0.5)
+            return EngineTurnResult(text="timeout")
+
+    runner_timeout = Runner(starting_agent=agent, engine=TimeoutEngine())
+    ch_timeout = WhatsAppChannel(
+        verify_token="tok",
+        access_token="test_tok",
+        phone_number_id="12345",
+        verify_signature=False,
+        llm_timeout_seconds=0.01,
+    )
+    ch_timeout.attach(runner_timeout)
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger="chatflow_agent.whatsapp"):
+        await ch_timeout._process_message_background(
+            wamid="wamid.sec03_test_timeout",
+            sender_phone=raw_phone,
+            user_text="Slow prompt",
+        )
+
+    assert raw_phone not in caplog.text
+    assert masked_expected in caplog.text
+
+    # 3. Test fallback delivery failure masking
+    caplog.clear()
+    with patch.object(
+        ch,
+        "_send_outbound_whatsapp",
+        AsyncMock(side_effect=RuntimeError("Outbound network dead")),
+    ):
+        with patch.object(
+            ch,
+            "dispatch_async",
+            AsyncMock(side_effect=RuntimeError("First failure")),
+        ):
+            with caplog.at_level(logging.DEBUG, logger="chatflow_agent.whatsapp"):
+                await ch._process_message_background(
+                    wamid="wamid.sec03_test_fallback",
+                    sender_phone=raw_phone,
+                    user_text="Trigger fallback error",
+                )
+
+    assert raw_phone not in caplog.text
+    assert masked_expected in caplog.text
+
