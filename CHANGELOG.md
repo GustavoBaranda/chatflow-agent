@@ -12,6 +12,11 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## English
 
+## [Unreleased]
+
+### Security
+- **API Key Leakage Prevention on Custom Base URLs (SEC-07):** `OpenAIEngine` now prevents forwarding global environment credentials (`OPENAI_API_KEY`) to untrusted or custom remote endpoints. When a custom `base_url` (not matching official presets or localhost/127.0.0.1) is provided without an explicit `api_key`, a `ValueError` is raised, requiring an explicit `api_key` (or `api_key=""` if unauthenticated).
+
 ## [0.3.1] - 2026-09-25
 
 ### Security
@@ -51,6 +56,11 @@ If you are upgrading from v0.2.0:
 ---
 
 ## Español
+
+## [Unreleased]
+
+### Seguridad
+- **Prevención de Fuga de Claves API en Base URLs Personalizadas (SEC-07):** `OpenAIEngine` ahora previene el reenvío de credenciales globales de entorno (`OPENAI_API_KEY`) a endpoints remotos personalizados o no oficiales. Cuando se proporciona un `base_url` personalizado (que no coincide con los presets oficiales ni con localhost/127.0.0.1) sin una `api_key` explícita, se levanta un `ValueError`, exigiendo una `api_key` explícita (o `api_key=""` si no requiere autenticación).
 
 ## [0.3.1] - 2026-09-25
 

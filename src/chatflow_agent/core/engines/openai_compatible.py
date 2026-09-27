@@ -96,10 +96,35 @@ class OpenAIEngine(BaseEngine):
             or preset.get("base_url", "https://api.openai.com/v1")
         ).rstrip("/")
 
-        env_key_name = preset.get("env_key", "OPENAI_API_KEY")
-        self.api_key = api_key or os.environ.get(env_key_name) or (
-            "ollama" if "localhost" in self.base_url or "127.0.0.1" in self.base_url else None
+        official_base_urls = {
+            p["base_url"].rstrip("/") for p in PROVIDER_PRESETS.values()
+        }
+        is_official = self.base_url in official_base_urls
+        is_local = any(
+            host in self.base_url for host in ("localhost", "127.0.0.1", "0.0.0.0")
         )
+
+        env_key_name = preset.get("env_key", "OPENAI_API_KEY")
+
+        self.api_key: str | None
+        if api_key is not None:
+            self.api_key = api_key
+        elif is_local:
+            # For local services (Ollama, LM Studio, vLLM on localhost), do not leak global cloud API keys
+            self.api_key = (
+                os.environ.get(env_key_name)
+                if self.provider in ("ollama", "gemma")
+                else None
+            ) or "ollama"
+        elif is_official:
+            self.api_key = os.environ.get(env_key_name)
+        else:
+            raise ValueError(
+                f"A custom or unofficial base_url was provided ({self.base_url!r}) without an explicit api_key. "
+                f"To prevent accidental leakage of your global {env_key_name} to untrusted endpoints, "
+                "fallback to environment API keys is disabled. "
+                "Please provide api_key explicitly (or pass api_key='' if no authentication is required)."
+            )
         self.timeout = timeout
         self.max_retries = 3
         self.base_delay = 1.0

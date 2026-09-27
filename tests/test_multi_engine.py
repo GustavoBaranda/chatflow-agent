@@ -238,3 +238,36 @@ async def test_heterogeneous_swarm_handoff() -> None:
     assert response.content == "Local Gemma specialist processed your query!"
     assert response.handoff is not None
     assert response.handoff.target_agent_name == "Local Specialist"
+
+
+def test_custom_base_url_rejects_fallback_to_global_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure custom/unofficial base_url raises ValueError instead of leaking OPENAI_API_KEY (SEC-07)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret-prod-key-12345")
+
+    # 1. Custom remote endpoint without api_key must raise ValueError
+    with pytest.raises(ValueError, match="A custom or unofficial base_url was provided"):
+        OpenAIEngine(base_url="https://untrusted-proxy.example.com/v1")
+
+    # 2. Custom remote endpoint with explicit api_key succeeds
+    engine_with_key = OpenAIEngine(
+        base_url="https://untrusted-proxy.example.com/v1",
+        api_key="custom-proxy-key",
+    )
+    assert engine_with_key.api_key == "custom-proxy-key"
+
+    # 3. Custom remote endpoint with explicit empty api_key (unauthenticated) succeeds
+    engine_unauth = OpenAIEngine(
+        base_url="https://untrusted-proxy.example.com/v1",
+        api_key="",
+    )
+    assert engine_unauth.api_key == ""
+
+    # 4. Localhost base_url does NOT leak global OPENAI_API_KEY
+    engine_local = OpenAIEngine(base_url="http://localhost:8000/v1")
+    assert engine_local.api_key != "sk-secret-prod-key-12345"
+    assert engine_local.api_key == "ollama"
+
+    # 5. Official OpenAI base_url STILL falls back to OPENAI_API_KEY as expected
+    engine_official = OpenAIEngine()
+    assert engine_official.api_key == "sk-secret-prod-key-12345"
+
