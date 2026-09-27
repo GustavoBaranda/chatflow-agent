@@ -80,3 +80,133 @@ async def test_telegram_reset_handler(telegram_channel: TelegramChannel) -> None
     update.message.reply_text.assert_called_once_with(
         "Conversation memory has been reset."
     )
+
+
+@pytest.mark.asyncio
+async def test_telegram_reset_allowed_in_private_chat(
+    telegram_channel: TelegramChannel,
+) -> None:
+    """In private 1-on-1 chats, /reset must be allowed without admin restrictions."""
+    update = MagicMock()
+    update.effective_chat = MagicMock(id=111, type="private")
+    update.message = AsyncMock()
+    context = MagicMock()
+    context.bot = AsyncMock()
+
+    session = telegram_channel.runner.session_store.get_or_create(
+        session_id="111", default_agent=telegram_channel.runner.starting_agent
+    )
+    session.history.append(MagicMock())
+    assert len(session.history) > 0
+
+    await telegram_channel._handle_reset(update, context)
+
+    context.bot.get_chat_member.assert_not_called()
+    assert len(session.history) == 0
+    update.message.reply_text.assert_called_once_with(
+        "Conversation memory has been reset."
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["administrator", "creator"])
+async def test_telegram_reset_allowed_for_group_admin(
+    telegram_channel: TelegramChannel, status: str
+) -> None:
+    """In group/supergroup chats, /reset must succeed if caller is admin or creator."""
+    chat_id = -100123456
+    user_id = 42
+    update = MagicMock()
+    update.effective_chat = MagicMock(id=chat_id, type="supergroup")
+    update.effective_user = MagicMock(id=user_id)
+    update.message = AsyncMock()
+
+    context = MagicMock()
+    member = MagicMock(status=status)
+    context.bot = AsyncMock()
+    context.bot.get_chat_member = AsyncMock(return_value=member)
+
+    session = telegram_channel.runner.session_store.get_or_create(
+        session_id=str(chat_id), default_agent=telegram_channel.runner.starting_agent
+    )
+    session.history.append(MagicMock())
+    assert len(session.history) > 0
+
+    await telegram_channel._handle_reset(update, context)
+
+    context.bot.get_chat_member.assert_called_once_with(
+        chat_id=chat_id, user_id=user_id
+    )
+    assert len(session.history) == 0
+    update.message.reply_text.assert_called_once_with(
+        "Conversation memory has been reset."
+    )
+
+
+@pytest.mark.asyncio
+async def test_telegram_reset_rejected_for_regular_group_member(
+    telegram_channel: TelegramChannel,
+) -> None:
+    """In group/supergroup chats, /reset must be rejected if caller is a regular member."""
+    chat_id = -100987654
+    user_id = 99
+    update = MagicMock()
+    update.effective_chat = MagicMock(id=chat_id, type="group")
+    update.effective_user = MagicMock(id=user_id)
+    update.message = AsyncMock()
+
+    context = MagicMock()
+    member = MagicMock(status="member")
+    context.bot = AsyncMock()
+    context.bot.get_chat_member = AsyncMock(return_value=member)
+
+    session = telegram_channel.runner.session_store.get_or_create(
+        session_id=str(chat_id), default_agent=telegram_channel.runner.starting_agent
+    )
+    session.history.append(MagicMock())
+    assert len(session.history) > 0
+
+    await telegram_channel._handle_reset(update, context)
+
+    context.bot.get_chat_member.assert_called_once_with(
+        chat_id=chat_id, user_id=user_id
+    )
+    # Memory must NOT be reset
+    assert len(session.history) > 0
+    update.message.reply_text.assert_called_once_with(
+        "Only group admins can reset the conversation."
+    )
+
+
+@pytest.mark.asyncio
+async def test_telegram_reset_fail_closed_on_api_error(
+    telegram_channel: TelegramChannel,
+) -> None:
+    """If get_chat_member raises an error (network, API, etc.), fail-closed: do not reset."""
+    chat_id = -100555555
+    user_id = 88
+    update = MagicMock()
+    update.effective_chat = MagicMock(id=chat_id, type="supergroup")
+    update.effective_user = MagicMock(id=user_id)
+    update.message = AsyncMock()
+
+    context = MagicMock()
+    context.bot = AsyncMock()
+    context.bot.get_chat_member = AsyncMock(
+        side_effect=RuntimeError("Telegram API timeout / network failure")
+    )
+
+    session = telegram_channel.runner.session_store.get_or_create(
+        session_id=str(chat_id), default_agent=telegram_channel.runner.starting_agent
+    )
+    session.history.append(MagicMock())
+    assert len(session.history) > 0
+
+    await telegram_channel._handle_reset(update, context)
+
+    # Memory must NOT be reset (fail-closed)
+    assert len(session.history) > 0
+    update.message.reply_text.assert_called_once_with(
+        "Only group admins can reset the conversation."
+    )
+
