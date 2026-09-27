@@ -1,6 +1,8 @@
 """Multi-agent Swarm-style execution Runner for chatflow-agent."""
 
 import asyncio
+import logging
+import uuid
 from typing import Any
 
 from chatflow_agent.core.agent import Agent
@@ -14,6 +16,8 @@ from chatflow_agent.types import (
     Role,
     ToolResult,
 )
+
+logger = logging.getLogger("chatflow_agent.runner")
 
 
 class Runner:
@@ -122,11 +126,16 @@ class Runner:
                             try:
                                 raw_output = await tool_instance.execute_async(**call.args)
                             except Exception as err:
+                                trace_id = str(uuid.uuid4())
+                                logger.error(
+                                    f"Tool execution failed [trace_id: {trace_id}] - Tool: '{call.name}' on agent '{current_agent.name}': {err}",
+                                    exc_info=True,
+                                )
                                 tool_results.append(
                                     ToolResult(
                                         tool_call_id=call.id,
                                         name=call.name,
-                                        content=f"Execution error: {err}",
+                                        content=f"Tool execution failed [trace_id: {trace_id}]. Please try a different approach or inform the user.",
                                         is_error=True,
                                     )
                                 )
@@ -226,9 +235,7 @@ class Runner:
                 self.run_async(session_id, user_message, metadata=metadata)
             )
         except RuntimeError:
-            return asyncio.run(
-                self.run_async(session_id, user_message, metadata=metadata)
-            )
+            return asyncio.run(self.run_async(session_id, user_message, metadata=metadata))
 
     def __repr__(self) -> str:
         return (
