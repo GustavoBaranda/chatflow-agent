@@ -17,6 +17,7 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Security
 - **API Key Leakage Prevention on Custom Base URLs (SEC-07):** `OpenAIEngine` now prevents forwarding global environment credentials (`OPENAI_API_KEY`) to untrusted or custom remote endpoints. When a custom `base_url` (not matching official presets or localhost/127.0.0.1) is provided without an explicit `api_key`, a `ValueError` is raised, requiring an explicit `api_key` (or `api_key=""` if unauthenticated).
 - **Outbound Message Splitting in Telegram (SEC-08):** `TelegramChannel` now splits outbound responses exceeding Telegram's 4,096-character limit into progressive chunks using `split_message()`, preventing systematic delivery failures and error fallbacks on long LLM responses. `split_message()` now resides in `chatflow_agent.channels.base` and is re-exported from `whatsapp` for backwards compatibility.
+- **Retry and Backoff in AnthropicEngine (SEC-10):** `AnthropicEngine` now includes exponential backoff with jitter and retry handling for transient API errors (HTTP 429, 500, 502, 503, 504, 529 Overloaded, and connection errors `httpx.ConnectError`, `httpx.ConnectTimeout`). Honors the `Retry-After` header when provided.
 
 ## [0.3.1] - 2026-09-25
 
@@ -63,6 +64,7 @@ If you are upgrading from v0.2.0:
 ### Seguridad
 - **Prevención de Fuga de Claves API en Base URLs Personalizadas (SEC-07):** `OpenAIEngine` ahora previene el reenvío de credenciales globales de entorno (`OPENAI_API_KEY`) a endpoints remotos personalizados o no oficiales. Cuando se proporciona un `base_url` personalizado (que no coincide con los presets oficiales ni con localhost/127.0.0.1) sin una `api_key` explícita, se levanta un `ValueError`, exigiendo una `api_key` explícita (o `api_key=""` si no requiere autenticación).
 - **División de Mensajes Salientes en Telegram (SEC-08):** `TelegramChannel` ahora divide las respuestas salientes que superan el límite de 4.096 caracteres de Telegram en fragmentos progresivos usando `split_message()`, previniendo fallos sistemáticos de entrega y respuestas de error en respuestas extensas de LLM. `split_message()` ahora reside en `chatflow_agent.channels.base` y se reexporta desde `whatsapp` para retrocompatibilidad.
+- **Reintentos y Backoff Exponencial en AnthropicEngine (SEC-10):** `AnthropicEngine` ahora incluye reintentos automáticos con backoff exponencial y jitter ante errores transitorios de la API (HTTP 429, 500, 502, 503, 504, 529 Sobrecargado, y errores de conexión `httpx.ConnectError`, `httpx.ConnectTimeout`). Respeta la cabecera `Retry-After` cuando está presente.
 
 ## [0.3.1] - 2026-09-25
 

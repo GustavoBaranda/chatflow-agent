@@ -15,6 +15,7 @@ from chatflow_agent.core.engines import (
     resolve_engine,
 )
 from chatflow_agent.core.runner import Runner
+from chatflow_agent.exceptions import ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
 
 
@@ -27,11 +28,17 @@ class MockTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         self.requests_received.append(request)
-        status_code, data = self.response_factory(request)
+        res = self.response_factory(request)
+        if len(res) == 3:
+            status_code, data, custom_headers = res
+            headers = {"Content-Type": "application/json", **custom_headers}
+        else:
+            status_code, data = res
+            headers = {"Content-Type": "application/json"}
         return httpx.Response(
             status_code=status_code,
             content=json.dumps(data).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             request=request,
         )
 
@@ -270,4 +277,153 @@ def test_custom_base_url_rejects_fallback_to_global_api_key(monkeypatch: pytest.
     # 5. Official OpenAI base_url STILL falls back to OPENAI_API_KEY as expected
     engine_official = OpenAIEngine()
     assert engine_official.api_key == "sk-secret-prod-key-12345"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_retry_on_529_overloaded() -> None:
+    """Test AnthropicEngine retries on HTTP 529 Overloaded and succeeds."""
+    attempts = 0
+
+    def fake_response(req: httpx.Request) -> tuple[int, dict]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return 529, {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+        return 200, {
+            "content": [{"type": "text", "text": "Recovered from 529"}]
+        }
+
+    transport = MockTransport(fake_response)
+    client = httpx.AsyncClient(transport=transport)
+    engine = AnthropicEngine(api_key="ant-test-key", http_client=client)
+    engine.base_delay = 0.001
+    engine.max_delay = 0.01
+
+    agent = Agent(name="Claude", model="claude-3-5-sonnet", instructions="Helpful Claude.")
+    result = await engine.generate_turn_async(
+        agent=agent,
+        history=[Message(role=Role.USER, content="Hello")],
+    )
+
+    assert result.text == "Recovered from 529"
+    assert attempts == 2
+    assert len(transport.requests_received) == 2
+
+
+@pytest.mark.asyncio
+async def test_anthropic_retry_with_retry_after_header() -> None:
+    """Test AnthropicEngine honors Retry-After header on 429."""
+    attempts = 0
+
+    def fake_response(req: httpx.Request) -> tuple[int, dict, dict[str, str]] | tuple[int, dict]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return 429, {"type": "error", "error": {"type": "rate_limit_error", "message": "Rate limited"}}, {"Retry-After": "0.01"}
+        return 200, {
+            "content": [{"type": "text", "text": "Recovered after rate limit"}]
+        }
+
+    transport = MockTransport(fake_response)
+    client = httpx.AsyncClient(transport=transport)
+    engine = AnthropicEngine(api_key="ant-test-key", http_client=client)
+    engine.base_delay = 0.001
+    engine.max_delay = 0.05
+
+    agent = Agent(name="Claude", model="claude-3-5-sonnet", instructions="Helpful Claude.")
+    result = await engine.generate_turn_async(
+        agent=agent,
+        history=[Message(role=Role.USER, content="Hello")],
+    )
+
+    assert result.text == "Recovered after rate limit"
+    assert attempts == 2
+    assert len(transport.requests_received) == 2
+
+
+@pytest.mark.asyncio
+async def test_anthropic_retry_on_connect_error() -> None:
+    """Test AnthropicEngine retries on httpx.ConnectError."""
+    attempts = 0
+
+    def fake_response(req: httpx.Request) -> tuple[int, dict]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectError("Connection refused", request=req)
+        return 200, {
+            "content": [{"type": "text", "text": "Connected on retry"}]
+        }
+
+    transport = MockTransport(fake_response)
+    client = httpx.AsyncClient(transport=transport)
+    engine = AnthropicEngine(api_key="ant-test-key", http_client=client)
+    engine.base_delay = 0.001
+    engine.max_delay = 0.01
+
+    agent = Agent(name="Claude", model="claude-3-5-sonnet", instructions="Helpful Claude.")
+    result = await engine.generate_turn_async(
+        agent=agent,
+        history=[Message(role=Role.USER, content="Hello")],
+    )
+
+    assert result.text == "Connected on retry"
+    assert attempts == 2
+    assert len(transport.requests_received) == 2
+
+
+@pytest.mark.asyncio
+async def test_anthropic_max_retries_exhausted_raises_provider_error() -> None:
+    """Test AnthropicEngine raises ProviderError after max retries are exhausted."""
+    attempts = 0
+
+    def fake_response(req: httpx.Request) -> tuple[int, dict]:
+        nonlocal attempts
+        attempts += 1
+        return 529, {"type": "error", "error": {"type": "overloaded_error", "message": "Anthropic is overloaded"}}
+
+    transport = MockTransport(fake_response)
+    client = httpx.AsyncClient(transport=transport)
+    engine = AnthropicEngine(api_key="ant-test-key", http_client=client)
+    engine.max_retries = 2
+    engine.base_delay = 0.001
+    engine.max_delay = 0.01
+
+    agent = Agent(name="Claude", model="claude-3-5-sonnet", instructions="Helpful Claude.")
+    with pytest.raises(ProviderError, match="Anthropic API error \\(529\\)"):
+        await engine.generate_turn_async(
+            agent=agent,
+            history=[Message(role=Role.USER, content="Hello")],
+        )
+
+    assert attempts == 3  # initial + 2 retries
+    assert len(transport.requests_received) == 3
+
+
+@pytest.mark.asyncio
+async def test_anthropic_non_retryable_error_does_not_retry() -> None:
+    """Test non-transient 4xx errors (e.g. 401 Unauthorized) fail immediately."""
+    attempts = 0
+
+    def fake_response(req: httpx.Request) -> tuple[int, dict]:
+        nonlocal attempts
+        attempts += 1
+        return 401, {"type": "error", "error": {"type": "authentication_error", "message": "Invalid API Key"}}
+
+    transport = MockTransport(fake_response)
+    client = httpx.AsyncClient(transport=transport)
+    engine = AnthropicEngine(api_key="ant-test-key", http_client=client)
+    engine.max_retries = 3
+    engine.base_delay = 0.001
+
+    agent = Agent(name="Claude", model="claude-3-5-sonnet", instructions="Helpful Claude.")
+    with pytest.raises(ProviderError, match="Anthropic API error \\(401\\)"):
+        await engine.generate_turn_async(
+            agent=agent,
+            history=[Message(role=Role.USER, content="Hello")],
+        )
+
+    assert attempts == 1  # No retries on 401
+    assert len(transport.requests_received) == 1
+
 
