@@ -537,6 +537,15 @@ if __name__ == "__main__":
 
 > **Testing locally?** Use a tunnel like [ngrok](https://ngrok.com) (`ngrok http 8000`) or Cloudflare Tunnels to provide Meta with a public HTTPS URL (`https://your-domain.ngrok-free.app/webhook`).
 
+> [!NOTE]
+> **API Documentation in Development:** For security, FastAPI interactive documentation (`/docs`, `/redoc`, and `/openapi.json`) is disabled by default in production. To enable Swagger UI and OpenAPI schemas during local development or debugging, pass `enable_docs=True` when instantiating `WhatsAppChannel`:
+> ```python
+> channel = WhatsAppChannel(
+>     ...,
+>     enable_docs=True,  # Enables /docs, /redoc, and /openapi.json for local development
+> )
+> ```
+
 ---
 
 #### Telegram Channel
@@ -1150,6 +1159,15 @@ if __name__ == "__main__":
 ```
 
 > **¿Probando localmente?** Usa un tunel como [ngrok](https://ngrok.com) (`ngrok http 8000`) o Cloudflare Tunnels para brindarle a Meta la URL publica HTTPS (`https://tu-dominio.ngrok-free.app/webhook`).
+
+> [!NOTE]
+> **Documentación interactiva en desarrollo:** Por motivos de seguridad, la documentación interactiva de FastAPI (`/docs`, `/redoc` y `/openapi.json`) está deshabilitada por defecto en producción. Para habilitar Swagger UI y los esquemas OpenAPI durante el desarrollo local o debugging, pasa `enable_docs=True` al instanciar `WhatsAppChannel`:
+> ```python
+> canal_whatsapp = WhatsAppChannel(
+>     ...,
+>     enable_docs=True,  # Habilita /docs, /redoc y /openapi.json para desarrollo local
+> )
+> ```
 
 ---
 
