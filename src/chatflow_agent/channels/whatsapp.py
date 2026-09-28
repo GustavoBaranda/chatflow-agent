@@ -53,6 +53,7 @@ class WhatsAppChannel(BaseChannel):
         on_24h_window_expired: Any | None = None,
         dedup_ttl_hours: float = DEFAULT_DEDUP_TTL_HOURS,
         max_body_size: int = DEFAULT_MAX_BODY_SIZE,
+        enable_docs: bool = False,
     ) -> None:
         super().__init__()
         # SEC-01: Fail-closed — require app_secret when signature verification is active.
@@ -83,6 +84,7 @@ class WhatsAppChannel(BaseChannel):
         self.on_24h_window_expired = on_24h_window_expired
         self.dedup_ttl_hours = dedup_ttl_hours
         self.max_body_size = max_body_size
+        self.enable_docs = enable_docs
 
         # Verify optional dependencies
         try:
@@ -97,7 +99,16 @@ class WhatsAppChannel(BaseChannel):
 
         self._httpx = httpx
         self._uvicorn = uvicorn
-        self.app = FastAPI(title="ChatFlow WhatsApp Webhook Server")
+        # SEC-05: Disable OpenAPI schema, Swagger UI (/docs) and ReDoc (/redoc) by default in production
+        docs_url = "/docs" if enable_docs else None
+        redoc_url = "/redoc" if enable_docs else None
+        openapi_url = "/openapi.json" if enable_docs else None
+        self.app = FastAPI(
+            title="ChatFlow WhatsApp Webhook Server",
+            docs_url=docs_url,
+            redoc_url=redoc_url,
+            openapi_url=openapi_url,
+        )
         self._setup_routes()
 
     def _setup_routes(self) -> None:
