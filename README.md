@@ -546,6 +546,17 @@ if __name__ == "__main__":
 > )
 > ```
 
+> [!TIP]
+> **Production Rate Limiting & Reverse Proxy:** To protect `/webhook` and `/health` endpoints against flood attacks, denial of service (DoS), and CPU exhaustion from unauthenticated requests without risking dropping legitimate Meta webhook bursts at the application level, always place Uvicorn behind a reverse proxy in production (such as Nginx with `limit_req_zone` or Cloudflare Rate Limiting):
+> ```nginx
+> limit_req_zone $binary_remote_addr zone=whatsapp_limit:10m rate=10r/s;
+> location /webhook {
+>     limit_req zone=whatsapp_limit burst=20 nodelay;
+>     proxy_pass http://127.0.0.1:8000;
+>     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+> }
+> ```
+
 ---
 
 #### Telegram Channel
@@ -1167,6 +1178,17 @@ if __name__ == "__main__":
 >     ...,
 >     enable_docs=True,  # Habilita /docs, /redoc y /openapi.json para desarrollo local
 > )
+> ```
+
+> [!TIP]
+> **Rate Limiting y Reverse Proxy en Producción:** Para proteger los endpoints `/webhook` y `/health` contra ataques de inundación, denegación de servicio (DoS) y agotamiento de CPU por peticiones no autenticadas sin riesgo de descartar ráfagas legítimas de webhooks de Meta a nivel aplicación, ubica siempre Uvicorn detrás de un reverse proxy en producción (como Nginx con `limit_req_zone` o Cloudflare Rate Limiting):
+> ```nginx
+> limit_req_zone $binary_remote_addr zone=whatsapp_limit:10m rate=10r/s;
+> location /webhook {
+>     limit_req zone=whatsapp_limit burst=20 nodelay;
+>     proxy_pass http://127.0.0.1:8000;
+>     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+> }
 > ```
 
 ---
