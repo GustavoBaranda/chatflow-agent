@@ -96,7 +96,13 @@ class Tool:
         }
 
     async def execute_async(self, **kwargs: Any) -> Any:
-        """Execute the tool asynchronously with error handling."""
+        """Execute the tool asynchronously with error handling.
+
+        This is the recommended execution method in all asynchronous contexts
+        (e.g., within Runners, FastAPI endpoints, Telegram handlers, or active asyncio tasks).
+        If the underlying tool is a synchronous function, it is dispatched to a worker thread
+        via ``asyncio.to_thread`` to avoid blocking the event loop.
+        """
         try:
             if self.is_async:
                 return await self.func(**kwargs)
@@ -106,15 +112,30 @@ class Tool:
             raise ToolExecutionError(tool_name=self.name, original_error=err) from err
 
     def execute(self, **kwargs: Any) -> Any:
-        """Execute the tool synchronously."""
+        """Execute the tool synchronously.
+
+        Note:
+            If this tool is asynchronous (defined with ``async def``), calling
+            ``execute()`` from within an already-running event loop (e.g. inside
+            FastAPI, Telegram handlers, or async background tasks) cannot be safely
+            delegated synchronously because Python event loops cannot be re-entered.
+            In asynchronous environments, always use ``await tool.execute_async(**kwargs)``
+            instead.
+        """
         try:
             if self.is_async:
-                # If running within an already active event loop, run via task
                 try:
                     loop = asyncio.get_running_loop()
-                    return loop.run_until_complete(self.func(**kwargs))
                 except RuntimeError:
-                    return asyncio.run(self.func(**kwargs))
+                    loop = None
+
+                if loop and loop.is_running():
+                    raise RuntimeError(
+                        f"Cannot execute async tool '{self.name}' synchronously via execute() "
+                        "from within an already-running event loop. "
+                        f"Use 'await tool.execute_async(**kwargs)' instead."
+                    )
+                return asyncio.run(self.func(**kwargs))
             return self.func(**kwargs)
         except Exception as err:
             raise ToolExecutionError(tool_name=self.name, original_error=err) from err

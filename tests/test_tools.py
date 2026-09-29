@@ -99,3 +99,31 @@ def test_tool_decorator_with_custom_name_and_desc() -> None:
     assert add_numbers.name == "calc_sum"
     assert add_numbers.description == "Custom math addition"
     assert add_numbers.execute(a=10, b=20) == 30
+
+
+@pytest.mark.asyncio
+async def test_async_tool_sync_execute_in_running_loop_raises_clear_error() -> None:
+    """Calling execute() on an async tool from an active event loop must raise a clear ToolExecutionError (SEC-09)."""
+    t = Tool(async_sample_function)
+    with pytest.raises(ToolExecutionError) as exc_info:
+        t.execute(order_id="ORD-999", tags=["test"])
+
+    assert exc_info.value.tool_name == "async_sample_function"
+    assert "Cannot execute async tool 'async_sample_function' synchronously via execute()" in str(exc_info.value)
+    assert "Use 'await tool.execute_async(**kwargs)' instead." in str(exc_info.value)
+
+
+def test_async_tool_sync_execute_outside_loop_succeeds() -> None:
+    """Calling execute() on an async tool when no event loop is running succeeds via asyncio.run()."""
+    t = Tool(async_sample_function)
+    result = t.execute(order_id="ORD-100", tags=["sync_context"])
+    assert result == "Order ORD-100 tagged with 1 tags"
+
+
+@pytest.mark.asyncio
+async def test_sync_tool_execute_async_succeeds() -> None:
+    """Calling execute_async() on a sync tool dispatches to thread and returns successfully."""
+    t = Tool(sample_function)
+    result = await t.execute_async(query="async_thread_test", limit=3)
+    assert result == {"query": "async_thread_test", "count": 3, "verbose": False}
+
