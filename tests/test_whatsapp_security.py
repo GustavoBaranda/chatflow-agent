@@ -353,3 +353,54 @@ async def test_exception_logs_mask_phone_number(caplog: pytest.LogCaptureFixture
     assert raw_phone not in caplog.text
     assert masked_expected in caplog.text
 
+
+def test_whatsapp_docs_and_openapi_disabled_by_default() -> None:
+    """Ensure /docs, /redoc, and /openapi.json return 404 by default (SEC-05)."""
+    ch = _make_channel()
+    client = TestClient(ch.app)
+
+    assert ch.enable_docs is False
+    assert ch.app.docs_url is None
+    assert ch.app.redoc_url is None
+    assert ch.app.openapi_url is None
+
+    # Test endpoints return 404
+    resp_docs = client.get("/docs")
+    assert resp_docs.status_code == 404
+
+    resp_redoc = client.get("/redoc")
+    assert resp_redoc.status_code == 404
+
+    resp_openapi = client.get("/openapi.json")
+    assert resp_openapi.status_code == 404
+
+
+def test_whatsapp_docs_and_openapi_enabled_explicitly() -> None:
+    """Ensure /docs, /redoc, and /openapi.json can be enabled via enable_docs=True."""
+    agent = Agent(name="Bot", instructions="test")
+    runner = Runner(starting_agent=agent, engine=MockEngine())
+    ch = WhatsAppChannel(
+        verify_token=VERIFY_TOKEN,
+        app_secret=APP_SECRET,
+        verify_signature=True,
+        enable_docs=True,
+    )
+    ch.attach(runner)
+    client = TestClient(ch.app)
+
+    assert ch.enable_docs is True
+    assert ch.app.docs_url == "/docs"
+    assert ch.app.redoc_url == "/redoc"
+    assert ch.app.openapi_url == "/openapi.json"
+
+    resp_docs = client.get("/docs")
+    assert resp_docs.status_code == 200
+
+    resp_redoc = client.get("/redoc")
+    assert resp_redoc.status_code == 200
+
+    resp_openapi = client.get("/openapi.json")
+    assert resp_openapi.status_code == 200
+    assert "paths" in resp_openapi.json()
+
+
