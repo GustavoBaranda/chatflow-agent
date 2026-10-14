@@ -14,6 +14,13 @@ def test_split_message_under_limit() -> None:
     assert result == [short_text]
 
 
+@pytest.mark.parametrize("max_len", [0, -1])
+def test_split_message_rejects_non_positive_max_len(max_len: int) -> None:
+    """Non-positive limits fail immediately instead of looping forever."""
+    with pytest.raises(ValueError, match="max_len must be greater than 0"):
+        split_message("Hello world", max_len=max_len)
+
+
 def test_split_message_prefers_paragraphs() -> None:
     """Messages over limit split at paragraph boundaries (\n\n)."""
     p1 = "A" * 2500

@@ -18,6 +18,9 @@ def split_message(text: str, max_len: int = 4096) -> list[str]:
     Splits progressively by paragraph (\n\n), line (\n), sentence (. ), or word ( )
     to preserve formatting and readability across messaging channels.
     """
+    if max_len <= 0:
+        raise ValueError("max_len must be greater than 0")
+
     if len(text) <= max_len:
         return [text]
 
