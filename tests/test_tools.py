@@ -1,5 +1,6 @@
 """Tests for chatflow-agent tool introspection and execution engine."""
 
+import functools
 import typing
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Optional
@@ -323,4 +324,21 @@ async def test_async_callable_instance_tool() -> None:
     assert t.is_async is True
     res = await t.execute_async(x=5)
     assert res == 15
+
+
+@pytest.mark.asyncio
+async def test_async_partial_callable_instance_tool() -> None:
+    """Tool detects async callable instances wrapped in partials."""
+
+    class AsyncMultiplier:
+        async def __call__(self, prefix: str, x: int) -> str:
+            return f"{prefix}{x * 3}"
+
+    m = functools.partial(AsyncMultiplier(), "Result: ")
+    t = Tool(m)
+    assert t.is_async is True
+    assert "prefix" not in t.parameters_schema["properties"]
+    assert "x" in t.parameters_schema["required"]
+    res = await t.execute_async(x=5)
+    assert res == "Result: 15"
 
