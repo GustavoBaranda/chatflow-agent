@@ -1,5 +1,7 @@
 """Tests for chatflow-agent tool introspection and execution engine."""
 
+import functools
+import inspect
 import typing
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Optional
@@ -323,4 +325,112 @@ async def test_async_callable_instance_tool() -> None:
     assert t.is_async is True
     res = await t.execute_async(x=5)
     assert res == 15
+
+
+def test_partial_async_function_tool() -> None:
+    """A partial wrapping a plain async function is still detected as async."""
+    import functools
+
+    async def fetch(item_id: str, limit: int = 5) -> str:
+        """Fetch an item asynchronously."""
+        return f"{item_id}:{limit}"
+
+    bound = functools.partial(fetch, "item-1")
+    t = Tool(bound)
+    assert t.is_async is True
+    assert "limit" in t.parameters_schema["properties"]
+    assert "item_id" not in t.parameters_schema["properties"]
+
+
+def test_partial_sync_function_tool() -> None:
+    """A partial wrapping a sync function stays sync."""
+    import functools
+
+    def fetch(item_id: str, limit: int = 5) -> str:
+        """Fetch an item synchronously."""
+        return f"{item_id}:{limit}"
+
+    bound = functools.partial(fetch, "item-1")
+    t = Tool(bound)
+    assert t.is_async is False
+    assert t.execute(limit=2) == "item-1:2"
+
+
+@pytest.mark.asyncio
+async def test_partial_wrapping_async_callable_instance_is_awaited() -> None:
+    """Regression for #65: partial(async callable instance) must be awaited, not returned raw."""
+
+    class AsyncDoubler:
+        """Doubles values asynchronously."""
+
+        async def __call__(self, value: int, offset: int = 0) -> int:
+            return value * 2 + offset
+
+    wrapped = functools.partial(AsyncDoubler(), offset=1)
+    t = Tool(wrapped)
+    assert t.is_async is True
+    # The bound keyword argument keeps its default in the schema.
+    assert set(t.parameters_schema["properties"]) == {"value", "offset"}
+    assert t.parameters_schema["properties"]["offset"]["default"] == 1
+
+    result = await t.execute_async(value=3)
+    assert not inspect.iscoroutine(result)
+    assert result == 7
+
+
+@pytest.mark.asyncio
+async def test_partial_positional_binding_of_async_callable_instance() -> None:
+    """Positionally bound arguments of a partial-wrapped callable instance stay out of the schema."""
+
+    class AsyncFormula:
+        """Computes a formula asynchronously."""
+
+        async def __call__(self, base: int, factor: int, offset: int = 0) -> int:
+            return base * factor + offset
+
+    wrapped = functools.partial(AsyncFormula(), 4, 3)
+    t = Tool(wrapped)
+    assert t.is_async is True
+    assert set(t.parameters_schema["properties"]) == {"offset"}
+    assert t.parameters_schema["required"] == []
+
+    result = await t.execute_async(offset=2)
+    assert result == 14
+
+
+@pytest.mark.asyncio
+async def test_partial_wrapping_sync_callable_instance_stays_sync() -> None:
+    """A partial wrapping a sync callable instance must remain synchronous."""
+
+    class SyncDoubler:
+        """Doubles values synchronously."""
+
+        def __call__(self, value: int, offset: int = 0) -> int:
+            return value * 2 + offset
+
+    wrapped = functools.partial(SyncDoubler(), offset=1)
+    t = Tool(wrapped)
+    assert t.is_async is False
+    assert set(t.parameters_schema["properties"]) == {"value", "offset"}
+
+    result = await t.execute_async(value=3)
+    assert result == 7
+
+
+@pytest.mark.asyncio
+async def test_nested_partial_wrapping_async_callable_instance() -> None:
+    """Nested partials around an async callable instance are unwrapped recursively."""
+
+    class AsyncScaler:
+        """Scales values asynchronously."""
+
+        async def __call__(self, value: int) -> int:
+            return value * 5
+
+    wrapped = functools.partial(functools.partial(AsyncScaler()))
+    t = Tool(wrapped)
+    assert t.is_async is True
+    result = await t.execute_async(value=4)
+    assert not inspect.iscoroutine(result)
+    assert result == 20
 

@@ -51,6 +51,33 @@ def _python_type_to_gemini_type(py_type: Any) -> str:
     return TYPE_MAP.get(origin or py_type, "STRING")
 
 
+def _is_async_callable(func: Any) -> bool:
+    """Detect whether calling ``func`` returns a coroutine.
+
+    Handles regular coroutine functions, ``functools.partial`` objects (including
+    recursively nested ones) and callable instances that define an ``async
+    __call__``. A ``functools.partial`` is unwrapped to the callable it wraps
+    before the underlying callable is inspected.
+    """
+    if isinstance(func, functools.partial):
+        underlying = func.func
+        # ``partial`` accepts any callable, including other partials.
+        if underlying is not func:
+            return _is_async_callable(underlying)
+        return False
+
+    if inspect.iscoroutinefunction(func):
+        return True
+
+    if callable(func):
+        # ``partial.__call__`` is a built-in slot wrapper, not the wrapped callable,
+        # so only inspect ``__call__`` for genuine callable instances.
+        call = getattr(func, "__call__", None)  # noqa: B004
+        return call is not None and inspect.iscoroutinefunction(call)
+
+    return False
+
+
 class Tool:
     """Encapsulates a callable tool with introspection for LLM function calling."""
 
@@ -66,9 +93,7 @@ class Tool:
             description or self._extract_description(func) or f"Execute {self.name}"
         )
         self.signature = inspect.signature(func)
-        self.is_async = inspect.iscoroutinefunction(func) or (
-            callable(func) and inspect.iscoroutinefunction(getattr(func, "__call__", None))  # noqa: B004
-        )
+        self.is_async = _is_async_callable(func)
         self.parameters_schema = self._build_parameters_schema()
 
     @staticmethod
