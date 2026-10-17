@@ -51,6 +51,15 @@ def _python_type_to_gemini_type(py_type: Any) -> str:
     return TYPE_MAP.get(origin or py_type, "STRING")
 
 
+def _is_async_callable(func: Callable[..., Any]) -> bool:
+    """Return whether a callable, including partials, produces a coroutine."""
+    if inspect.iscoroutinefunction(func):
+        return True
+    if isinstance(func, functools.partial):
+        return _is_async_callable(func.func)
+    return callable(func) and inspect.iscoroutinefunction(getattr(func, "__call__", None))  # noqa: B004
+
+
 class Tool:
     """Encapsulates a callable tool with introspection for LLM function calling."""
 
@@ -66,9 +75,7 @@ class Tool:
             description or self._extract_description(func) or f"Execute {self.name}"
         )
         self.signature = inspect.signature(func)
-        self.is_async = inspect.iscoroutinefunction(func) or (
-            callable(func) and inspect.iscoroutinefunction(getattr(func, "__call__", None))  # noqa: B004
-        )
+        self.is_async = _is_async_callable(func)
         self.parameters_schema = self._build_parameters_schema()
 
     @staticmethod
