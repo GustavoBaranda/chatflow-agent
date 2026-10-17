@@ -15,6 +15,7 @@ _OPENAI_COMPATIBLE_PREFIXES = (
 )
 _CLAUDE_PREFIXES = ("claude-",)
 _OLLAMA_PREFIXES = ("gemma", "llama", "mistral", "qwen", "phi")
+_DEEPSEEK_PREFIXES = ("deepseek-",)
 
 
 def resolve_engine(
@@ -27,15 +28,15 @@ def resolve_engine(
 
     Resolution order:
     1. agent.engine if explicitly attached.
-    2. agent.provider if explicitly set (gemini, openai, grok, xai, ollama, gemma, anthropic, claude).
+    2. agent.provider if explicitly set (gemini, openai, grok, xai, ollama, gemma, anthropic, claude, deepseek).
     3. agent.base_url or agent.api_key if custom connection options are set on agent.
     4. default_engine when it was explicitly supplied by the caller
        (``prefer_default_engine=True``). A deliberate caller choice must win over
        the model-name heuristics below.
     5. Heuristic matching on the agent.model name prefix when it names a concrete
        non-Gemini provider. These take precedence over a generic fallback
-       ``default_engine`` so that a model such as ``claude-3-5-sonnet`` is not
-       silently routed to the default (Gemini) engine.
+       ``default_engine`` so that a model such as ``claude-3-5-sonnet`` or
+       ``deepseek-chat`` is not silently routed to the default (Gemini) engine.
     6. default_engine if provided (e.g. from Runner or test mock). Applies to
        Gemini models and to models without a recognizable provider prefix.
     7. Default GeminiEngine.
@@ -79,6 +80,9 @@ def resolve_engine(
 
     if model.startswith("grok"):
         return OpenAIEngine(api_key=api_key, base_url=base_url, provider="grok")
+
+    if any(model.startswith(p) for p in _DEEPSEEK_PREFIXES):
+        return OpenAIEngine(api_key=api_key, base_url=base_url, provider="deepseek")
 
     if any(model.startswith(p) for p in _OLLAMA_PREFIXES):
         return OpenAIEngine(api_key=api_key, base_url=base_url, provider="ollama")
