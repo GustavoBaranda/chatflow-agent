@@ -61,6 +61,23 @@ def test_sqlite_context_initialization(tmp_path: Path, test_agents: tuple[Agent,
     assert "user_123" in store.list_sessions()
 
 
+def test_sqlite_contexts_share_lock_per_session(
+    tmp_path: Path,
+    test_agents: tuple[Agent, Agent],
+) -> None:
+    """Contexts loaded for one session must serialize through the same lock."""
+    triage, _ = test_agents
+    store = SQLiteSessionStore(db_path=tmp_path / "sessions.db")
+
+    first = store.get_or_create("shared_session", default_agent=triage)
+    second = store.get_or_create("shared_session", default_agent=triage)
+    other = store.get_or_create("other_session", default_agent=triage)
+
+    assert first is not second
+    assert first.lock is second.lock
+    assert first.lock is not other.lock
+
+
 def test_sqlite_messages_persistence_and_reload(tmp_path: Path, test_agents: tuple[Agent, Agent]) -> None:
     triage, _ = test_agents
     db_path = tmp_path / "sessions.db"

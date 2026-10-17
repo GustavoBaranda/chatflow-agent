@@ -301,6 +301,7 @@ class SQLiteSessionContext(SessionContext):
         max_turns: int = 40,
         metadata: dict[str, Any] | None = None,
         preloaded_history: list[Message] | None = None,
+        session_lock: asyncio.Lock | None = None,
     ) -> None:
         if max_turns <= 0:
             raise ValueError(f"max_turns must be a positive integer, got {max_turns}")
@@ -311,6 +312,8 @@ class SQLiteSessionContext(SessionContext):
             metadata=metadata,
         )
         self.db_path = str(db_path)
+        if session_lock is not None:
+            self._lock = session_lock
         if preloaded_history:
             self.history = list(preloaded_history)
 
@@ -479,6 +482,7 @@ class SQLiteSessionStore(BaseSessionStore):
         self.default_max_turns = default_max_turns
         self.dedup_ttl_hours = dedup_ttl_hours
         self._agent_resolver: Callable[[str], Agent | None] | None = None
+        self._session_locks: dict[str, asyncio.Lock] = {}
         self._init_db()
 
     def set_agent_resolver(self, resolver: Callable[[str], Agent | None]) -> None:
@@ -613,14 +617,16 @@ class SQLiteSessionStore(BaseSessionStore):
             ).fetchall()
             history = [Message.model_validate_json(r["message_json"]) for r in msg_rows]
 
-            return SQLiteSessionContext(
+            context = SQLiteSessionContext(
                 session_id=session_id,
                 initial_agent=active_agent,
                 db_path=self.db_path,
                 max_turns=self.default_max_turns,
                 metadata=meta,
                 preloaded_history=history,
+                session_lock=self._session_locks.setdefault(session_id, asyncio.Lock()),
             )
+            return context
 
     def get(self, session_id: str) -> SessionContext | None:
         """Fetch session by ID if it exists in SQLite."""
@@ -645,6 +651,7 @@ class SQLiteSessionStore(BaseSessionStore):
         with _get_sqlite_connection(self.db_path) as conn:
             conn.execute("DELETE FROM chatflow_messages WHERE session_id = ?", (session_id,))
             cursor = conn.execute("DELETE FROM chatflow_sessions WHERE session_id = ?", (session_id,))
+            self._session_locks.pop(session_id, None)
             return cursor.rowcount > 0
 
     def list_sessions(self) -> list[str]:
@@ -658,3 +665,4 @@ class SQLiteSessionStore(BaseSessionStore):
         with _get_sqlite_connection(self.db_path) as conn:
             conn.execute("DELETE FROM chatflow_messages")
             conn.execute("DELETE FROM chatflow_sessions")
+        self._session_locks.clear()
