@@ -356,6 +356,102 @@ def test_custom_base_url_rejects_fallback_to_global_api_key(monkeypatch: pytest.
     assert engine_official.api_key == "sk-secret-prod-key-12345"
 
 
+@pytest.mark.parametrize(
+    "spoofed_or_malformed_url",
+    [
+        "https://localhost.untrusted.example.com/v1",
+        "https://sub.localhost.example.com/v1",
+        "https://my-localhost.example.com/v1",
+        "https://untrusted.example.com/localhost/v1",
+        "https://untrusted.example.com/v1?origin=localhost",
+        "https://localhost@untrusted.example.com/v1",
+        "http://user:pass@localhost:11434/v1",
+        "https://127.0.0.1.untrusted.example.com/v1",
+        "https://untrusted.example.com/127.0.0.1/v1",
+        "https://0.0.0.0.untrusted.example.com/v1",
+        "ftp://localhost:11434/v1",
+        "localhost:11434/v1",
+        "http:///localhost/v1",
+        "http://[::1:11434/v1",
+        "http://localhost:badport/v1",
+        "http://localhost:99999/v1",
+    ],
+)
+def test_spoofed_or_malformed_local_base_url_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, spoofed_or_malformed_url: str
+) -> None:
+    """External or malformed URLs containing local substrings must not bypass SEC-07 or leak env keys."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret-prod-key")
+    monkeypatch.setenv("OLLAMA_API_KEY", "ollama-secret-token")
+
+    for provider in ("openai", "ollama", "gemma"):
+        with pytest.raises(ValueError, match="A custom or unofficial base_url was provided"):
+            OpenAIEngine(provider=provider, base_url=spoofed_or_malformed_url)
+
+
+@pytest.mark.parametrize(
+    "spoofed_url",
+    [
+        "https://localhost.untrusted.example.com/v1",
+        "https://untrusted.example.com/localhost/v1",
+        "https://127.0.0.1.untrusted.example.com/v1",
+        "https://0.0.0.0.untrusted.example.com/v1",
+        "https://localhost@untrusted.example.com/v1",
+    ],
+)
+def test_spoofed_local_base_url_from_env_vars_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, spoofed_url: str
+) -> None:
+    """Spoofed URLs provided via OPENAI_BASE_URL or OLLAMA_BASE_URL without explicit base_url must be rejected."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret-prod-key")
+    monkeypatch.setenv("OLLAMA_API_KEY", "ollama-secret-token")
+
+    monkeypatch.setenv("OPENAI_BASE_URL", spoofed_url)
+    with pytest.raises(ValueError, match="A custom or unofficial base_url was provided"):
+        OpenAIEngine(provider="openai")
+
+    monkeypatch.setenv("OLLAMA_BASE_URL", spoofed_url)
+    with pytest.raises(ValueError, match="A custom or unofficial base_url was provided"):
+        OpenAIEngine(provider="ollama")
+
+
+@pytest.mark.parametrize(
+    "local_url",
+    [
+        "http://localhost:11434/v1",
+        "http://LOCALHOST:11434/v1/",
+        "http://localhost.:11434/v1",
+        "https://localhost:8443/v1",
+        "http://127.0.0.1:11434/v1",
+        "http://[::1]:11434/v1",
+        "http://0.0.0.0:8000/v1",
+    ],
+)
+def test_valid_local_base_urls_are_accepted_and_protect_cloud_keys(
+    monkeypatch: pytest.MonkeyPatch, local_url: str
+) -> None:
+    """Valid loopback (localhost, 127.0.0.1, ::1) and compatibility 0.0.0.0 URLs work without leaking cloud keys."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret-prod-key")
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+
+    # provider='openai' pointed at local server must NOT leak OPENAI_API_KEY
+    engine_openai = OpenAIEngine(provider="openai", base_url=local_url)
+    assert engine_openai.api_key == "ollama"
+
+    # provider='ollama' / 'gemma' without OLLAMA_API_KEY defaults to 'ollama'
+    engine_ollama = OpenAIEngine(provider="ollama", base_url=local_url)
+    assert engine_ollama.api_key == "ollama"
+    engine_gemma = OpenAIEngine(provider="gemma", base_url=local_url)
+    assert engine_gemma.api_key == "ollama"
+
+    # provider='ollama' / 'gemma' with OLLAMA_API_KEY honors it on genuine local URLs
+    monkeypatch.setenv("OLLAMA_API_KEY", "local-ollama-token")
+    engine_ollama_auth = OpenAIEngine(provider="ollama", base_url=local_url)
+    assert engine_ollama_auth.api_key == "local-ollama-token"
+    engine_gemma_auth = OpenAIEngine(provider="gemma", base_url=local_url)
+    assert engine_gemma_auth.api_key == "local-ollama-token"
+
+
 @pytest.mark.asyncio
 async def test_anthropic_retry_on_529_overloaded() -> None:
     """Test AnthropicEngine retries on HTTP 529 Overloaded and succeeds."""

@@ -10,6 +10,7 @@ import json
 import logging
 import os
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -21,6 +22,28 @@ logger = logging.getLogger("chatflow_agent.engine.openai")
 
 if TYPE_CHECKING:
     from chatflow_agent.core.agent import Agent
+
+_LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
+# Explicit compatibility exception for local dev servers bound to 0.0.0.0 (not a loopback address)
+_COMPAT_LOCAL_BIND_HOSTS: frozenset[str] = frozenset({"0.0.0.0"})
+
+
+def _is_local_base_url(base_url: str) -> bool:
+    """Return True only when base_url is a well-formed HTTP(S) URL targeting a local host."""
+    try:
+        parsed = urlsplit(base_url)
+        _ = parsed.port
+    except ValueError:
+        return False
+
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    return hostname in _LOOPBACK_HOSTS or hostname in _COMPAT_LOCAL_BIND_HOSTS
+
 
 # Preset configurations for common OpenAI-compatible providers
 PROVIDER_PRESETS: dict[str, dict[str, str]] = {
@@ -117,9 +140,7 @@ class OpenAIEngine(BaseEngine):
             p["base_url"].rstrip("/") for p in PROVIDER_PRESETS.values()
         }
         is_official = self.base_url in official_base_urls
-        is_local = any(
-            host in self.base_url for host in ("localhost", "127.0.0.1", "0.0.0.0")
-        )
+        is_local = _is_local_base_url(self.base_url)
 
         env_key_name = preset.get("env_key", "OPENAI_API_KEY")
 
