@@ -128,41 +128,7 @@ if __name__ == "__main__":
 
 `chatflow-agent` is designed for developers who want the multi-agent power of OpenAI Swarm without being locked into a single provider, combined with turnkey connectors for messaging platforms like **WhatsApp** and **Telegram**.
 
-```
-
-[ WhatsApp / Telegram / Webhook / CLI ]
-
-                   │
-
-                   ▼
-
-         ┌───────────────────┐
-
-         │      Runner       │ ◄─── Session Memory (per-user history)
-
-         └─────────┬─────────┘
-
-                   │
-
-         ┌─────────┴─────────┐
-
-         ▼                   ▼
-
-  ┌──────────────┐    ┌──────────────┐
-
-  │ Triage Agent │───►│  Spec. Agent │ (Autonomous Peer Handoff)
-
-  │ (Gemini/Grok)│    │ (Local Gemma)│
-
-  └──────────────┘    └──────────────┘
-
-         │                   │
-
-         ▼                   ▼
-
-    [@agent.tool]       [@agent.tool]
-
-```
+![chatflow-agent Architecture: Input Channels (WhatsApp, Telegram, Webhook, CLI) connected to Runner and Session Memory, orchestrating a Triage Agent and a Specialist Agent with autonomous peer handoff and @agent.tool actions](docs/images/architecture-en.png)
 
 ---
 
@@ -923,41 +889,7 @@ if __name__ == "__main__":
 
 `chatflow-agent` fue disenado para desarrolladores que buscan la potencia multi-agente de OpenAI Swarm sin quedar atados a un unico proveedor, combinado con conectores oficiales listos para produccion en plataformas de mensajeria como **WhatsApp** y **Telegram**.
 
-```
-
-[ WhatsApp / Telegram / Webhook / CLI ]
-
-                   │
-
-                   ▼
-
-         ┌───────────────────┐
-
-         │      Runner       │ ◄─── Memoria de Sesion (Historial por usuario)
-
-         └─────────┬─────────┘
-
-                   │
-
-         ┌─────────┴─────────┐
-
-         ▼                   ▼
-
-  ┌──────────────┐    ┌──────────────┐
-
-  │ Agente Triage│───►│Especialista  │ (Handoff Autonomo entre Pares)
-
-  │ (Gemini/Grok)│    │(Gemma Local) │
-
-  └──────────────┘    └──────────────┘
-
-         │                   │
-
-         ▼                   ▼
-
-    [@agent.tool]       [@agent.tool]
-
-```
+![Arquitectura de chatflow-agent: Canales de Entrada (WhatsApp, Telegram, Webhook, CLI) conectados a Runner y Memoria de Sesión, orquestando un Agente Triage y un Especialista con handoff autónomo entre pares y herramientas @agent.tool](docs/images/architecture-es.png)
 
 ---
 
