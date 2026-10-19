@@ -14,6 +14,11 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-19
+
+### Security
+- **Strict Local Endpoint Hostname Validation:** `OpenAIEngine` now validates `base_url` structure, HTTP/HTTPS scheme, port range, and parsed hostname via `urllib.parse.urlsplit` when identifying local endpoints (`localhost`, `127.0.0.1`, `::1`, and local bind compatibility address `0.0.0.0`), replacing substring matching (Issue #74).
+
 ## [0.3.2] - 2026-09-29
 
 ### Security
@@ -68,6 +73,11 @@ If you are upgrading from v0.2.0:
 ## Español
 
 ## [Unreleased]
+
+## [0.3.3] - 2026-10-19
+
+### Seguridad
+- **Validación Estricta de Hostname en Endpoints Locales:** `OpenAIEngine` ahora valida la estructura de `base_url`, el esquema HTTP/HTTPS, el rango de puerto y el hostname real mediante `urllib.parse.urlsplit` al identificar endpoints locales (`localhost`, `127.0.0.1`, `::1` y la dirección de compatibilidad local `0.0.0.0`), reemplazando la coincidencia por subcadenas (Issue #74).
 
 ## [0.3.2] - 2026-09-29
 
