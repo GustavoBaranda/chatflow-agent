@@ -30,6 +30,8 @@ class Agent:
         api_key: str | None = None,
         engine: Any | None = None,
     ) -> None:
+        if not name or not name.strip():
+            raise ValueError("Agent name must be a non-empty string.")
         self.name = name
         self.instructions = instructions
         self.model = model

@@ -129,3 +129,9 @@ def test_agent_sanitized_handoff_name_collision_keeps_first_peer() -> None:
     assert isinstance(result, Handoff)
     assert result.target_agent_name == "Billing Team"
     assert result.reason == "Invoice query"
+
+
+@pytest.mark.parametrize("name", ["", "   ", "\t\n"])
+def test_agent_rejects_empty_or_whitespace_name(name: str) -> None:
+    with pytest.raises(ValueError, match="Agent name must be a non-empty string"):
+        Agent(name=name, instructions="Help user")
