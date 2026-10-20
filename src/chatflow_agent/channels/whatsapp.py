@@ -29,7 +29,14 @@ __all__ = ["WhatsAppChannel", "split_message"]
 
 
 class WhatsAppChannel(BaseChannel):
-    """WhatsApp integration supporting Meta Cloud API and generic webhooks with resilience."""
+    """WhatsApp integration supporting Meta Cloud API and generic webhooks with resilience.
+
+    ``llm_timeout_seconds`` defaults to 120 seconds for background dispatch, giving
+    provider retries and multi-step turns more room than the old 30-second budget.
+    It is a total turn deadline, not a guarantee that every provider retry fits;
+    pass an explicit value to match your provider and workload. Webhook HTTP
+    acknowledgement remains immediate and is separate from this deadline.
+    """
 
     def __init__(
         self,
@@ -46,7 +53,7 @@ class WhatsAppChannel(BaseChannel):
         unsupported_media_message: str = (
             "Por el momento solo puedo procesar mensajes de texto."
         ),
-        llm_timeout_seconds: float = 30.0,
+        llm_timeout_seconds: float = 120.0,
         max_outbound_retries: int = 3,
         outbound_base_delay: float = 1.0,
         outbound_max_delay: float = 30.0,

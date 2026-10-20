@@ -30,6 +30,19 @@ def configured_channel() -> WhatsAppChannel:
     return channel
 
 
+def test_whatsapp_default_background_timeout() -> None:
+    channel = WhatsAppChannel(verify_token="fixture", app_secret="fixture")
+    assert channel.llm_timeout_seconds == 120.0
+
+
+@pytest.mark.parametrize("timeout", [0.05, 30.0, 90.0, 300.0])
+def test_whatsapp_explicit_background_timeout(timeout: float) -> None:
+    channel = WhatsAppChannel(
+        verify_token="fixture", app_secret="fixture", llm_timeout_seconds=timeout
+    )
+    assert channel.llm_timeout_seconds == timeout
+
+
 def test_whatsapp_health_endpoint(configured_channel: WhatsAppChannel) -> None:
     client = TestClient(configured_channel.app)
     res = client.get("/health")
