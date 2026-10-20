@@ -51,6 +51,10 @@ class SessionContext:
         self.history.append(message)
         self._prune_history()
 
+    def update_metadata(self, updates: dict[str, Any]) -> None:
+        """Merge metadata updates without changing the active agent or history."""
+        self.metadata.update(updates)
+
     def set_active_agent(
         self,
         agent: Agent,
@@ -416,6 +420,23 @@ class SQLiteSessionContext(SessionContext):
                 (restored_agent.name, metadata_json, self.session_id),
             )
         super().restore_history(history, active_agent=active_agent, metadata=metadata)
+
+    def update_metadata(self, updates: dict[str, Any]) -> None:
+        """Persist merged metadata before updating the in-memory state."""
+        if not updates:
+            return
+        updated_metadata = {**self.metadata, **updates}
+        metadata_json = json.dumps(updated_metadata)
+        with _get_sqlite_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE chatflow_sessions
+                SET metadata_json = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE session_id = ?
+                """,
+                (metadata_json, self.session_id),
+            )
+        super().update_metadata(updates)
 
     def set_active_agent(
         self,

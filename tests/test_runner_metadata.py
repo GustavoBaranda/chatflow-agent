@@ -11,7 +11,7 @@ from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import BaseEngine, EngineTurnResult
 from chatflow_agent.core.memory import BaseSessionStore, SessionStore, SQLiteSessionStore
 from chatflow_agent.core.runner import Runner
-from chatflow_agent.types import Message
+from chatflow_agent.types import Handoff, Message, Role, ToolCall
 
 
 class MetadataEngine(BaseEngine):
@@ -48,6 +48,88 @@ def runner(store: BaseSessionStore) -> Runner:
         session_store=store,
         engine=MetadataEngine(store),
     )
+
+
+@pytest.mark.parametrize("updates", [{}, {"wamid": "second", "new_key": False}])
+def test_metadata_update_preserves_agent_and_history(
+    store: BaseSessionStore, updates: dict[str, Any]
+) -> None:
+    agent = Agent(name="Assistant", instructions="Help the user.")
+    original = {"channel": "whatsapp", "wamid": "first"}
+    session = store.get_or_create("session", agent, metadata=original.copy())
+    session.add_message(Message(role=Role.USER, content="Previous message"))
+    history = list(session.history)
+
+    session.update_metadata(updates)
+
+    assert session.metadata == {**original, **updates}
+    assert session.active_agent is agent
+    assert session.history == history
+    restored = store.get("session")
+    assert restored is not None
+    assert restored.metadata == session.metadata
+    assert restored.active_agent.name == agent.name
+
+
+@pytest.mark.asyncio
+async def test_next_turn_metadata_preserves_handoff_context(
+    store: BaseSessionStore, tmp_path: Path
+) -> None:
+    billing = Agent(name="Billing", instructions="Review invoices.")
+    triage = Agent(name="Triage", instructions="Route the request.", handoffs=[billing])
+
+    @triage.tool
+    def transfer_with_context() -> Handoff:
+        return Handoff(
+            target_agent_name="Billing",
+            context_updates={"customer_tier": "VIP", "invoice_id": "INV-101"},
+        )
+
+    class HandoffEngine(MetadataEngine):
+        def __init__(self) -> None:
+            super().__init__(store)
+            self.calls = 0
+
+        async def generate_turn_async(
+            self, agent: Agent, history: list[Message]
+        ) -> EngineTurnResult:
+            self.calls += 1
+            if self.calls == 1:
+                return EngineTurnResult(
+                    tool_calls=[ToolCall(id="handoff", name="transfer_with_context", args={})]
+                )
+            return await super().generate_turn_async(agent, history)
+
+    engine = HandoffEngine()
+    runner = Runner(triage, session_store=store, engine=engine)
+    await runner.run_async(
+        "session",
+        "First message",
+        {"channel": "whatsapp", "wamid": "first", "customer_tier": "standard"},
+    )
+
+    response = await runner.run_async(
+        "session", "Second message", {"wamid": "second", "request_id": "request-2"}
+    )
+
+    expected = {
+        "channel": "whatsapp",
+        "wamid": "second",
+        "customer_tier": "VIP",
+        "invoice_id": "INV-101",
+        "request_id": "request-2",
+    }
+    assert engine.observed[-1] == expected
+    assert response.active_agent_name == "Billing"
+    restored_store = (
+        SQLiteSessionStore(tmp_path / "sessions.db")
+        if isinstance(store, SQLiteSessionStore)
+        else store
+    )
+    restored = restored_store.get("session")
+    assert restored is not None
+    assert restored.metadata == expected
+    assert restored.active_agent.name == "Billing"
 
 
 @pytest.mark.asyncio

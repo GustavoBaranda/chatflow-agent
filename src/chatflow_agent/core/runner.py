@@ -87,8 +87,7 @@ class Runner:
             checkpoint_metadata = copy.deepcopy(session.metadata)
             try:
                 if metadata:
-                    # Reuse the persistent update path used for handoff context.
-                    session.set_active_agent(session.active_agent, context_updates=metadata)
+                    session.update_metadata(metadata)
 
                 # 1. Append inbound user message to history
                 session.add_message(Message(role=Role.USER, content=user_message))

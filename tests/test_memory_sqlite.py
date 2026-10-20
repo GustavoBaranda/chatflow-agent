@@ -1,5 +1,8 @@
 """Tests for chatflow-agent persistent SQLiteSessionStore."""
 
+import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -11,6 +14,7 @@ from chatflow_agent import (
     SQLiteSessionContext,
     SQLiteSessionStore,
 )
+from chatflow_agent.core import memory
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import EngineTurnResult, GeminiEngine
 from chatflow_agent.memory import SQLiteSessionStore as SQLiteStoreFromMemory
@@ -154,6 +158,70 @@ def test_sqlite_handoff_state_is_unchanged_when_context_cannot_be_serialized(
     )
     assert reloaded_session.active_agent.name == "Triage"
     assert reloaded_session.metadata == {"customer_tier": "standard"}
+
+
+def test_sqlite_metadata_update_rejects_unserializable_values_without_changing_state(
+    tmp_path: Path, test_agents: tuple[Agent, Agent]
+) -> None:
+    triage, _ = test_agents
+    db_path = tmp_path / "metadata.db"
+    session = SQLiteSessionStore(db_path).get_or_create(
+        "session", triage, metadata={"customer_tier": "standard"}
+    )
+
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        session.update_metadata({"customer_tier": "VIP", "invalid": object()})
+
+    assert session.metadata == {"customer_tier": "standard"}
+    assert session.active_agent is triage
+    restored = SQLiteSessionStore(db_path).get("session")
+    assert restored is not None
+    assert restored.metadata == session.metadata
+    assert restored.active_agent.name == triage.name
+
+
+@pytest.mark.parametrize("failure", ["statement", "commit"])
+def test_sqlite_metadata_update_preserves_state_when_persistence_fails(
+    tmp_path: Path, test_agents: tuple[Agent, Agent],
+    monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    triage, _ = test_agents
+    db_path = tmp_path / "metadata.db"
+    session = SQLiteSessionStore(db_path).get_or_create(
+        "session", triage, metadata={"customer_tier": "standard"}
+    )
+    connect = memory._get_sqlite_connection
+
+    def authorize(
+        action: int, operation: str | None, _column: str | None,
+        _database: str | None, _source: str | None,
+    ) -> int:
+        denied = (
+            failure == "statement" and action == sqlite3.SQLITE_UPDATE
+            and operation == "chatflow_sessions"
+        ) or (
+            failure == "commit" and action == sqlite3.SQLITE_TRANSACTION
+            and operation == "COMMIT"
+        )
+        return sqlite3.SQLITE_DENY if denied else sqlite3.SQLITE_OK
+
+    @contextmanager
+    def failing_connection(path: str) -> Generator[sqlite3.Connection, None, None]:
+        with connect(path) as conn:
+            conn.set_authorizer(authorize)
+            yield conn
+
+    with monkeypatch.context() as patch:
+        patch.setattr(memory, "_get_sqlite_connection", failing_connection)
+        with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+            session.update_metadata({"customer_tier": "VIP", "invoice_id": "INV-101"})
+
+    assert session.metadata == {"customer_tier": "standard"}
+    assert session.active_agent is triage
+    restored = SQLiteSessionStore(db_path).get("session")
+    assert restored is not None
+    assert restored.metadata == session.metadata
+    assert restored.active_agent.name == triage.name
 
 
 @pytest.mark.asyncio
