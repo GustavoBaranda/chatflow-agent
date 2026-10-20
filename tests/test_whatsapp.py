@@ -114,6 +114,44 @@ def test_generic_webhook_format_post(configured_channel: WhatsAppChannel) -> Non
     assert session.history[-1].content == "Hello from ChatFlow WhatsApp!"
     assert session.active_agent.name == "WhatsApp Bot"
 
+def test_identical_generic_webhooks_are_processed_independently(
+    configured_channel: WhatsAppChannel,
+) -> None:
+    """Repeated generic messages without IDs must not be deduplicated."""
+    client = TestClient(configured_channel.app)
+    payload = {
+        "phone": "5491199887766",
+        "message": "hola",
+    }
+
+    first = client.post("/webhook", json=payload)
+    second = client.post("/webhook", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["messages_queued"] == 1
+    assert second.json()["messages_queued"] == 1
+
+
+def test_generic_webhooks_with_explicit_ids_are_deduplicated(
+    configured_channel: WhatsAppChannel,
+) -> None:
+    """Repeated provider-supplied IDs must be processed only once."""
+    client = TestClient(configured_channel.app)
+    payload = {
+        "phone": "5491199887766",
+        "message": "hola",
+        "id": "wamid.test123",
+    }
+
+    first = client.post("/webhook", json=payload)
+    second = client.post("/webhook", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["messages_queued"] == 1
+    assert second.json()["messages_queued"] == 0
+
 
 def test_status_update_webhook_ignored(configured_channel: WhatsAppChannel) -> None:
     client = TestClient(configured_channel.app)

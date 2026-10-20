@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 from typing import Any
 
 from chatflow_agent.channels.base import BaseChannel, split_message
@@ -275,7 +276,7 @@ class WhatsAppChannel(BaseChannel):
             if sender:
                 wamid = (
                     payload.get("id") or payload.get("wamid")
-                    or f"gen_{hash(str(payload))}"
+                    or f"gen_{uuid.uuid4().hex}"
                 )
                 body = payload.get("message") or payload.get("text") or payload.get("body")
                 results.append((str(wamid), str(sender), str(body) if body else None))
@@ -330,55 +331,6 @@ class WhatsAppChannel(BaseChannel):
                     logger.exception(
                         f"Failed to deliver fallback to {masked_phone}: {fb_err}"
                     )
-
-    def _extract_message_and_sender(
-        self, payload: dict[str, Any]
-    ) -> tuple[str, str | None] | None:
-        """Extract sender phone number and message from payload.
-
-        Returns:
-            (phone, text) for text messages.
-            (phone, None) for non-text media messages.
-            None for status updates or empty payloads.
-        """
-        # 1. Standard Meta Cloud API webhook format
-        entry = payload.get("entry")
-        if isinstance(entry, list) and entry:
-            changes = entry[0].get("changes")
-            if isinstance(changes, list) and changes:
-                value = changes[0].get("value", {})
-                messages = value.get("messages")
-                if isinstance(messages, list) and messages:
-                    msg = messages[0]
-                    sender = msg.get("from")
-                    if not sender:
-                        return None
-
-                    msg_type = msg.get("type", "text")
-                    if msg_type == "text":
-                        text = msg.get("text", {}).get("body")
-                        if text:
-                            return str(sender), str(text)
-                    # Non-text media message received
-                    return str(sender), None
-
-        # 2. Generic / Evolution API webhook format
-        sender = (
-            payload.get("phone")
-            or payload.get("from")
-            or payload.get("sender")
-        )
-        if sender:
-            text = (
-                payload.get("message")
-                or payload.get("text")
-                or payload.get("body")
-            )
-            if text:
-                return str(sender), str(text)
-            return str(sender), None
-
-        return None
 
     async def _send_outbound_whatsapp(self, to_phone: str, text: str) -> None:
         """Send message back to user via Meta WhatsApp Cloud API, chunking long replies."""
