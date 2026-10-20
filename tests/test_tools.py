@@ -1,12 +1,18 @@
 """Tests for chatflow-agent tool introspection and execution engine."""
 
+import logging
 import typing
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Optional
 
 import pytest
 
-from chatflow_agent.core.tools import Tool, _python_type_to_gemini_type, tool
+from chatflow_agent.core.tools import (
+    Tool,
+    _python_type_to_gemini_type,
+    _python_type_to_schema,
+    tool,
+)
 from chatflow_agent.exceptions import ToolExecutionError
 
 
@@ -122,13 +128,137 @@ def test_tool_container_parameters_schema() -> None:
 
     schema = Tool(search).to_gemini_declaration()["parameters"]
     assert schema["properties"] == {
-        "coordinates": {"type": "ARRAY"},
-        "tags": {"type": "ARRAY"},
-        "excluded_tags": {"type": "ARRAY"},
-        "queries": {"type": "ARRAY"},
+        "coordinates": {"type": "ARRAY", "items": {"type": "NUMBER"}},
+        "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "excluded_tags": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "queries": {"type": "ARRAY", "items": {"type": "STRING"}},
         "filters": {"type": "OBJECT", "default": None},
     }
     assert schema["required"] == ["coordinates", "tags", "excluded_tags", "queries"]
+
+
+def _array_of(items: dict[str, object]) -> dict[str, object]:
+    return {"type": "ARRAY", "items": items}
+
+
+STRING_ITEMS = {"type": "STRING"}
+
+
+@pytest.mark.parametrize(
+    ("annotation", "expected"),
+    [
+        # Typed collections
+        (list[str], _array_of({"type": "STRING"})),
+        (set[int], _array_of({"type": "INTEGER"})),
+        (frozenset[bool], _array_of({"type": "BOOLEAN"})),
+        (Sequence[float], _array_of({"type": "NUMBER"})),
+        (typing.List[str], _array_of({"type": "STRING"})),  # noqa: UP006 - legacy alias coverage
+        (typing.Sequence[int], _array_of({"type": "INTEGER"})),
+        # Nested collections
+        (list[list[int]], _array_of(_array_of({"type": "INTEGER"}))),
+        (list[list[list[str]]], _array_of(_array_of(_array_of({"type": "STRING"})))),
+        (list[set[float]], _array_of(_array_of({"type": "NUMBER"}))),
+        (list[tuple[int, ...]], _array_of(_array_of({"type": "INTEGER"}))),
+        # Homogeneous and variable-length tuples
+        (tuple[int, ...], _array_of({"type": "INTEGER"})),
+        (tuple[float, float], _array_of({"type": "NUMBER"})),
+        (tuple[str], _array_of({"type": "STRING"})),
+        (typing.Tuple[int, ...], _array_of({"type": "INTEGER"})),  # noqa: UP006 - legacy alias
+        # Unparameterized collections fall back to STRING items
+        (list, _array_of(STRING_ITEMS)),
+        (tuple, _array_of(STRING_ITEMS)),
+        (set, _array_of(STRING_ITEMS)),
+        (frozenset, _array_of(STRING_ITEMS)),
+        (Sequence, _array_of(STRING_ITEMS)),
+        (typing.List, _array_of(STRING_ITEMS)),  # noqa: UP006 - legacy alias coverage
+        (tuple[()], _array_of(STRING_ITEMS)),
+        (list[typing.Any], _array_of(STRING_ITEMS)),
+        # Annotated and optional collections
+        (Annotated[list[str], "tags"], _array_of({"type": "STRING"})),
+        (Annotated[list[Annotated[int, "id"]], "ids"], _array_of({"type": "INTEGER"})),
+        (list[str] | None, _array_of({"type": "STRING"})),
+        (Optional[list[int]], _array_of({"type": "INTEGER"})),  # noqa: UP045 - legacy Optional
+        (Annotated[list[int] | None, "ids"], _array_of({"type": "INTEGER"})),
+        (list[int | None], _array_of({"type": "INTEGER"})),
+        (list[str] | set[str] | None, _array_of({"type": "STRING"})),
+        # Elements that are not primitives
+        (list[dict[str, int]], _array_of({"type": "OBJECT"})),
+        (list[Mapping[str, int]], _array_of({"type": "OBJECT"})),
+    ],
+)
+def test_array_schema_includes_items(annotation: object, expected: dict[str, object]) -> None:
+    assert _python_type_to_schema(annotation) == expected
+    assert _python_type_to_gemini_type(annotation) == "ARRAY"
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        tuple[int, str],
+        tuple[int, str, float],
+        tuple[int, str] | None,
+        Annotated[tuple[str, int], "pair"],
+    ],
+)
+def test_heterogeneous_tuple_omits_items_and_warns(
+    annotation: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="chatflow_agent.tools"):
+        schema = _python_type_to_schema(annotation)
+
+    assert schema == {"type": "ARRAY"}
+    assert "heterogeneous" in caplog.text
+
+
+def test_homogeneous_collections_do_not_log_warnings(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="chatflow_agent.tools"):
+        _python_type_to_schema(tuple[int, ...])
+        _python_type_to_schema(tuple[float, float])
+        _python_type_to_schema(list[list[int]])
+        _python_type_to_schema(list)
+
+    assert caplog.records == []
+
+
+@pytest.mark.parametrize(
+    ("annotation", "expected"),
+    [
+        (str, {"type": "STRING"}),
+        (int, {"type": "INTEGER"}),
+        (float, {"type": "NUMBER"}),
+        (bool, {"type": "BOOLEAN"}),
+        (dict, {"type": "OBJECT"}),
+        (dict[str, list[int]], {"type": "OBJECT"}),
+        (Mapping[str, int], {"type": "OBJECT"}),
+        (typing.Any, {"type": "STRING"}),
+        (int | None, {"type": "INTEGER"}),
+    ],
+)
+def test_non_array_schemas_have_no_items(annotation: object, expected: dict[str, object]) -> None:
+    assert _python_type_to_schema(annotation) == expected
+
+
+def test_tool_array_parameters_include_items_and_keep_defaults() -> None:
+    def process(
+        tags: list[str],
+        matrix: list[list[int]],
+        pair: tuple[float, float],
+        labels: set[str] | None = None,
+        limits: tuple[int, ...] | None = None,
+    ) -> None:
+        pass
+
+    tool_obj = Tool(process)
+    schema = tool_obj.to_gemini_declaration()["parameters"]
+
+    assert schema["properties"] == {
+        "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "matrix": {"type": "ARRAY", "items": {"type": "ARRAY", "items": {"type": "INTEGER"}}},
+        "pair": {"type": "ARRAY", "items": {"type": "NUMBER"}},
+        "labels": {"type": "ARRAY", "items": {"type": "STRING"}, "default": None},
+        "limits": {"type": "ARRAY", "items": {"type": "INTEGER"}, "default": None},
+    }
+    assert schema["required"] == ["tags", "matrix", "pair"]
 
 
 @pytest.mark.parametrize(
@@ -164,7 +294,7 @@ def test_tool_annotated_parameters_schema() -> None:
     assert schema["properties"] == {
         "count": {"type": "INTEGER"},
         "enabled": {"type": "BOOLEAN"},
-        "tags": {"type": "ARRAY"},
+        "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
         "limit": {"type": "INTEGER", "default": None},
         "verbose": {"type": "BOOLEAN", "default": False},
     }

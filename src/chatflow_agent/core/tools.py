@@ -34,24 +34,85 @@ TYPE_MAP = {
 }
 
 
-def _python_type_to_gemini_type(py_type: Any) -> str:
-    """Map a Python type annotation to Gemini schema type string."""
+def _array_items_schema(container: Any, args: tuple[Any, ...]) -> dict[str, Any] | None:
+    """Build the ``items`` schema for an array-like annotation.
+
+    ``container`` is the collection type (``list``, ``tuple``, ``set``, ...) and ``args`` its
+    type arguments. Returns ``None`` when the element types cannot be expressed as a single
+    ``items`` schema (heterogeneous tuples).
+    """
+    if container is tuple:
+        if len(args) == 2 and args[1] is Ellipsis:
+            # Variable-length homogeneous tuple: tuple[T, ...]
+            return _python_type_to_schema(args[0])
+        if args == ((),):
+            # tuple[()] is reported as ((),) on Python 3.10 and as () on 3.11+
+            args = ()
+        element_schemas = [_python_type_to_schema(arg) for arg in args]
+        if not element_schemas:
+            return {"type": "STRING"}
+        if all(schema == element_schemas[0] for schema in element_schemas):
+            # Fixed-length homogeneous tuple, e.g. tuple[float, float]
+            return element_schemas[0]
+        logger.warning(
+            "Tuple annotation %r has heterogeneous element types, which cannot be expressed "
+            "as a single array 'items' schema; omitting 'items' for this parameter.",
+            container[args],
+        )
+        return None
+
+    if len(args) == 1:
+        return _python_type_to_schema(args[0])
+
+    # Unparameterized collection (e.g. bare ``list``): fall back to STRING items, consistent
+    # with the STRING fallback used for unannotated parameters.
+    return {"type": "STRING"}
+
+
+def _python_type_to_schema(py_type: Any) -> dict[str, Any]:
+    """Map a Python type annotation to a Gemini schema fragment.
+
+    Array-like types (``list``, ``tuple``, ``set``, ``frozenset``, ``Sequence``) include an
+    ``items`` schema derived from their type arguments, recursively for nested collections:
+
+    * ``list[str]`` -> ``{"type": "ARRAY", "items": {"type": "STRING"}}``
+    * ``tuple[int, ...]`` and homogeneous tuples such as ``tuple[float, float]`` use the
+      shared element type.
+    * Unparameterized collections (``list``) fall back to ``{"type": "STRING"}`` items.
+    * Heterogeneous tuples (``tuple[int, str]``) cannot be expressed as one ``items`` schema,
+      so ``items`` is omitted and a warning is logged.
+
+    ``Annotated`` metadata is ignored and ``Optional``/union annotations use their first
+    non-``None`` member, as for non-array types.
+    """
     if py_type is inspect.Parameter.empty or py_type is Any:
-        return "STRING"
+        return {"type": "STRING"}
 
     origin = get_origin(py_type)
     if origin is Annotated:
         # Annotated[T, ...] maps the same as its underlying type T
-        return _python_type_to_gemini_type(get_args(py_type)[0])
+        return _python_type_to_schema(get_args(py_type)[0])
 
     if origin in (Union, types.UnionType):
         # Handle Optional[T] which is Union[T, NoneType]
         args = [arg for arg in get_args(py_type) if arg is not type(None)]
         if args:
-            return _python_type_to_gemini_type(args[0])
-        return "STRING"
+            return _python_type_to_schema(args[0])
+        return {"type": "STRING"}
 
-    return TYPE_MAP.get(origin or py_type, "STRING")
+    container = origin or py_type
+    schema_type = TYPE_MAP.get(container, "STRING")
+    schema: dict[str, Any] = {"type": schema_type}
+    if schema_type == "ARRAY":
+        items = _array_items_schema(container, get_args(py_type))
+        if items is not None:
+            schema["items"] = items
+    return schema
+
+
+def _python_type_to_gemini_type(py_type: Any) -> str:
+    """Map a Python type annotation to Gemini schema type string."""
+    return str(_python_type_to_schema(py_type)["type"])
 
 
 def _resolve_signature(func: Callable[..., Any], tool_name: str) -> inspect.Signature:
@@ -133,10 +194,7 @@ class Tool:
             ):
                 continue
 
-            gemini_type = _python_type_to_gemini_type(param.annotation)
-            param_def: dict[str, Any] = {
-                "type": gemini_type,
-            }
+            param_def = _python_type_to_schema(param.annotation)
 
             if param.default is inspect.Parameter.empty:
                 required.append(param_name)
