@@ -71,7 +71,10 @@ class Runner:
         user_message: str,
         metadata: dict[str, Any] | None = None,
     ) -> AgentResponse:
-        """Process a user message through the active agent and resolve tools/handoffs."""
+        """Process a user message through the active agent and resolve tools/handoffs.
+
+        Merge incoming metadata into the session before processing this turn.
+        """
         session = self.session_store.get_or_create(
             session_id=session_id,
             default_agent=self.starting_agent,
@@ -83,6 +86,10 @@ class Runner:
             checkpoint_agent = session.active_agent
             checkpoint_metadata = copy.deepcopy(session.metadata)
             try:
+                if metadata:
+                    # Reuse the persistent update path used for handoff context.
+                    session.set_active_agent(session.active_agent, context_updates=metadata)
+
                 # 1. Append inbound user message to history
                 session.add_message(Message(role=Role.USER, content=user_message))
 
