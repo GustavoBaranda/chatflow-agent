@@ -53,9 +53,9 @@ triage_agent = Agent(
     handoffs=[support_agent, sales_agent],
 )
 
-# 3. Persistent Runner with SQLite
+# 3. Persistent Runner with SQLite (CHATFLOW_DB_PATH moves the database, e.g. for tests)
 session_store = SQLiteSessionStore(
-    db_path="api_sessions.db",
+    db_path=os.environ.get("CHATFLOW_DB_PATH", "api_sessions.db"),
     default_max_turns=30,
 )
 

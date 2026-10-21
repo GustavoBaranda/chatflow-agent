@@ -1,6 +1,7 @@
 """Tests for the example webhook API service."""
 
 import json
+from pathlib import Path
 
 import pytest
 from examples import webhook_api_service
@@ -181,3 +182,9 @@ async def test_health_check_returns_healthy_status() -> None:
 
     assert response.status_code == 200
     assert json.loads(response.body) == {"status": "healthy", "service": "chatflow-agent-api"}
+
+
+def test_example_database_is_kept_out_of_the_repository_root() -> None:
+    db_path = Path(webhook_api_service.session_store.db_path)
+    assert db_path.parent != Path.cwd()
+    assert not Path("api_sessions.db").exists()
