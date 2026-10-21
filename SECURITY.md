@@ -12,8 +12,8 @@ Security patches and bug fixes are provided exclusively for the latest released 
 
 | Version | Supported | Notes |
 |:-------:|:---------:|:------|
-| `0.3.2` (Latest) | :white_check_mark: | Current release supported on a best-effort basis. |
-| `< 0.3.2` | :x: | Unsupported. Please upgrade to the latest release (`0.3.2`). |
+| `0.3.3` (Latest) | :white_check_mark: | Current release supported on a best-effort basis. |
+| `< 0.3.3` | :x: | Unsupported. Please upgrade to the latest release (`0.3.3`). |
 
 ---
 
@@ -74,8 +74,8 @@ Los parches de seguridad y correcciones de errores se proporcionan exclusivament
 
 | Versión | Con Soporte | Notas |
 |:-------:|:-----------:|:------|
-| `0.3.2` (Última) | :white_check_mark: | Versión actual soportada bajo modalidad best-effort. |
-| `< 0.3.2` | :x: | Sin soporte. Actualiza a la última versión disponible (`0.3.2`). |
+| `0.3.3` (Última) | :white_check_mark: | Versión actual soportada bajo modalidad best-effort. |
+| `< 0.3.3` | :x: | Sin soporte. Actualiza a la última versión disponible (`0.3.3`). |
 
 ---
 
