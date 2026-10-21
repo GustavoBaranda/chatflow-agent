@@ -18,11 +18,22 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Fetch origin main for ancestry verification
+        run: git fetch origin main:refs/remotes/origin/main
+
+      - name: Verify release consistency and ancestry
+        run: python scripts/verify_release.py
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          TARGET_REF: refs/remotes/origin/main
 
       - name: Install build tooling
         run: |
