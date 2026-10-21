@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -108,6 +109,11 @@ def test_get_init_version_missing_assignment(tmp_path: Path) -> None:
 # Real Git Repository Tests
 # ---------------------------------------------------------------------------
 
+requires_git = pytest.mark.skipif(
+    shutil.which("git") is None,
+    reason="git executable not found in PATH",
+)
+
 
 def _setup_git_repo(tmp_path: Path, version: str = "0.4.0") -> Path:
     """Helper to initialize a clean git repo with project files."""
@@ -135,6 +141,7 @@ def _setup_git_repo(tmp_path: Path, version: str = "0.4.0") -> Path:
     return repo
 
 
+@requires_git
 def test_verify_release_valid_on_main(tmp_path: Path) -> None:
     """Tag on main with matching metadata must pass."""
     repo = _setup_git_repo(tmp_path, version="0.4.0")
@@ -149,6 +156,7 @@ def test_verify_release_valid_on_main(tmp_path: Path) -> None:
     verify_release(tag="v0.4.0", repo_root=repo, target_ref="main")
 
 
+@requires_git
 def test_verify_release_annotated_tag(tmp_path: Path) -> None:
     """Annotated tag (tag object) on main must be correctly dereferenced and pass."""
     repo = _setup_git_repo(tmp_path, version="0.4.0")
@@ -166,6 +174,7 @@ def test_verify_release_annotated_tag(tmp_path: Path) -> None:
     verify_release(tag="v0.4.0", repo_root=repo, target_ref="main")
 
 
+@requires_git
 def test_verify_release_rejects_isolated_branch_tag(tmp_path: Path) -> None:
     """Tag placed on an isolated/unmerged branch must be rejected."""
     repo = _setup_git_repo(tmp_path, version="0.4.0")
@@ -212,6 +221,7 @@ def test_verify_release_rejects_isolated_branch_tag(tmp_path: Path) -> None:
         verify_release(tag="v0.4.0", repo_root=repo, target_ref="main")
 
 
+@requires_git
 def test_verify_release_rejects_version_mismatch(tmp_path: Path) -> None:
     """Tag version mismatching pyproject.toml or __init__.py must be rejected."""
     repo = _setup_git_repo(tmp_path, version="0.3.3")
@@ -225,6 +235,7 @@ def test_verify_release_rejects_version_mismatch(tmp_path: Path) -> None:
         verify_release(tag="v0.4.0", repo_root=repo, target_ref="main")
 
 
+@requires_git
 def test_verify_release_rejects_init_version_mismatch(tmp_path: Path) -> None:
     """Tag matching pyproject.toml but mismatching __init__.py must be rejected."""
     repo = _setup_git_repo(tmp_path, version="0.4.0")
@@ -244,6 +255,7 @@ def test_verify_release_rejects_init_version_mismatch(tmp_path: Path) -> None:
         verify_release(tag="v0.4.0", repo_root=repo, target_ref="main")
 
 
+@requires_git
 def test_verify_release_rejects_missing_target_ref(tmp_path: Path) -> None:
     """Missing target ref (e.g. un-fetched origin/main) must fail securely."""
     repo = _setup_git_repo(tmp_path, version="0.4.0")
@@ -255,6 +267,7 @@ def test_verify_release_rejects_missing_target_ref(tmp_path: Path) -> None:
         )
 
 
+@requires_git
 def test_verify_release_rejects_checkout_mismatch(tmp_path: Path) -> None:
     """If checkout HEAD does not match the tag commit, must fail."""
     repo = _setup_git_repo(tmp_path, version="0.4.0")
@@ -272,6 +285,7 @@ def test_verify_release_rejects_checkout_mismatch(tmp_path: Path) -> None:
         verify_git_ancestry_and_checkout(tag="v0.4.0", repo_root=repo, target_ref="main")
 
 
+@requires_git
 def test_verify_release_with_git_remote_workflow_simulation(tmp_path: Path) -> None:
     """Test full workflow simulation using a real bare Git remote and refs/remotes/origin/main."""
     remote_repo = tmp_path / "remote.git"
@@ -331,6 +345,7 @@ def test_verify_release_with_git_remote_workflow_simulation(tmp_path: Path) -> N
         verify_release(tag="v0.4.1", repo_root=clone_repo, target_ref="refs/remotes/origin/main")
 
 
+@requires_git
 def test_verify_git_ancestry_unexpected_git_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Unexpected git exit code (> 1) must raise a distinct Git error message."""
     repo = _setup_git_repo(tmp_path, version="0.4.0")
@@ -350,6 +365,7 @@ def test_verify_git_ancestry_unexpected_git_error(tmp_path: Path, monkeypatch: p
         verify_git_ancestry_and_checkout(tag="v0.4.0", repo_root=repo, target_ref="main")
 
 
+@requires_git
 def test_cli_main_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test CLI main() returns 0 on valid release."""
     repo = _setup_git_repo(tmp_path, version="0.4.0")
@@ -366,6 +382,7 @@ def test_cli_main_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert main() == 0
 
 
+@requires_git
 def test_cli_main_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test CLI main() returns 1 on error and logs to stderr."""
     repo = _setup_git_repo(tmp_path, version="0.4.0")
