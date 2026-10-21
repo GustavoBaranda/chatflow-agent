@@ -185,6 +185,6 @@ async def test_health_check_returns_healthy_status() -> None:
 
 
 def test_example_database_is_kept_out_of_the_repository_root() -> None:
-    db_path = Path(webhook_api_service.session_store.db_path)
-    assert db_path.parent != Path.cwd()
+    db_path = Path(webhook_api_service.session_store.db_path).resolve()
+    assert db_path.parent != Path.cwd().resolve()
     assert not Path("api_sessions.db").exists()
