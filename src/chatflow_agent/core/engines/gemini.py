@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 from google import genai
 from google.genai import types
 
-from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult
+from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult, system_prompt
 from chatflow_agent.exceptions import ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
 
@@ -105,7 +105,7 @@ class GeminiEngine(BaseEngine):
             gemini_tools = [types.Tool(function_declarations=cast(Any, declarations))]
 
         config = types.GenerateContentConfig(
-            system_instruction=agent.get_instructions(),
+            system_instruction=system_prompt(agent.get_instructions(), history),
             tools=gemini_tools,
         )
 

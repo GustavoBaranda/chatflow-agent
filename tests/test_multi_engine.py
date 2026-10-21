@@ -1,7 +1,7 @@
 """Tests for Multi-Provider engines (OpenAI, Grok, Gemma/Ollama, Claude) and heterogeneous swarms."""
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -599,4 +599,58 @@ async def test_anthropic_non_retryable_error_does_not_retry() -> None:
     assert attempts == 1  # No retries on 401
     assert len(transport.requests_received) == 1
 
+
+# Role.SYSTEM messages in the session history reach every provider, after the agent's
+# instructions and in order (#90).
+SYSTEM_HISTORY = [
+    Message(role=Role.SYSTEM, content="Dynamic safety constraint"),
+    Message(role=Role.USER, content="Hello"),
+    Message(role=Role.SYSTEM, content="Answer in Spanish"),
+]
+
+
+def test_openai_keeps_history_system_messages_in_sequence() -> None:
+    engine = OpenAIEngine(api_key="mock", base_url="http://localhost:11434/v1")
+    messages = engine._format_history_to_messages("Base instructions", SYSTEM_HISTORY)
+    assert messages == [
+        {"role": "system", "content": "Base instructions"},
+        {"role": "system", "content": "Dynamic safety constraint"},
+        {"role": "user", "content": "Hello"},
+        {"role": "system", "content": "Answer in Spanish"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_appends_history_system_messages_to_the_system_prompt() -> None:
+    transport = MockTransport(lambda req: (200, {"content": [{"type": "text", "text": "Hola"}]}))
+    engine = AnthropicEngine(api_key="ant-test-key", http_client=httpx.AsyncClient(transport=transport))
+    agent = Agent(name="Bot", model="claude-3-5-sonnet", instructions="Base instructions")
+
+    await engine.generate_turn_async(agent=agent, history=SYSTEM_HISTORY)
+
+    payload = json.loads(transport.requests_received[0].content)
+    assert payload["system"] == "Base instructions\n\nDynamic safety constraint\n\nAnswer in Spanish"
+    assert payload["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+@pytest.mark.asyncio
+async def test_gemini_appends_history_system_messages_to_the_system_instruction() -> None:
+    from types import SimpleNamespace
+
+    seen: dict[str, Any] = {}
+
+    async def generate_content(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return SimpleNamespace(candidates=[])
+
+    engine = GeminiEngine(api_key="test-key")
+    engine.client = cast(Any, SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))))
+    agent = Agent(name="Bot", model="gemini-2.5-flash", instructions="Base instructions")
+
+    await engine.generate_turn_async(agent=agent, history=SYSTEM_HISTORY)
+
+    assert seen["config"].system_instruction == (
+        "Base instructions\n\nDynamic safety constraint\n\nAnswer in Spanish"
+    )
+    assert [c.role for c in seen["contents"]] == ["user"]
 

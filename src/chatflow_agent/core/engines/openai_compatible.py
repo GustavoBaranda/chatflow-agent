@@ -184,6 +184,10 @@ class OpenAIEngine(BaseEngine):
             if msg.role == Role.USER and msg.content:
                 messages.append({"role": "user", "content": msg.content})
 
+            elif msg.role == Role.SYSTEM and msg.content:
+                # System messages added to the session keep their place in the conversation.
+                messages.append({"role": "system", "content": msg.content})
+
             elif msg.role == Role.MODEL:
                 assistant_msg: dict[str, Any] = {
                     "role": "assistant",

@@ -3,10 +3,21 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from chatflow_agent.types import Message, ToolCall
+from chatflow_agent.types import Message, Role, ToolCall
 
 if TYPE_CHECKING:
     from chatflow_agent.core.agent import Agent
+
+
+def system_prompt(instructions: str | None, history: list[Message]) -> str | None:
+    """The agent's instructions followed by the Role.SYSTEM messages in history, in order.
+
+    For providers that take one system prompt beside the messages (Anthropic, Gemini). The
+    agent's instructions stay first; system messages added to the session later follow them.
+    """
+    parts = [instructions] if instructions else []
+    parts += [msg.content for msg in history if msg.role == Role.SYSTEM and msg.content]
+    return "\n\n".join(parts) or None
 
 
 class EngineTurnResult:

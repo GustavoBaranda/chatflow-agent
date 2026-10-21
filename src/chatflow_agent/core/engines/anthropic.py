@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult
+from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult, system_prompt
 from chatflow_agent.core.engines.openai_compatible import _lowercase_schema_types
 from chatflow_agent.exceptions import ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
@@ -102,9 +102,9 @@ class AnthropicEngine(BaseEngine):
             "messages": messages,
         }
 
-        instructions = agent.get_instructions()
-        if instructions:
-            payload["system"] = instructions
+        system = system_prompt(agent.get_instructions(), history)
+        if system:
+            payload["system"] = system
 
         if all_tools:
             anthropic_tools = []
