@@ -4,10 +4,12 @@ import asyncio
 import copy
 import json
 import sqlite3
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 from chatflow_agent.core.agent import Agent
@@ -278,13 +280,21 @@ class SessionStore(BaseSessionStore):
         self._sessions.clear()
 
 
+def _is_memory_sqlite_path(db_path: str) -> bool:
+    """Return True for ephemeral SQLite memory paths (:memory: or shared-cache URI)."""
+    if db_path == ":memory:":
+        return True
+    return db_path.startswith("file:") and "mode=memory" in db_path
+
+
 @contextmanager
 def _get_sqlite_connection(db_path: str) -> Generator[sqlite3.Connection, None, None]:
     """Provide a transactional SQLite connection configured with WAL and busy_timeout."""
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    use_uri = db_path.startswith("file:")
+    conn = sqlite3.connect(db_path, uri=use_uri, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 10000")
-    if db_path != ":memory:":
+    if not _is_memory_sqlite_path(db_path):
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
     try:
@@ -500,15 +510,55 @@ class SQLiteSessionStore(BaseSessionStore):
         self.default_max_turns = default_max_turns
         self.dedup_ttl_hours = dedup_ttl_hours
         self._agent_resolver: Callable[[str], Agent | None] | None = None
+        self._closed = False
+        self._keeper_conn: sqlite3.Connection | None = None
+        # Disk paths use the user path directly. Pure :memory: DBs are connection-private,
+        # so each store gets a unique shared-cache URI plus a keeper connection that keeps
+        # the ephemeral database alive for the store lifetime (instance isolation).
+        self._conn_path = self.db_path
+        if self.db_path == ":memory:":
+            self._conn_path = f"file:chatflow_mem_{uuid.uuid4().hex}?mode=memory&cache=shared"
+            self._keeper_conn = sqlite3.connect(
+                self._conn_path, uri=True, check_same_thread=False
+            )
+            self._keeper_conn.execute("PRAGMA busy_timeout = 10000")
         self._init_db()
+
+    def _ensure_open(self) -> None:
+        """Raise if this store was closed and can no longer serve operations."""
+        if self._closed:
+            raise RuntimeError("SQLiteSessionStore is closed and cannot be used")
+
+    def close(self) -> None:
+        """Release keeper connections and mark the store closed. Idempotent."""
+        if self._closed:
+            return
+        self._closed = True
+        if self._keeper_conn is not None:
+            self._keeper_conn.close()
+            self._keeper_conn = None
+
+    def __enter__(self) -> "SQLiteSessionStore":
+        self._ensure_open()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        self.close()
 
     def set_agent_resolver(self, resolver: Callable[[str], Agent | None]) -> None:
         """Register a resolver callback to map agent names from SQLite back to Agent instances."""
+        self._ensure_open()
         self._agent_resolver = resolver
 
     def is_message_processed(self, message_id: str) -> bool:
         """Check if message_id was recorded within dedup_ttl_hours."""
-        with _get_sqlite_connection(self.db_path) as conn:
+        self._ensure_open()
+        with _get_sqlite_connection(self._conn_path) as conn:
             row = conn.execute(
                 """
                 SELECT message_id FROM chatflow_processed_messages
@@ -524,7 +574,8 @@ class SQLiteSessionStore(BaseSessionStore):
 
         Purges expired records older than dedup_ttl_hours.
         """
-        with _get_sqlite_connection(self.db_path) as conn:
+        self._ensure_open()
+        with _get_sqlite_connection(self._conn_path) as conn:
             row = conn.execute(
                 """
                 SELECT message_id FROM chatflow_processed_messages
@@ -552,12 +603,13 @@ class SQLiteSessionStore(BaseSessionStore):
 
     def _init_db(self) -> None:
         """Initialize the SQLite tables and indexes."""
-        # Ensure directory exists if path contains directories
-        parent = Path(self.db_path).parent
-        if str(parent) not in ("", "."):
-            parent.mkdir(parents=True, exist_ok=True)
+        # Ensure directory exists if path contains directories (disk databases only)
+        if not _is_memory_sqlite_path(self._conn_path):
+            parent = Path(self.db_path).parent
+            if str(parent) not in ("", "."):
+                parent.mkdir(parents=True, exist_ok=True)
 
-        with _get_sqlite_connection(self.db_path) as conn:
+        with _get_sqlite_connection(self._conn_path) as conn:
             conn.execute("PRAGMA user_version = 1")
             conn.execute(
                 """
@@ -605,7 +657,8 @@ class SQLiteSessionStore(BaseSessionStore):
         metadata: dict[str, Any] | None = None,
     ) -> SessionContext:
         """Retrieve existing session from SQLite or atomically insert and initialize a new one."""
-        with _get_sqlite_connection(self.db_path) as conn:
+        self._ensure_open()
+        with _get_sqlite_connection(self._conn_path) as conn:
             meta_json = json.dumps(metadata or {})
             conn.execute(
                 """
@@ -637,7 +690,7 @@ class SQLiteSessionStore(BaseSessionStore):
             return SQLiteSessionContext(
                 session_id=session_id,
                 initial_agent=active_agent,
-                db_path=self.db_path,
+                db_path=self._conn_path,
                 max_turns=self.default_max_turns,
                 metadata=meta,
                 preloaded_history=history,
@@ -645,7 +698,8 @@ class SQLiteSessionStore(BaseSessionStore):
 
     def get(self, session_id: str) -> SessionContext | None:
         """Fetch session by ID if it exists in SQLite."""
-        with _get_sqlite_connection(self.db_path) as conn:
+        self._ensure_open()
+        with _get_sqlite_connection(self._conn_path) as conn:
             row = conn.execute(
                 "SELECT active_agent_name FROM chatflow_sessions WHERE session_id = ?", (session_id,)
             ).fetchone()
@@ -663,19 +717,22 @@ class SQLiteSessionStore(BaseSessionStore):
 
     def delete(self, session_id: str) -> bool:
         """Remove a session and its message history from SQLite."""
-        with _get_sqlite_connection(self.db_path) as conn:
+        self._ensure_open()
+        with _get_sqlite_connection(self._conn_path) as conn:
             conn.execute("DELETE FROM chatflow_messages WHERE session_id = ?", (session_id,))
             cursor = conn.execute("DELETE FROM chatflow_sessions WHERE session_id = ?", (session_id,))
             return cursor.rowcount > 0
 
     def list_sessions(self) -> list[str]:
         """List all session IDs ordered by latest update."""
-        with _get_sqlite_connection(self.db_path) as conn:
+        self._ensure_open()
+        with _get_sqlite_connection(self._conn_path) as conn:
             rows = conn.execute("SELECT session_id FROM chatflow_sessions ORDER BY updated_at DESC").fetchall()
             return [r["session_id"] for r in rows]
 
     def clear(self) -> None:
         """Purge all sessions and history from SQLite."""
-        with _get_sqlite_connection(self.db_path) as conn:
+        self._ensure_open()
+        with _get_sqlite_connection(self._conn_path) as conn:
             conn.execute("DELETE FROM chatflow_messages")
             conn.execute("DELETE FROM chatflow_sessions")

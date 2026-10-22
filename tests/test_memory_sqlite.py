@@ -448,3 +448,100 @@ def test_sqlite_context_rejects_invalid_max_turns(tmp_path: Path, limit: int) ->
     agent = Agent(name="A", instructions="test")
     with pytest.raises(ValueError, match="max_turns"):
         SQLiteSessionContext("s", agent, db_path=str(tmp_path / "x.db"), max_turns=limit)
+
+
+def test_sqlite_in_memory_get_or_create_and_messages(test_agents: tuple[Agent, Agent]) -> None:
+    """In-memory stores must keep schema and sessions across operations."""
+    triage, _ = test_agents
+    store = SQLiteSessionStore(db_path=":memory:", default_max_turns=5)
+    try:
+        assert store.db_path == ":memory:"
+        ctx = store.get_or_create("session_1", default_agent=triage, metadata={"channel": "test"})
+        ctx.add_message(Message(role=Role.USER, content="hello memory"))
+        ctx.add_message(Message(role=Role.MODEL, content="hi"))
+
+        reloaded = store.get_or_create("session_1", default_agent=triage)
+        assert len(reloaded.history) == 2
+        assert reloaded.history[0].content == "hello memory"
+        assert reloaded.metadata == {"channel": "test"}
+        assert store.list_sessions() == ["session_1"]
+        assert store.delete("session_1") is True
+        assert store.list_sessions() == []
+    finally:
+        store.close()
+
+
+def test_sqlite_in_memory_instance_isolation(test_agents: tuple[Agent, Agent]) -> None:
+    """Independent :memory: stores must not share session state."""
+    triage, _ = test_agents
+    store1 = SQLiteSessionStore(db_path=":memory:")
+    store2 = SQLiteSessionStore(db_path=":memory:")
+    try:
+        store1.get_or_create("shared_id", default_agent=triage)
+        assert "shared_id" in store1.list_sessions()
+        assert store2.list_sessions() == []
+        store2.get_or_create("shared_id", default_agent=triage)
+        store1.clear()
+        assert store1.list_sessions() == []
+        assert store2.list_sessions() == ["shared_id"]
+    finally:
+        store1.close()
+        store2.close()
+
+
+def test_sqlite_in_memory_pruning_and_dedup(test_agents: tuple[Agent, Agent]) -> None:
+    """Pruning and deduplication must work for in-memory stores."""
+    triage, _ = test_agents
+    store = SQLiteSessionStore(db_path=":memory:", default_max_turns=2, dedup_ttl_hours=1)
+    try:
+        ctx = store.get_or_create("prune_mem", default_agent=triage)
+        for i in range(6):
+            role = Role.USER if i % 2 == 0 else Role.MODEL
+            ctx.add_message(Message(role=role, content=f"Message {i}"))
+        assert len(ctx.history) == 4
+
+        assert store.record_processed_message("wamid_mem") is True
+        assert store.is_message_processed("wamid_mem") is True
+        assert store.record_processed_message("wamid_mem") is False
+    finally:
+        store.close()
+
+
+def test_sqlite_in_memory_close_and_context_manager(test_agents: tuple[Agent, Agent]) -> None:
+    """close() and context manager must release resources and reject later use."""
+    triage, _ = test_agents
+    store = SQLiteSessionStore(db_path=":memory:")
+    store.get_or_create("before_close", default_agent=triage)
+    store.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        store.get_or_create("after_close", default_agent=triage)
+    store.close()  # idempotent
+
+    with SQLiteSessionStore(db_path=":memory:") as managed:
+        managed.get_or_create("ctx_mgr", default_agent=triage)
+        assert "ctx_mgr" in managed.list_sessions()
+    with pytest.raises(RuntimeError, match="closed"):
+        managed.list_sessions()
+
+
+def test_sqlite_disk_close_still_works(tmp_path: Path, test_agents: tuple[Agent, Agent]) -> None:
+    """Disk-backed stores keep WAL behavior and support explicit close()."""
+    triage, _ = test_agents
+    db_path = tmp_path / "disk_close.db"
+    with SQLiteSessionStore(db_path=db_path) as store:
+        store.get_or_create("disk_session", default_agent=triage)
+        assert "disk_session" in store.list_sessions()
+    with pytest.raises(RuntimeError, match="closed"):
+        store.list_sessions()
+
+    raw_conn = sqlite3.connect(str(db_path))
+    try:
+        journal_mode = raw_conn.execute("PRAGMA journal_mode").fetchone()[0].lower()
+        assert journal_mode == "wal"
+        row = raw_conn.execute(
+            "SELECT session_id FROM chatflow_sessions WHERE session_id = ?",
+            ("disk_session",),
+        ).fetchone()
+        assert row is not None
+    finally:
+        raw_conn.close()
