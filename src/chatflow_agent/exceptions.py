@@ -30,6 +30,13 @@ class ToolExecutionError(ChatFlowError):
         self.original_error = original_error
 
 
+class ToolSchemaError(ChatFlowError):
+    """Raised when a tool's parameter annotation cannot be expressed as a valid schema."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 class AgentHandoffError(ChatFlowError):
     """Raised when an agent transfer/handoff fails or references an invalid target."""
 

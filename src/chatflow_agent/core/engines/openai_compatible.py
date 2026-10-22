@@ -95,6 +95,11 @@ def _lowercase_schema_types(schema: Any) -> Any:
         for k, v in schema.items():
             if k == "type" and isinstance(v, str):
                 new_dict[k] = v.lower()
+            elif k == "type" and isinstance(v, list):
+                # Type lists (e.g. ["INTEGER", "NULL"]) must normalize elementwise.
+                new_dict[k] = [
+                    item.lower() if isinstance(item, str) else item for item in v
+                ]
             elif k == "default":
                 # Preserve user-provided default values.
                 new_dict[k] = v
@@ -240,7 +245,7 @@ class OpenAIEngine(BaseEngine):
         if all_tools:
             openai_tools = []
             for t in all_tools:
-                parameters = _lowercase_schema_types(t.parameters_schema)
+                parameters = _lowercase_schema_types(t.to_openai_parameters())
                 openai_tools.append({
                     "type": "function",
                     "function": {

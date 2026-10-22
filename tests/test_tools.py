@@ -13,6 +13,7 @@ from chatflow_agent.core.tools import (
     _python_type_to_schema,
     tool,
 )
+from chatflow_agent.exceptions import ToolSchemaError
 from chatflow_agent.exceptions import ToolExecutionError
 
 
@@ -132,7 +133,7 @@ def test_tool_container_parameters_schema() -> None:
         "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
         "excluded_tags": {"type": "ARRAY", "items": {"type": "STRING"}},
         "queries": {"type": "ARRAY", "items": {"type": "STRING"}},
-        "filters": {"type": "OBJECT", "default": None},
+        "filters": {"type": "OBJECT", "default": None, "nullable": True},
     }
     assert schema["required"] == ["coordinates", "tags", "excluded_tags", "queries"]
 
@@ -142,6 +143,10 @@ def _array_of(items: dict[str, object]) -> dict[str, object]:
 
 
 STRING_ITEMS = {"type": "STRING"}
+
+
+def _nullable_array_of(items: dict[str, object]) -> dict[str, object]:
+    return {"type": "ARRAY", "items": items, "nullable": True}
 
 
 @pytest.mark.parametrize(
@@ -176,11 +181,17 @@ STRING_ITEMS = {"type": "STRING"}
         # Annotated and optional collections
         (Annotated[list[str], "tags"], _array_of({"type": "STRING"})),
         (Annotated[list[Annotated[int, "id"]], "ids"], _array_of({"type": "INTEGER"})),
-        (list[str] | None, _array_of({"type": "STRING"})),
-        (Optional[list[int]], _array_of({"type": "INTEGER"})),  # noqa: UP045 - legacy Optional
-        (Annotated[list[int] | None, "ids"], _array_of({"type": "INTEGER"})),
-        (list[int | None], _array_of({"type": "INTEGER"})),
-        (list[str] | set[str] | None, _array_of({"type": "STRING"})),
+        (list[str] | None, _nullable_array_of({"type": "STRING"})),
+        (Optional[list[int]], _nullable_array_of({"type": "INTEGER"})),  # noqa: UP045 - legacy Optional
+        (Annotated[list[int] | None, "ids"], _nullable_array_of({"type": "INTEGER"})),
+        (list[int | None], _array_of({"type": "INTEGER", "nullable": True})),
+        (
+            list[str] | set[str] | None,
+            {
+                "anyOf": [_array_of({"type": "STRING"}), _array_of({"type": "STRING"})],
+                "nullable": True,
+            },
+        ),
         # Elements that are not primitives
         (list[dict[str, int]], _array_of({"type": "OBJECT"})),
         (list[Mapping[str, int]], _array_of({"type": "OBJECT"})),
@@ -192,21 +203,21 @@ def test_array_schema_includes_items(annotation: object, expected: dict[str, obj
 
 
 @pytest.mark.parametrize(
-    "annotation",
+    ("annotation", "expected"),
     [
-        tuple[int, str],
-        tuple[int, str, float],
-        tuple[int, str] | None,
-        Annotated[tuple[str, int], "pair"],
+        (tuple[int, str], {"type": "ARRAY"}),
+        (tuple[int, str, float], {"type": "ARRAY"}),
+        (tuple[int, str] | None, {"type": "ARRAY", "nullable": True}),
+        (Annotated[tuple[str, int], "pair"], {"type": "ARRAY"}),
     ],
 )
 def test_heterogeneous_tuple_omits_items_and_warns(
-    annotation: object, caplog: pytest.LogCaptureFixture
+    annotation: object, expected: dict[str, object], caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="chatflow_agent.tools"):
         schema = _python_type_to_schema(annotation)
 
-    assert schema == {"type": "ARRAY"}
+    assert schema == expected
     assert "heterogeneous" in caplog.text
 
 
@@ -231,7 +242,7 @@ def test_homogeneous_collections_do_not_log_warnings(caplog: pytest.LogCaptureFi
         (dict[str, list[int]], {"type": "OBJECT"}),
         (Mapping[str, int], {"type": "OBJECT"}),
         (typing.Any, {"type": "STRING"}),
-        (int | None, {"type": "INTEGER"}),
+        (int | None, {"type": "INTEGER", "nullable": True}),
     ],
 )
 def test_non_array_schemas_have_no_items(annotation: object, expected: dict[str, object]) -> None:
@@ -255,8 +266,8 @@ def test_tool_array_parameters_include_items_and_keep_defaults() -> None:
         "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
         "matrix": {"type": "ARRAY", "items": {"type": "ARRAY", "items": {"type": "INTEGER"}}},
         "pair": {"type": "ARRAY", "items": {"type": "NUMBER"}},
-        "labels": {"type": "ARRAY", "items": {"type": "STRING"}, "default": None},
-        "limits": {"type": "ARRAY", "items": {"type": "INTEGER"}, "default": None},
+        "labels": {"type": "ARRAY", "items": {"type": "STRING"}, "default": None, "nullable": True},
+        "limits": {"type": "ARRAY", "items": {"type": "INTEGER"}, "default": None, "nullable": True},
     }
     assert schema["required"] == ["tags", "matrix", "pair"]
 
@@ -295,7 +306,7 @@ def test_tool_annotated_parameters_schema() -> None:
         "count": {"type": "INTEGER"},
         "enabled": {"type": "BOOLEAN"},
         "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
-        "limit": {"type": "INTEGER", "default": None},
+        "limit": {"type": "INTEGER", "default": None, "nullable": True},
         "verbose": {"type": "BOOLEAN", "default": False},
     }
     assert schema["required"] == ["count", "enabled", "tags"]
@@ -522,3 +533,152 @@ async def test_partial_subclass_sync_call_wrapping_async_func() -> None:
     t = Tool(SyncPartial(add, 1), name="sync_partial", description="d")
     assert t.is_async is False
     assert await t.execute_async(b=2) == 3
+
+
+# --- Union/nullability schema generation (#115) -----------------------------
+
+
+def test_optional_with_default_none_is_nullable_and_not_required() -> None:
+    """`x: int | None = None` is excluded from required but allows null."""
+
+    def f(x: int | None = None) -> None: ...  # noqa: E501
+
+    t = Tool(f)
+    x = t.parameters_schema["properties"]["x"]
+    assert "x" not in t.parameters_schema["required"]
+    assert x["type"] == "INTEGER"
+    assert x["nullable"] is True
+    assert x["default"] is None
+
+    # Optional[int] spelling behaves the same as int | None.
+    def g(x: Optional[int] = None) -> None: ...  # noqa: UP045, E501
+
+    t2 = Tool(g)
+    x2 = t2.parameters_schema["properties"]["x"]
+    assert "x" not in t2.parameters_schema["required"]
+    assert x2["type"] == "INTEGER"
+    assert x2["nullable"] is True
+
+
+def test_nullable_without_default_is_required_and_nullable() -> None:
+    """`x: int | None` with no default stays required, but may be null."""
+
+    def f(x: int | None) -> None: ...
+
+    t = Tool(f)
+    x = t.parameters_schema["properties"]["x"]
+    assert t.parameters_schema["required"] == ["x"]
+    assert x["type"] == "INTEGER"
+    assert x["nullable"] is True
+    assert "default" not in x
+
+
+@pytest.mark.parametrize(("annotation", "expected"), [
+    (list[int] | None, {"type": "ARRAY", "items": {"type": "INTEGER"}, "nullable": True}),
+    (dict[str, int] | None, {"type": "OBJECT", "nullable": True}),
+    (tuple[int, ...] | None, {"type": "ARRAY", "items": {"type": "INTEGER"}, "nullable": True}),
+])
+def test_optional_collections_keep_nullable_flag(annotation: object, expected: dict[str, object]) -> None:
+    assert _python_type_to_schema(annotation) == expected
+
+
+def test_numeric_union_widens_to_number_regardless_of_order() -> None:
+    """int | float and float | int both broaden to NUMBER; order must not matter."""
+
+    def a(v: int | float = 0) -> None: ...
+
+    def b(v: float | int = 0.0) -> None: ...
+
+    for fn in (a, b):
+        prop = Tool(fn).parameters_schema["properties"]["v"]
+        assert prop["type"] == "NUMBER"
+        assert "anyOf" not in prop
+
+
+def test_multi_type_union_keeps_every_member() -> None:
+    """int | str and str | int keep both members in an anyOf schema."""
+
+    def a(v: int | str) -> None: ...
+
+    def b(v: str | int) -> None: ...
+
+    for fn, order in ((a, ["INTEGER", "STRING"]), (b, ["STRING", "INTEGER"])):
+        prop = Tool(fn).parameters_schema["properties"]["v"]
+        assert [m["type"] for m in prop["anyOf"]] == order
+
+    t = Tool(a)
+    assert t.parameters_schema["required"] == ["v"]
+
+
+def test_gemini_declaration_keeps_openapi30_nullability() -> None:
+    """Gemini gets uppercase OpenAPI 3.0: nullable flag and anyOf unions."""
+
+    def f(x: int | None = None, v: int | str = 1) -> None: ...
+
+    decl = Tool(f).to_gemini_declaration()
+    params = decl["parameters"]
+    assert params["properties"]["x"]["nullable"] is True
+    assert params["properties"]["x"]["type"] == "INTEGER"
+    assert "nullable" not in params["properties"]["v"]
+    assert [m["type"] for m in params["properties"]["v"]["anyOf"]] == ["INTEGER", "STRING"]
+
+
+def test_openai_parameters_use_json_schema_nullability() -> None:
+    """OpenAI/Anthropic get JSON Schema: lowercase types, anyOf with null."""
+
+    def f(x: int | None = None, v: int | str = 1) -> None: ...
+
+    params = Tool(f).to_openai_parameters()
+    assert params["type"] == "object"
+    assert params["properties"]["x"] == {
+        "type": ["integer", "null"],
+        "default": None,
+    }
+    assert params["properties"]["v"] == {
+        "anyOf": [{"type": "integer"}, {"type": "string"}],
+        "default": 1,
+    }
+    # The canonical schema is not mutated by the JSON-Schema conversion.
+    canonical = Tool(f).parameters_schema
+    assert canonical["properties"]["x"]["nullable"] is True
+
+
+def test_openai_parameters_merge_null_into_anyof() -> None:
+    """A nullable multi-type union adds {"type": "null"} to the anyOf list."""
+
+    def f(v: int | str | None = None) -> None: ...
+
+    prop = Tool(f).to_openai_parameters()["properties"]["v"]
+    assert prop["anyOf"] == [
+        {"type": "integer"},
+        {"type": "string"},
+        {"type": "null"},
+    ]
+
+
+def test_unsupported_union_member_fails_fast_with_descriptive_error() -> None:
+    """A union member with no concrete mapping raises ToolSchemaError, not STRING."""
+
+    class Custom:  # not expressible in any engine's schema vocabulary
+        pass
+
+    def f(v: int | Custom) -> None: ...
+
+    with pytest.raises(ToolSchemaError) as exc_info:
+        Tool(f)
+    message = str(exc_info.value)
+    assert "Custom" in message
+    assert "v" in message
+    assert "union" in message
+
+
+def test_non_union_unknown_types_keep_string_fallback() -> None:
+    """Backwards compatibility: unknown non-union types still fall back to STRING."""
+
+    class Custom:
+        pass
+
+    def f(v: Custom) -> None: ...
+
+    prop = Tool(f).parameters_schema["properties"]["v"]
+    assert prop["type"] == "STRING"

@@ -14,7 +14,7 @@ from typing import (
     get_origin,
 )
 
-from chatflow_agent.exceptions import ToolExecutionError
+from chatflow_agent.exceptions import ToolExecutionError, ToolSchemaError
 
 logger = logging.getLogger("chatflow_agent.tools")
 
@@ -69,6 +69,76 @@ def _array_items_schema(container: Any, args: tuple[Any, ...]) -> dict[str, Any]
     return {"type": "STRING"}
 
 
+def _is_expressible_type(py_type: Any) -> bool:
+    """Whether ``py_type`` maps to a concrete schema type rather than the STRING fallback."""
+    if py_type is inspect.Parameter.empty or py_type is Any:
+        # Explicit fallbacks: unannotated parameters are STRING on purpose.
+        return True
+    origin = get_origin(py_type)
+    while origin is Annotated:
+        py_type = get_args(py_type)[0]
+        origin = get_origin(py_type)
+    if origin in (Union, types.UnionType):
+        return all(
+            _is_expressible_type(arg)
+            for arg in get_args(py_type)
+            if arg is not type(None)
+        )
+    container = origin or py_type
+    return container in TYPE_MAP
+
+
+def _union_to_schema(py_type: Any) -> dict[str, Any]:
+    """Build a schema for a ``Union`` / ``X | Y`` annotation.
+
+    * A single non-``None`` member (``Optional[T]`` / ``T | None``) maps to that
+      member's schema plus a ``nullable: true`` flag instead of silently losing
+      nullability.
+    * Unions combining ``int`` and ``float`` (in either order) broaden to
+      ``NUMBER``, because IEEE 754 numbers subsume integers in JSON Schema and
+      OpenAPI; annotation order must not decide the result.
+    * Unions of distinct concrete types keep every member in an ``anyOf`` list.
+    * A union member that has no concrete schema mapping cannot be expressed
+      validly for any engine, so it fails fast with a descriptive error
+      instead of silently emitting a schema the provider would reject.
+    """
+    members = [arg for arg in get_args(py_type) if arg is not type(None)]
+    nullable = type(None) in get_args(py_type)
+
+    if not members:
+        return {"type": "STRING"}
+
+    if len(members) == 1:
+        schema = _python_type_to_schema(members[0])
+        if nullable:
+            schema = dict(schema)
+            schema["nullable"] = True
+        return schema
+
+    for member in members:
+        if not _is_expressible_type(member):
+            raise ToolSchemaError(
+                f"annotation {py_type!r}: union member {member!r} has no concrete "
+                "schema type mapping, so the union cannot be expressed as a valid "
+                "function-calling schema; use supported primitives or collections "
+                "(str, int, float, bool, list, tuple, set, frozenset, dict) instead"
+            )
+
+    if set(members) == {int, float}:
+        # A JSON 'number' accepts integers, so int|float and float|int both widen to NUMBER.
+        schema = {"type": "NUMBER"}
+        if nullable:
+            schema["nullable"] = True
+        return schema
+
+    schema: dict[str, Any] = {
+        "anyOf": [_python_type_to_schema(member) for member in members]
+    }
+    if nullable:
+        schema["nullable"] = True
+    return schema
+
+
 def _python_type_to_schema(py_type: Any) -> dict[str, Any]:
     """Map a Python type annotation to a Gemini schema fragment.
 
@@ -94,11 +164,7 @@ def _python_type_to_schema(py_type: Any) -> dict[str, Any]:
         return _python_type_to_schema(get_args(py_type)[0])
 
     if origin in (Union, types.UnionType):
-        # Handle Optional[T] which is Union[T, NoneType]
-        args = [arg for arg in get_args(py_type) if arg is not type(None)]
-        if args:
-            return _python_type_to_schema(args[0])
-        return {"type": "STRING"}
+        return _union_to_schema(py_type)
 
     container = origin or py_type
     schema_type = TYPE_MAP.get(container, "STRING")
@@ -111,8 +177,69 @@ def _python_type_to_schema(py_type: Any) -> dict[str, Any]:
 
 
 def _python_type_to_gemini_type(py_type: Any) -> str:
-    """Map a Python type annotation to Gemini schema type string."""
-    return str(_python_type_to_schema(py_type)["type"])
+    """Map a Python type annotation to Gemini schema type string.
+
+    Multi-type unions have more than one valid type; the first member's is
+    reported for this introspection helper.
+    """
+    schema = _python_type_to_schema(py_type)
+    if "anyOf" in schema:
+        return str(schema["anyOf"][0]["type"])
+    return str(schema["type"])
+
+
+_JSON_TYPE_CASE = {
+    "STRING": "string",
+    "INTEGER": "integer",
+    "NUMBER": "number",
+    "BOOLEAN": "boolean",
+    "ARRAY": "array",
+    "OBJECT": "object",
+}
+
+
+def _to_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Convert a canonical (Gemini-style) schema fragment to JSON Schema.
+
+    Types are lowercased, ``nullable: true`` becomes ``anyOf`` including a
+    ``{"type": "null"}`` member (or a ``[type, "null"]`` list for single
+    types), ``anyOf`` members are converted recursively, and defaults and the
+    required list are preserved untouched.
+    """
+    result: dict[str, Any] = {}
+    source = dict(schema)
+    nullable = bool(source.pop("nullable", False))
+
+    for key, value in source.items():
+        if key == "type" and isinstance(value, str):
+            result["type"] = _JSON_TYPE_CASE.get(value.upper(), value.lower())
+        elif key == "type" and isinstance(value, list):
+            result["type"] = [
+                _JSON_TYPE_CASE.get(str(item).upper(), str(item).lower()) if isinstance(item, str) else item
+                for item in value
+            ]
+        elif key == "items":
+            result[key] = _to_json_schema(value)
+        elif key == "properties" and isinstance(value, dict):
+            result[key] = {name: _to_json_schema(prop) for name, prop in value.items()}
+        elif key == "anyOf":
+            result[key] = [_to_json_schema(member) for member in value]
+        else:
+            result[key] = value
+
+    if nullable:
+        if "anyOf" in result:
+            members = list(result["anyOf"])
+            if {"type": "null"} not in members:
+                members.append({"type": "null"})
+            result["anyOf"] = members
+        elif "type" in result:
+            declared = result["type"]
+            types = declared if isinstance(declared, list) else [declared]
+            if "null" not in types:
+                result["type"] = [*types, "null"]
+
+    return result
 
 
 def _resolve_signature(func: Callable[..., Any], tool_name: str) -> inspect.Signature:
@@ -217,7 +344,10 @@ class Tool:
             ):
                 continue
 
-            param_def = _python_type_to_schema(param.annotation)
+            try:
+                param_def = _python_type_to_schema(param.annotation)
+            except ToolSchemaError as err:
+                raise ToolSchemaError(f"tool '{self.name}': parameter '{param_name}': {err}") from err
 
             if param.default is inspect.Parameter.empty:
                 required.append(param_name)
@@ -233,12 +363,27 @@ class Tool:
         }
 
     def to_gemini_declaration(self) -> dict[str, Any]:
-        """Return the function declaration format expected by Google Gemini API."""
+        """Return the function declaration format expected by Google Gemini API.
+
+        The canonical schema already uses OpenAPI 3.0 conventions (uppercase
+        type names, ``nullable: true``, ``anyOf`` for multi-type unions).
+        """
         return {
             "name": self.name,
             "description": self.description,
             "parameters": self.parameters_schema,
         }
+
+    def to_openai_parameters(self) -> dict[str, Any]:
+        """Return JSON-Schema parameters for OpenAI-compatible and Anthropic engines.
+
+        JSON Schema (used by OpenAI and Anthropic tool ``input_schema``) has no
+        ``nullable`` keyword and no uppercase types: types are lowercased and
+        nullability becomes an ``anyOf`` member of ``{"type": "null"}`` (or a
+        ``[type, "null"]`` list for single types). The canonical schema is not
+        mutated.
+        """
+        return _to_json_schema(self.parameters_schema)
 
     async def execute_async(self, **kwargs: Any) -> Any:
         """Execute the tool asynchronously with error handling.

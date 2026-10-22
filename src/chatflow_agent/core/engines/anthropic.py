@@ -112,7 +112,7 @@ class AnthropicEngine(BaseEngine):
                 anthropic_tools.append({
                     "name": t.name,
                     "description": t.description,
-                    "input_schema": _lowercase_schema_types(t.parameters_schema),
+                    "input_schema": _lowercase_schema_types(t.to_openai_parameters()),
                 })
             payload["tools"] = anthropic_tools
 
