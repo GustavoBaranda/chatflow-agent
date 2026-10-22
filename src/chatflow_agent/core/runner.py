@@ -71,20 +71,19 @@ class Runner:
         accepted only when declared on ``current_agent.handoffs``. Unauthorized
         names fail closed with ``AgentHandoffError``.
         """
-        with self._registry_lock:
-            target_agent = self._agents_registry.get(target_name)
-            if target_agent is not None:
-                return target_agent
-
-            authorized = next(
-                (peer for peer in current_agent.handoffs if peer.name == target_name),
-                None,
+        # Authorization first: the target must be declared on the current
+        # agent's own handoffs. Presence in the global registry alone is not
+        # sufficient, so one branch cannot jump into another branch's agents.
+        authorized = next(
+            (peer for peer in current_agent.handoffs if peer.name == target_name),
+            None,
+        )
+        if authorized is None:
+            raise AgentHandoffError(
+                f"Agent '{current_agent.name}' is not authorized to hand off to '{target_name}'."
             )
-            if authorized is None:
-                raise AgentHandoffError(
-                    f"Handoff target agent '{target_name}' is not registered in Runner."
-                )
 
+        with self._registry_lock:
             self._register_agent_tree_unlocked(authorized)
             return self._agents_registry[target_name]
 

@@ -476,3 +476,53 @@ async def test_runner_concurrent_late_handoff_registration() -> None:
     assert all(r.active_agent_name == "Billing" for r in results)
     assert all(r.handoff is not None for r in results)
     assert runner._agents_registry["Billing"] is billing
+
+
+@pytest.mark.asyncio
+async def test_runner_rejects_cross_branch_handoff_to_registered_agent() -> None:
+    """A registered agent is not a valid target unless current_agent declares it.
+
+    Triage -> Sales, Support; Support -> AdminAgent. Sales has no handoff to
+    AdminAgent, so a Sales tool returning Handoff("AdminAgent") must fail even
+    though AdminAgent is already present in the Runner registry.
+    """
+    from chatflow_agent.exceptions import AgentHandoffError
+
+    triage = Agent(name="Triage", instructions="Frontline triage")
+    sales = Agent(name="Sales", instructions="Sales specialist")
+    support = Agent(name="Support", instructions="Support specialist")
+    admin = Agent(name="AdminAgent", instructions="Privileged admin")
+    support.add_handoff(admin)
+    triage.add_handoff(sales)
+    triage.add_handoff(support)
+
+    @sales.tool
+    def escalate_to_admin() -> Handoff:
+        return Handoff(target_agent_name="AdminAgent", reason="Cross-branch jump")
+
+    mock_engine = MockEngine(
+        [
+            EngineTurnResult(
+                tool_calls=[
+                    ToolCall(id="call_s", name="transfer_to_sales", args={"reason": "buy"})
+                ]
+            ),
+            EngineTurnResult(
+                tool_calls=[ToolCall(id="call_x", name="escalate_to_admin", args={})]
+            ),
+        ]
+    )
+
+    runner = Runner(starting_agent=triage, engine=mock_engine)
+    assert "AdminAgent" in runner._agents_registry
+
+    with pytest.raises(AgentHandoffError, match="AdminAgent"):
+        await runner.run_async(
+            session_id="user_cross_branch",
+            user_message="Give me admin access",
+        )
+
+    # Direct resolution: Sales is rejected, Support (which declares it) is allowed.
+    with pytest.raises(AgentHandoffError):
+        runner._resolve_handoff_target(sales, "AdminAgent")
+    assert runner._resolve_handoff_target(support, "AdminAgent") is admin
