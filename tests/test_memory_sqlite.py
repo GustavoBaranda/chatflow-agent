@@ -545,3 +545,49 @@ def test_sqlite_disk_close_still_works(tmp_path: Path, test_agents: tuple[Agent,
         assert row is not None
     finally:
         raw_conn.close()
+
+
+def test_sqlite_in_memory_concurrent_distinct_sessions(test_agents: tuple[Agent, Agent]) -> None:
+    """One :memory: store must accept concurrent writes across distinct sessions."""
+    import concurrent.futures
+
+    triage, _ = test_agents
+    store = SQLiteSessionStore(db_path=":memory:")
+    try:
+
+        def worker(session_idx: int) -> None:
+            ctx = store.get_or_create(f"mem_concurrent_{session_idx}", default_agent=triage)
+            for i in range(5):
+                ctx.add_message(
+                    Message(role=Role.USER, content=f"session {session_idx} msg {i}")
+                )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+            futures = [executor.submit(worker, idx) for idx in range(12)]
+            for fut in concurrent.futures.as_completed(futures):
+                fut.result()
+
+        assert len(store.list_sessions()) == 12
+        for idx in range(12):
+            reloaded = store.get_or_create(f"mem_concurrent_{idx}", default_agent=triage)
+            assert len(reloaded.history) == 5
+    finally:
+        store.close()
+
+
+def test_sqlite_in_memory_context_fails_after_store_close(
+    test_agents: tuple[Agent, Agent],
+) -> None:
+    """Contexts created before close() must fail clearly, not open a fresh empty DB."""
+    triage, _ = test_agents
+    store = SQLiteSessionStore(db_path=":memory:")
+    ctx = store.get_or_create("kept_context", default_agent=triage)
+    ctx.add_message(Message(role=Role.USER, content="before close"))
+    store.close()
+
+    with pytest.raises(RuntimeError, match="closed"):
+        ctx.add_message(Message(role=Role.USER, content="after close"))
+    with pytest.raises(RuntimeError, match="closed"):
+        ctx.update_metadata({"x": 1})
+    with pytest.raises(RuntimeError, match="closed"):
+        ctx.clear_history()
