@@ -487,3 +487,38 @@ async def test_nested_partial_async_callable_instance_tool() -> None:
     assert t.is_async is True
     assert await t.execute_async(b=2) == 6
 
+
+
+@pytest.mark.asyncio
+async def test_partial_subclass_async_call_wrapping_sync_func() -> None:
+    """A partial subclass with async __call__ is async even if .func is sync."""
+    import functools
+
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    class AsyncPartial(functools.partial):  # type: ignore[type-arg]
+        async def __call__(self, *args: object, **kwargs: object) -> object:
+            return super().__call__(*args, **kwargs)
+
+    t = Tool(AsyncPartial(add, 1), name="async_partial", description="d")
+    assert t.is_async is True
+    assert await t.execute_async(b=2) == 3
+
+
+@pytest.mark.asyncio
+async def test_partial_subclass_sync_call_wrapping_async_func() -> None:
+    """A partial subclass with sync __call__ is sync even if .func is async."""
+    import asyncio
+    import functools
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    class SyncPartial(functools.partial):  # type: ignore[type-arg]
+        def __call__(self, *args: object, **kwargs: object) -> object:
+            return asyncio.run(super().__call__(*args, **kwargs))
+
+    t = Tool(SyncPartial(add, 1), name="sync_partial", description="d")
+    assert t.is_async is False
+    assert await t.execute_async(b=2) == 3

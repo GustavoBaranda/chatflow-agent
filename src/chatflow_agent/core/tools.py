@@ -164,10 +164,16 @@ class Tool:
 
         Handles plain async functions, ``functools.partial`` wrappers (including
         nested ones), and callable instances that implement ``async __call__``.
-        Detection unwraps ``partial`` first so that an async callable instance
-        wrapped in ``partial`` is still classified as async.
+        Plain ``partial`` wrappers are unwrapped so that an async callable instance
+        wrapped in ``partial`` is still classified as async. A ``partial``
+        subclass that overrides ``__call__`` is classified by its own
+        ``__call__`` instead of the wrapped ``.func``.
         """
         while isinstance(func, functools.partial):
+            # A partial subclass that overrides __call__ defines its own
+            # calling behaviour; that takes precedence over the wrapped .func.
+            if type(func).__call__ is not functools.partial.__call__:
+                return inspect.iscoroutinefunction(type(func).__call__)
             func = func.func
         if inspect.iscoroutinefunction(func):
             return True
