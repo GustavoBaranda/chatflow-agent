@@ -1,9 +1,13 @@
 """Tests for chatflow-agent Agent class and synthetic handoff generation."""
 
+import re
+
 import pytest
 
-from chatflow_agent.core.agent import Agent
+from chatflow_agent.core.agent import Agent, _sanitize_tool_name
 from chatflow_agent.types import Handoff
+
+_TOOL_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 def test_agent_initialization() -> None:
@@ -101,19 +105,21 @@ def test_agent_user_tool_takes_precedence_over_synthetic_handoff() -> None:
 
     for _ in range(2):
         all_tools = agent.get_all_tools()
-        assert [t.name for t in all_tools] == [
-            "transfer_to_billing",
-            "transfer_to_technical_support",
-        ]
+        names = [t.name for t in all_tools]
+        assert names[0] == "transfer_to_billing"
         assert all_tools[0] is transfer_to_billing
         assert all_tools[0].execute(account_id="demo-1") == "Custom billing route for demo-1"
         assert all_tools[0].parameters_schema["required"] == ["account_id"]
+        # User tool keeps the preferred name; handoffs are disambiguated and preserved.
+        assert "transfer_to_technical_support" in names
+        assert len(all_tools) == 3
+        assert len(set(names)) == 3
 
     assert agent.tools == [transfer_to_billing]
     assert agent.handoffs == [billing_agent, tech_agent]
 
 
-def test_agent_sanitized_handoff_name_collision_keeps_first_peer() -> None:
+def test_agent_sanitized_handoff_name_collision_disambiguates_peers() -> None:
     billing_agent = Agent(name="Billing Team", instructions="Handle invoices.")
     other_billing_agent = Agent(name="billing-team", instructions="Handle subscriptions.")
     agent = Agent(
@@ -123,12 +129,93 @@ def test_agent_sanitized_handoff_name_collision_keeps_first_peer() -> None:
     )
 
     all_tools = agent.get_all_tools()
+    tool_names = [t.name for t in all_tools]
 
-    assert [t.name for t in all_tools] == ["transfer_to_billing_team"]
+    assert len(all_tools) == 2
+    assert len(set(tool_names)) == 2
+    assert tool_names[0] == "transfer_to_billing_team"
+    assert tool_names[1].startswith("transfer_to_billing_team")
+    assert all(_TOOL_NAME_RE.fullmatch(n) and len(n) <= 60 for n in tool_names)
+
     result = all_tools[0].execute(reason="Invoice query")
     assert isinstance(result, Handoff)
     assert result.target_agent_name == "Billing Team"
     assert result.reason == "Invoice query"
+
+    other = all_tools[1].execute(reason="Subscription query")
+    assert isinstance(other, Handoff)
+    assert other.target_agent_name == "billing-team"
+
+
+def test_sanitize_accented_latin_transliteration() -> None:
+    assert _sanitize_tool_name("Atención al Cliente") == "transfer_to_atencion_al_cliente"
+    assert _sanitize_tool_name("Soporte Técnico") == "transfer_to_soporte_tecnico"
+
+
+def test_sanitize_ascii_names_unchanged() -> None:
+    assert _sanitize_tool_name("Billing Agent") == "transfer_to_billing_agent"
+    assert _sanitize_tool_name("Technical Support") == "transfer_to_technical_support"
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["客户服务", "Техподдержка", "خدمة العملاء", "🤖", "销售专员"],
+)
+def test_sanitize_non_latin_produces_deterministic_valid_name(name: str) -> None:
+    first = _sanitize_tool_name(name)
+    second = _sanitize_tool_name(name)
+    assert first == second
+    assert first.startswith("transfer_to_")
+    assert first != "transfer_to_"
+    assert _TOOL_NAME_RE.fullmatch(first)
+    assert len(first) <= 60
+
+
+def test_unicode_handoffs_are_all_preserved_without_collision() -> None:
+    triage = Agent("triage", "frontline")
+    support = Agent("客户服务", "support instructions")
+    sales = Agent("销售专员", "sales instructions")
+    triage.add_handoff(support)
+    triage.add_handoff(sales)
+
+    tools = triage.get_all_tools()
+    names = [t.name for t in tools]
+
+    assert len(tools) == 2
+    assert len(set(names)) == 2
+    assert "transfer_to_" not in names
+    assert all(_TOOL_NAME_RE.fullmatch(n) and len(n) <= 60 for n in names)
+
+    targets = {t.execute(reason="route").target_agent_name for t in tools}
+    assert targets == {"客户服务", "销售专员"}
+
+
+def test_user_tool_name_collision_still_preserves_handoff() -> None:
+    billing_agent = Agent(name="Billing", instructions="Handle invoices.")
+    tech_agent = Agent(name="Technical Support", instructions="Troubleshoot issues.")
+    agent = Agent(name="Triage", instructions="Route users.", handoffs=[billing_agent, tech_agent])
+
+    @agent.tool
+    def transfer_to_billing(account_id: str) -> str:
+        return f"Custom billing route for {account_id}"
+
+    all_tools = agent.get_all_tools()
+    names = [t.name for t in all_tools]
+
+    assert names[0] == "transfer_to_billing"
+    assert all_tools[0] is transfer_to_billing
+    assert "transfer_to_technical_support" in names
+    # Billing handoff must still appear under a disambiguated name.
+    handoff_names = [n for n in names if n != "transfer_to_billing"]
+    assert len(handoff_names) == 2
+    assert len(set(names)) == 3
+
+
+def test_sanitize_tool_name_respects_length_limit() -> None:
+    long_name = "A" * 80
+    sanitized = _sanitize_tool_name(long_name)
+    assert len(sanitized) <= 60
+    assert _TOOL_NAME_RE.fullmatch(sanitized)
 
 
 @pytest.mark.parametrize("name", ["", "   ", "\t\n"])

@@ -1,18 +1,60 @@
 """Agent abstraction and peer handoff orchestration for chatflow-agent."""
 
+import hashlib
 import re
+import unicodedata
 from collections.abc import Callable
 from typing import Any
 
 from chatflow_agent.core.tools import Tool
 from chatflow_agent.types import Handoff
 
+_MAX_TOOL_NAME_LEN = 60
+_HANDOFF_PREFIX = "transfer_to_"
+
 
 def _sanitize_tool_name(name: str) -> str:
-    """Convert an agent name into a valid tool identifier (alphanumeric and underscores)."""
-    clean = re.sub(r"[^a-zA-Z0-9_]", "_", name.strip().lower())
+    """Convert an agent name into a valid tool identifier.
+
+    Accented Latin characters are transliterated via NFKD normalization.
+    Names that yield no ASCII alphanumeric content (non-Latin scripts, emojis)
+    fall back to a deterministic hash so the result is never empty.
+    The full tool name is capped at 60 characters and matches
+    ``^[a-zA-Z_][a-zA-Z0-9_]*$``.
+    """
+    stripped = name.strip()
+    normalized = unicodedata.normalize("NFKD", stripped)
+    without_marks = "".join(c for c in normalized if not unicodedata.combining(c))
+    clean = re.sub(r"[^a-zA-Z0-9_]", "_", without_marks.lower())
     clean = re.sub(r"_+", "_", clean).strip("_")
-    return f"transfer_to_{clean}"
+
+    if not clean:
+        digest = hashlib.sha256(stripped.encode("utf-8")).hexdigest()[:12]
+        clean = f"u{digest}"
+
+    max_clean_len = _MAX_TOOL_NAME_LEN - len(_HANDOFF_PREFIX)
+    if len(clean) > max_clean_len:
+        clean = clean[:max_clean_len].rstrip("_")
+        if not clean:
+            digest = hashlib.sha256(stripped.encode("utf-8")).hexdigest()[:12]
+            clean = f"u{digest}"[:max_clean_len]
+
+    return f"{_HANDOFF_PREFIX}{clean}"
+
+
+def _allocate_tool_name(base_name: str, used: set[str]) -> str:
+    """Return ``base_name`` or a disambiguated variant absent from ``used``."""
+    if base_name not in used:
+        return base_name
+
+    counter = 2
+    while True:
+        suffix = f"_{counter}"
+        max_base_len = _MAX_TOOL_NAME_LEN - len(suffix)
+        candidate = base_name[:max_base_len].rstrip("_") + suffix
+        if candidate not in used:
+            return candidate
+        counter += 1
 
 
 class Agent:
@@ -106,9 +148,8 @@ class Agent:
         self.handoffs = [h for h in self.handoffs if h.name != target_agent.name]
         self.handoffs.append(target_agent)
 
-    def _create_handoff_tool(self, target_agent: "Agent") -> Tool:
+    def _create_handoff_tool(self, target_agent: "Agent", tool_name: str) -> Tool:
         """Generate a synthetic routing tool that transfers control to target_agent."""
-        tool_name = _sanitize_tool_name(target_agent.name)
         desc = (
             f"Hand off the dialogue to '{target_agent.name}'. "
             f"Target agent specialty: {target_agent.get_instructions()[:120]}..."
@@ -124,14 +165,13 @@ class Agent:
         return Tool(func=handoff_executor, name=tool_name, description=desc)
 
     def get_all_tools(self) -> list[Tool]:
-        """Combine tools, keeping user tools and the first handoff for each name."""
+        """Combine user tools with handoff tools, disambiguating name collisions."""
         combined: list[Tool] = list(self.tools)
         tool_names = {t.name for t in combined}
         for peer in self.handoffs:
-            tool_name = _sanitize_tool_name(peer.name)
-            if tool_name in tool_names:
-                continue
-            combined.append(self._create_handoff_tool(peer))
+            base_name = _sanitize_tool_name(peer.name)
+            tool_name = _allocate_tool_name(base_name, tool_names)
+            combined.append(self._create_handoff_tool(peer, tool_name))
             tool_names.add(tool_name)
         return combined
 
