@@ -454,3 +454,36 @@ async def test_async_callable_instance_tool() -> None:
     res = await t.execute_async(x=5)
     assert res == 15
 
+
+@pytest.mark.asyncio
+async def test_partial_async_callable_instance_tool() -> None:
+    """Tool detects async when functools.partial wraps an async callable instance."""
+    import functools
+
+    class AsyncCallable:
+        """Doubles a value asynchronously."""
+
+        async def __call__(self, value: int) -> int:
+            return value * 2
+
+    wrapped = functools.partial(AsyncCallable())
+    t = Tool(wrapped)
+    assert t.is_async is True
+    result = await t.execute_async(value=3)
+    assert result == 6
+
+
+@pytest.mark.asyncio
+async def test_nested_partial_async_callable_instance_tool() -> None:
+    """Nested functools.partial wrappers still detect async callable instances."""
+    import functools
+
+    class AsyncAdder:
+        async def __call__(self, a: int, b: int) -> int:
+            return a + b
+
+    wrapped = functools.partial(functools.partial(AsyncAdder(), 4))
+    t = Tool(wrapped)
+    assert t.is_async is True
+    assert await t.execute_async(b=2) == 6
+
