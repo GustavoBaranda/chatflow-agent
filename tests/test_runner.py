@@ -354,3 +354,125 @@ def test_runner_run_raises_inside_running_loop() -> None:
             and "never awaited" in str(w.message)
         ]
         assert unawaited == [], f"Unexpected unawaited coroutine warnings: {unawaited}"
+
+
+@pytest.mark.asyncio
+async def test_runner_resolves_handoff_added_after_initialization() -> None:
+    """Peers registered via add_handoff after Runner creation must resolve successfully."""
+    from chatflow_agent.exceptions import AgentHandoffError
+
+    triage = Agent(name="Triage", instructions="Frontline triage")
+    billing = Agent(name="Billing", instructions="Billing specialist")
+    nested = Agent(name="Nested Billing", instructions="Nested specialist")
+    billing.add_handoff(nested)
+
+    mock_engine = MockEngine(
+        [
+            EngineTurnResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call_h1",
+                        name="transfer_to_billing",
+                        args={"reason": "Invoice question"},
+                    )
+                ]
+            ),
+            EngineTurnResult(text="Billing can help with that invoice."),
+        ]
+    )
+
+    runner = Runner(starting_agent=triage, engine=mock_engine)
+    assert "Billing" not in runner._agents_registry
+
+    triage.add_handoff(billing)
+
+    response = await runner.run_async(
+        session_id="user_late_handoff",
+        user_message="I need help with my bill",
+    )
+
+    assert response.active_agent_name == "Billing"
+    assert response.content == "Billing can help with that invoice."
+    assert response.handoff is not None
+    assert response.handoff.target_agent_name == "Billing"
+    assert "Billing" in runner._agents_registry
+    assert "Nested Billing" in runner._agents_registry
+    # Guard against regressions that drop the fail-closed path.
+    with pytest.raises(AgentHandoffError):
+        runner._resolve_handoff_target(triage, "Ghost Agent")
+
+
+@pytest.mark.asyncio
+async def test_runner_rejects_unauthorized_handoff_not_in_current_handoffs() -> None:
+    """Arbitrary Handoff targets outside current_agent.handoffs must fail closed."""
+    from chatflow_agent.exceptions import AgentHandoffError
+
+    triage = Agent(name="Triage", instructions="Frontline triage")
+    billing = Agent(name="Billing", instructions="Billing specialist")
+
+    @triage.tool
+    def sneak_to_billing() -> Handoff:
+        return Handoff(target_agent_name="Billing", reason="Unauthorized path")
+
+    mock_engine = MockEngine(
+        [
+            EngineTurnResult(
+                tool_calls=[ToolCall(id="call_bad", name="sneak_to_billing", args={})]
+            ),
+        ]
+    )
+
+    runner = Runner(starting_agent=triage, engine=mock_engine)
+    # Billing exists but was never authorized on triage.handoffs.
+    runner.register_agent(billing)
+    # Remove billing from the registry to force the late-bind authorization check.
+    runner._agents_registry.pop("Billing", None)
+
+    with pytest.raises(AgentHandoffError, match="Billing"):
+        await runner.run_async(
+            session_id="user_unauthorized_handoff",
+            user_message="Bypass triage routing",
+        )
+
+    assert "Billing" not in runner._agents_registry
+
+
+@pytest.mark.asyncio
+async def test_runner_concurrent_late_handoff_registration() -> None:
+    """Concurrent sessions must safely register the same late-bound peer."""
+    import asyncio
+
+    triage = Agent(name="Triage", instructions="Frontline triage")
+    billing = Agent(name="Billing", instructions="Billing specialist")
+
+    class LateHandoffEngine(BaseEngine):
+        async def generate_turn_async(
+            self,
+            agent: Agent,
+            history: list[Message],
+        ) -> EngineTurnResult:
+            if agent.name == "Triage":
+                return EngineTurnResult(
+                    tool_calls=[
+                        ToolCall(
+                            id="call_h",
+                            name="transfer_to_billing",
+                            args={"reason": "parallel"},
+                        )
+                    ]
+                )
+            return EngineTurnResult(text=f"Handled by {agent.name}.")
+
+    runner = Runner(starting_agent=triage, engine=LateHandoffEngine())
+    triage.add_handoff(billing)
+
+    results = await asyncio.gather(
+        *[
+            runner.run_async(session_id=f"concurrent-{i}", user_message="bill help")
+            for i in range(8)
+        ]
+    )
+
+    assert all(r.active_agent_name == "Billing" for r in results)
+    assert all(r.handoff is not None for r in results)
+    assert runner._agents_registry["Billing"] is billing

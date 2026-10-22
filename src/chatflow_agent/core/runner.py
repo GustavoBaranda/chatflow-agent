@@ -3,6 +3,7 @@
 import asyncio
 import copy
 import logging
+import threading
 import uuid
 from typing import Any
 
@@ -44,6 +45,7 @@ class Runner:
 
         # Registry of all known agents (starting agent + all transitive handoffs)
         self._agents_registry: dict[str, Agent] = {}
+        self._registry_lock = threading.Lock()
         self._register_agent_tree(self.starting_agent)
 
         if hasattr(self.session_store, "set_agent_resolver"):
@@ -51,11 +53,40 @@ class Runner:
 
     def _register_agent_tree(self, root: Agent) -> None:
         """Traverse and index all agents in the handoff tree."""
+        with self._registry_lock:
+            self._register_agent_tree_unlocked(root)
+
+    def _register_agent_tree_unlocked(self, root: Agent) -> None:
+        """Index ``root`` and its reachable peers. Caller must hold ``_registry_lock``."""
         if root.name in self._agents_registry:
             return
         self._agents_registry[root.name] = root
         for peer in root.handoffs:
-            self._register_agent_tree(peer)
+            self._register_agent_tree_unlocked(peer)
+
+    def _resolve_handoff_target(self, current_agent: Agent, target_name: str) -> Agent:
+        """Resolve a handoff target from the registry or an authorized late-bound peer.
+
+        Peers added via ``Agent.add_handoff()`` after ``Runner`` construction are
+        accepted only when declared on ``current_agent.handoffs``. Unauthorized
+        names fail closed with ``AgentHandoffError``.
+        """
+        with self._registry_lock:
+            target_agent = self._agents_registry.get(target_name)
+            if target_agent is not None:
+                return target_agent
+
+            authorized = next(
+                (peer for peer in current_agent.handoffs if peer.name == target_name),
+                None,
+            )
+            if authorized is None:
+                raise AgentHandoffError(
+                    f"Handoff target agent '{target_name}' is not registered in Runner."
+                )
+
+            self._register_agent_tree_unlocked(authorized)
+            return self._agents_registry[target_name]
 
     def register_agent(self, agent: Agent) -> None:
         """Manually register an agent to the runner index."""
@@ -160,12 +191,9 @@ class Runner:
                             # Check if tool execution resulted in a Handoff
                             if isinstance(raw_output, Handoff):
                                 target_name = raw_output.target_agent_name
-                                target_agent = self._agents_registry.get(target_name)
-
-                                if not target_agent:
-                                    raise AgentHandoffError(
-                                        f"Handoff target agent '{target_name}' is not registered in Runner."
-                                    )
+                                target_agent = self._resolve_handoff_target(
+                                    current_agent, target_name
+                                )
 
                                 handoff_counter += 1
 
