@@ -175,3 +175,47 @@ def test_status_update_webhook_ignored(configured_channel: WhatsAppChannel) -> N
     res = client.post("/webhook", json=payload)
     assert res.status_code == 200
     assert res.json()["status"] == "ignored_or_status_update"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"[1, 2, 3]",
+        b"[]",
+        b'"hello"',
+        b'""',
+        b"42",
+        b"0",
+        b"3.14",
+        b"true",
+        b"false",
+        b"null",
+    ],
+)
+def test_webhook_rejects_non_object_json_payload(
+    body: bytes, configured_channel: WhatsAppChannel
+) -> None:
+    """Valid JSON whose root is not an object must yield 400, never 500."""
+    client = TestClient(configured_channel.app, raise_server_exceptions=False)
+    res = client.post(
+        "/webhook",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert res.status_code == 400
+    assert res.json() == {"detail": "JSON payload must be an object"}
+    assert configured_channel.runner.get_session("5491112345678") is None
+
+
+def test_webhook_malformed_json_still_reports_invalid_json(
+    configured_channel: WhatsAppChannel,
+) -> None:
+    """Unparseable bodies keep the original 400 / "Invalid JSON payload" path."""
+    client = TestClient(configured_channel.app, raise_server_exceptions=False)
+    res = client.post(
+        "/webhook",
+        content=b"{not valid json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert res.status_code == 400
+    assert res.json() == {"detail": "Invalid JSON payload"}

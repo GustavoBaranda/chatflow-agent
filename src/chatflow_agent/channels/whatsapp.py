@@ -215,6 +215,12 @@ class WhatsAppChannel(BaseChannel):
                     detail="Invalid JSON payload",
                 ) from err
 
+            if not isinstance(payload, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="JSON payload must be an object",
+                )
+
             extracted_messages = self._extract_messages(payload)
             if not extracted_messages:
                 return JSONResponse(content={"status": "ignored_or_status_update"})
