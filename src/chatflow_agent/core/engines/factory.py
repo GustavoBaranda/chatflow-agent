@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING, cast
 from chatflow_agent.core.engines.anthropic import AnthropicEngine
 from chatflow_agent.core.engines.base import BaseEngine
 from chatflow_agent.core.engines.gemini import GeminiEngine
-from chatflow_agent.core.engines.openai_compatible import OpenAIEngine
+from chatflow_agent.core.engines.openai_compatible import (
+    PROVIDER_PRESETS,
+    OpenAIEngine,
+    _is_official_endpoint,
+)
 
 if TYPE_CHECKING:
     from chatflow_agent.core.agent import Agent
@@ -16,6 +20,20 @@ _OPENAI_COMPATIBLE_PREFIXES = (
 _CLAUDE_PREFIXES = ("claude-",)
 _GEMINI_PREFIXES = ("gemini-",)
 _OLLAMA_PREFIXES = ("gemma", "llama", "mistral", "qwen", "phi")
+
+
+def _provider_for_official_base_url(base_url: str) -> str:
+    """Return the preset whose official endpoint is exactly base_url, else "openai".
+
+    The provider decides which environment key OpenAIEngine may read, so a
+    base_url only selects a provider when it is that provider's official endpoint.
+    Any other URL keeps "openai", whose engine then requires an explicit api_key
+    (or applies the local-endpoint rule).
+    """
+    for name, preset in PROVIDER_PRESETS.items():
+        if _is_official_endpoint(base_url, preset["base_url"]):
+            return name
+    return "openai"
 
 
 def resolve_engine(agent: "Agent", default_engine: BaseEngine | None = None) -> BaseEngine:
@@ -47,9 +65,15 @@ def resolve_engine(agent: "Agent", default_engine: BaseEngine | None = None) -> 
     if provider in ("openai", "grok", "xai", "ollama", "gemma", "deepseek", "groq"):
         return OpenAIEngine(api_key=api_key, base_url=base_url, provider=provider)
 
-    # 3. Agent has custom base_url or api_key without provider
+    # 3. Agent has custom base_url or api_key without provider. An official
+    #    endpoint (e.g. DeepSeek's) selects its own provider and environment key;
+    #    OPENAI_API_KEY is never assumed for another host.
     if base_url:
-        return OpenAIEngine(api_key=api_key, base_url=base_url, provider="openai")
+        return OpenAIEngine(
+            api_key=api_key,
+            base_url=base_url,
+            provider=_provider_for_official_base_url(base_url),
+        )
 
     # 4. If Runner provided a default_engine (e.g. MockEngine or pre-configured engine), respect it!
     if default_engine is not None:

@@ -3,14 +3,16 @@
 import asyncio
 import json
 import logging
-import os
 import random
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult
-from chatflow_agent.core.engines.openai_compatible import _lowercase_schema_types
+from chatflow_agent.core.engines.openai_compatible import (
+    _lowercase_schema_types,
+    _resolve_api_key,
+)
 from chatflow_agent.exceptions import ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
 
@@ -19,6 +21,8 @@ logger = logging.getLogger("chatflow_agent.engine.anthropic")
 if TYPE_CHECKING:
     from chatflow_agent.core.agent import Agent
 
+ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+
 
 class AnthropicEngine(BaseEngine):
     """Coordinates API requests with Anthropic Claude using Messages API over httpx."""
@@ -26,13 +30,20 @@ class AnthropicEngine(BaseEngine):
     def __init__(
         self,
         api_key: str | None = None,
-        base_url: str = "https://api.anthropic.com/v1",
+        base_url: str = ANTHROPIC_BASE_URL,
         anthropic_version: str = "2023-06-01",
         timeout: float = 60.0,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self.base_url = base_url.rstrip("/")
+        # ANTHROPIC_API_KEY goes only to the official endpoint; proxies, gateways
+        # and local servers need an explicit api_key.
+        self.api_key = _resolve_api_key(
+            api_key,
+            self.base_url,
+            official_base_url=ANTHROPIC_BASE_URL,
+            env_key="ANTHROPIC_API_KEY",
+        )
         self.anthropic_version = anthropic_version
         self.timeout = timeout
         self.max_retries = 3
@@ -88,7 +99,9 @@ class AnthropicEngine(BaseEngine):
         history: list[Message],
     ) -> EngineTurnResult:
         """Call Anthropic Messages API asynchronously."""
-        if not self.api_key:
+        # api_key="" is an explicit choice to send no credential (e.g. an
+        # unauthenticated gateway); only a missing key is an error.
+        if self.api_key is None:
             raise ProviderError(
                 "Anthropic API key is not configured. Set ANTHROPIC_API_KEY environment variable."
             )
@@ -117,10 +130,11 @@ class AnthropicEngine(BaseEngine):
             payload["tools"] = anthropic_tools
 
         headers = {
-            "x-api-key": self.api_key,
             "anthropic-version": self.anthropic_version,
             "content-type": "application/json",
         }
+        if self.api_key:
+            headers["x-api-key"] = self.api_key
 
         url = f"{self.base_url}/messages"
 
@@ -128,7 +142,16 @@ class AnthropicEngine(BaseEngine):
         while True:
             client = self._external_client or httpx.AsyncClient(timeout=self.timeout)
             try:
-                resp = await client.post(url, json=payload, headers=headers)
+                # Never follow redirects, even on an injected client configured to:
+                # httpx keeps x-api-key on cross-origin redirects.
+                resp = await client.post(
+                    url, json=payload, headers=headers, follow_redirects=False
+                )
+                if 300 <= resp.status_code < 400:
+                    raise ProviderError(
+                        f"Anthropic API request was redirected (HTTP {resp.status_code}). "
+                        "Redirects are not followed; set base_url to the final endpoint."
+                    )
                 if resp.status_code in (429, 500, 502, 503, 504, 529):
                     if retries < self.max_retries:
                         retry_after_str = resp.headers.get("Retry-After")

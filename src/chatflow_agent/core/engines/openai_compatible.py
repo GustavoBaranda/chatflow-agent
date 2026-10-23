@@ -45,6 +45,61 @@ def _is_local_base_url(base_url: str) -> bool:
     return hostname in _LOOPBACK_HOSTS or hostname in _COMPAT_LOCAL_BIND_HOSTS
 
 
+def _is_official_endpoint(base_url: str, official_base_url: str) -> bool:
+    """Return True only when base_url is exactly the given official HTTPS endpoint.
+
+    Both URLs are parsed with httpx, the client that sends the request, and compared
+    by scheme, host, port and path. Look-alike hosts, userinfo, plain HTTP, a query,
+    a fragment or a different path never match.
+    """
+    try:
+        url = httpx.URL(base_url)
+        official = httpx.URL(official_base_url)
+    except (httpx.InvalidURL, TypeError, ValueError):
+        return False
+
+    if url.scheme != "https" or url.userinfo or url.query or url.fragment:
+        return False
+    return (
+        url.host == official.host
+        and (url.port or 443) == (official.port or 443)
+        and url.path.rstrip("/") == official.path.rstrip("/")
+    )
+
+
+def _redact_url(url: str) -> str:
+    """Return scheme, host, port and path only, so error messages never echo userinfo or a query."""
+    try:
+        parsed = httpx.URL(url)
+    except (httpx.InvalidURL, TypeError, ValueError):
+        return "<invalid URL>"
+    return f"{parsed.scheme}://{parsed.netloc.decode('ascii', 'replace')}{parsed.path}"
+
+
+def _resolve_api_key(
+    api_key: str | None,
+    base_url: str,
+    *,
+    official_base_url: str,
+    env_key: str,
+) -> str | None:
+    """Resolve the credential for a request to base_url.
+
+    An explicit api_key (including "") is always used as given. The environment
+    variable env_key is read only when base_url is the official endpoint of the
+    provider that issued that key. Any other endpoint requires an explicit api_key.
+    """
+    if api_key is not None:
+        return api_key
+    if _is_official_endpoint(base_url, official_base_url):
+        return os.environ.get(env_key)
+    raise ValueError(
+        f"A custom or unofficial base_url was provided ({_redact_url(base_url)!r}) without an explicit api_key. "
+        f"{env_key} is only sent to its official endpoint ({official_base_url}), so it is not used here. "
+        "Please provide api_key explicitly (or pass api_key='' if no authentication is required)."
+    )
+
+
 # Preset configurations for common OpenAI-compatible providers
 PROVIDER_PRESETS: dict[str, dict[str, str]] = {
     "openai": {
@@ -119,32 +174,24 @@ class OpenAIEngine(BaseEngine):
             or preset.get("base_url", "https://api.openai.com/v1")
         ).rstrip("/")
 
-        official_base_urls = {
-            p["base_url"].rstrip("/") for p in PROVIDER_PRESETS.values()
-        }
-        is_official = self.base_url in official_base_urls
-        is_local = _is_local_base_url(self.base_url)
-
         env_key_name = preset.get("env_key", "OPENAI_API_KEY")
 
         self.api_key: str | None
-        if api_key is not None:
-            self.api_key = api_key
-        elif is_local:
+        if api_key is None and _is_local_base_url(self.base_url):
             # For local services (Ollama, LM Studio, vLLM on localhost), do not leak global cloud API keys
             self.api_key = (
                 os.environ.get(env_key_name)
                 if self.provider in ("ollama", "gemma")
                 else None
             ) or "ollama"
-        elif is_official:
-            self.api_key = os.environ.get(env_key_name)
         else:
-            raise ValueError(
-                f"A custom or unofficial base_url was provided ({self.base_url!r}) without an explicit api_key. "
-                f"To prevent accidental leakage of your global {env_key_name} to untrusted endpoints, "
-                "fallback to environment API keys is disabled. "
-                "Please provide api_key explicitly (or pass api_key='' if no authentication is required)."
+            # The env key of the declared provider goes only to that provider's
+            # official endpoint, never to another preset's URL or a custom one.
+            self.api_key = _resolve_api_key(
+                api_key,
+                self.base_url,
+                official_base_url=preset.get("base_url", "https://api.openai.com/v1"),
+                env_key=env_key_name,
             )
         self.timeout = timeout
         self.max_retries = 3
@@ -241,7 +288,16 @@ class OpenAIEngine(BaseEngine):
         while True:
             client = self._external_client or httpx.AsyncClient(timeout=self.timeout)
             try:
-                resp = await client.post(url, json=payload, headers=headers)
+                # Never follow redirects, even on an injected client configured to:
+                # the credential must not be replayed to whatever host a 3xx names.
+                resp = await client.post(
+                    url, json=payload, headers=headers, follow_redirects=False
+                )
+                if 300 <= resp.status_code < 400:
+                    raise ProviderError(
+                        f"{self.provider.upper()} API request was redirected (HTTP {resp.status_code}). "
+                        "Redirects are not followed; set base_url to the final endpoint."
+                    )
                 if resp.status_code in (429, 500, 502, 503, 504):
                     if retries < self.max_retries:
                         retry_after_str = resp.headers.get("Retry-After")
