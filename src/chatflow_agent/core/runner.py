@@ -117,19 +117,46 @@ class Runner:
             self._register_agent_tree_unlocked(root)
 
     def _register_agent_tree_unlocked(self, root: Agent) -> None:
-        """Index ``root`` and its reachable peers. Caller must hold ``_registry_lock``."""
-        if root.name in self._agents_registry:
-            return
+        """Index ``root`` and its reachable peers. Caller must hold ``_registry_lock``.
+
+        The same agent instance may appear on several branches (a DAG). Two
+        distinct instances that share a name are a configuration error.
+        """
+        existing = self._agents_registry.get(root.name)
+        if existing is not None:
+            if existing is root:
+                return
+            raise ValueError(
+                f"Duplicate agent name {root.name!r}: distinct Agent instances "
+                "cannot share a name in one Runner tree."
+            )
         self._agents_registry[root.name] = root
         for peer in root.handoffs:
             self._register_agent_tree_unlocked(peer)
 
+    def _agent_reachable_unlocked(self, target: Agent) -> bool:
+        """Return whether ``target`` is reachable from ``starting_agent``."""
+        seen: set[int] = set()
+        stack = [self.starting_agent]
+        while stack:
+            agent = stack.pop()
+            identity = id(agent)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if agent is target:
+                return True
+            stack.extend(agent.handoffs)
+        return False
+
     def _resolve_handoff_target(self, current_agent: Agent, target_name: str) -> Agent:
-        """Resolve a handoff target from the registry or an authorized late-bound peer.
+        """Resolve a handoff target to the peer the current agent declares.
 
         Peers added via ``Agent.add_handoff()`` after ``Runner`` construction are
         accepted only when declared on ``current_agent.handoffs``. Unauthorized
-        names fail closed with ``AgentHandoffError``.
+        names fail closed with ``AgentHandoffError``. When a late replacement
+        swaps in a new object under the same name, the registry is updated to
+        that object unless the previous instance is still reachable elsewhere.
         """
         # Authorization first: the target must be declared on the current
         # agent's own handoffs. Presence in the global registry alone is not
@@ -144,8 +171,21 @@ class Runner:
             )
 
         with self._registry_lock:
-            self._register_agent_tree_unlocked(authorized)
-            return self._agents_registry[target_name]
+            existing = self._agents_registry.get(target_name)
+            if existing is None:
+                self._register_agent_tree_unlocked(authorized)
+                return authorized
+            if existing is authorized:
+                return authorized
+            if self._agent_reachable_unlocked(existing):
+                raise ValueError(
+                    f"Duplicate agent name {target_name!r}: distinct Agent instances "
+                    "cannot share a name in one Runner tree."
+                )
+            self._agents_registry[target_name] = authorized
+            for peer in authorized.handoffs:
+                self._register_agent_tree_unlocked(peer)
+            return authorized
 
     def register_agent(self, agent: Agent) -> None:
         """Manually register an agent to the runner index."""
