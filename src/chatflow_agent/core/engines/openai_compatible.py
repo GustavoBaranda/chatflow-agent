@@ -122,6 +122,12 @@ def _lowercase_schema_types(schema: Any) -> Any:
 
 
 
+def _body_excerpt(text: str | None, limit: int = 1000) -> str:
+    """A bounded excerpt of an error response body for a ProviderError message."""
+    body = text or ""
+    return body if len(body) <= limit else body[:limit] + "… (truncated)"
+
+
 class OpenAIEngine(BaseEngine):
     """Universal OpenAI-compatible API engine powered by async httpx."""
 
@@ -288,14 +294,21 @@ class OpenAIEngine(BaseEngine):
                         retries += 1
                         continue
                     raise ProviderError(
-                        f"{self.provider.upper()} API request failed ({resp.status_code}): {resp.text}"
+                        f"{self.provider.upper()} API request failed ({resp.status_code}): "
+                        f"{_body_excerpt(resp.text)}"
                     )
 
                 if resp.status_code >= 400:
                     raise ProviderError(
-                        f"{self.provider.upper()} API request failed ({resp.status_code}): {resp.text}"
+                        f"{self.provider.upper()} API request failed ({resp.status_code}): "
+                        f"{_body_excerpt(resp.text)}"
                     )
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError as err:
+                    raise ProviderError(
+                        f"{self.provider.upper()} returned a malformed response: {err}"
+                    ) from err
                 break
             except (httpx.ConnectError, httpx.ConnectTimeout) as net_err:
                 if retries < self.max_retries:
@@ -315,19 +328,53 @@ class OpenAIEngine(BaseEngine):
                 if not self._external_client:
                     await client.aclose()
 
+        if not isinstance(data, dict):
+            raise ProviderError(
+                f"{self.provider.upper()} returned a malformed response: "
+                f"expected a JSON object, got {type(data).__name__}"
+            )
         choices = data.get("choices", [])
+        if not isinstance(choices, list):
+            raise ProviderError(
+                f"{self.provider.upper()} returned a malformed response: "
+                "'choices' is not a list"
+            )
         if not choices:
             return EngineTurnResult(text="", raw_response=data)
-
         first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            raise ProviderError(
+                f"{self.provider.upper()} returned a malformed response: "
+                "'choices[0]' is not an object"
+            )
         choice_msg = first_choice.get("message", {})
+        if not isinstance(choice_msg, dict):
+            raise ProviderError(
+                f"{self.provider.upper()} returned a malformed response: "
+                "'message' is not an object"
+            )
         text_content = choice_msg.get("content")
         raw_tool_calls = choice_msg.get("tool_calls") or []
+        if not isinstance(raw_tool_calls, list):
+            raise ProviderError(
+                f"{self.provider.upper()} returned a malformed response: "
+                "'tool_calls' is not a list"
+            )
 
         extracted_calls: list[ToolCall] = []
         for idx, tc in enumerate(raw_tool_calls):
+            if not isinstance(tc, dict):
+                raise ProviderError(
+                    f"{self.provider.upper()} returned a malformed response: "
+                    "a tool call is not an object"
+                )
             call_id = tc.get("id") or f"call_{idx}"
             func_data = tc.get("function", {})
+            if not isinstance(func_data, dict):
+                raise ProviderError(
+                    f"{self.provider.upper()} returned a malformed response: "
+                    "a tool call's 'function' is not an object"
+                )
             func_name = func_data.get("name", "")
             raw_args = func_data.get("arguments", "{}")
 
@@ -339,6 +386,10 @@ class OpenAIEngine(BaseEngine):
                     parsed_args = {"raw_input": raw_args}
             elif isinstance(raw_args, dict):
                 parsed_args = raw_args
+            else:
+                parsed_args = {"raw_input": str(raw_args)}
+            if not isinstance(parsed_args, dict):
+                parsed_args = {"raw_input": raw_args}
 
             extracted_calls.append(ToolCall(id=call_id, name=func_name, args=parsed_args))
 
