@@ -288,14 +288,13 @@ class OpenAIEngine(BaseEngine):
                         retries += 1
                         continue
                     raise ProviderError(
-                        f"{self.provider.upper()} API request failed ({resp.status_code}): {resp.text}"
+                        f"{self.provider.upper()} API request failed ({resp.status_code}): {resp.text[:1000]}"
                     )
 
                 if resp.status_code >= 400:
                     raise ProviderError(
-                        f"{self.provider.upper()} API request failed ({resp.status_code}): {resp.text}"
+                        f"{self.provider.upper()} API request failed ({resp.status_code}): {resp.text[:1000]}"
                     )
-                data = resp.json()
                 break
             except (httpx.ConnectError, httpx.ConnectTimeout) as net_err:
                 if retries < self.max_retries:
@@ -315,35 +314,42 @@ class OpenAIEngine(BaseEngine):
                 if not self._external_client:
                     await client.aclose()
 
-        choices = data.get("choices", [])
-        if not choices:
-            return EngineTurnResult(text="", raw_response=data)
+        # A successful generation may already be billed; never retry parsing failures.
+        try:
+            data = resp.json()
+            choices = data.get("choices", [])
+            if not choices:
+                return EngineTurnResult(text="", raw_response=data)
 
-        first_choice = choices[0]
-        choice_msg = first_choice.get("message", {})
-        text_content = choice_msg.get("content")
-        raw_tool_calls = choice_msg.get("tool_calls") or []
+            first_choice = choices[0]
+            choice_msg = first_choice.get("message", {})
+            text_content = choice_msg.get("content")
+            if text_content is not None and not isinstance(text_content, str):
+                raise TypeError("Message content must be a string or null")
+            raw_tool_calls = choice_msg.get("tool_calls") or []
 
-        extracted_calls: list[ToolCall] = []
-        for idx, tc in enumerate(raw_tool_calls):
-            call_id = tc.get("id") or f"call_{idx}"
-            func_data = tc.get("function", {})
-            func_name = func_data.get("name", "")
-            raw_args = func_data.get("arguments", "{}")
+            extracted_calls: list[ToolCall] = []
+            for idx, tc in enumerate(raw_tool_calls):
+                call_id = tc.get("id") or f"call_{idx}"
+                func_data = tc.get("function", {})
+                func_name = func_data.get("name", "")
+                raw_args = func_data.get("arguments", "{}")
 
-            parsed_args: dict[str, Any] = {}
-            if isinstance(raw_args, str):
-                try:
-                    parsed_args = json.loads(raw_args) if raw_args.strip() else {}
-                except json.JSONDecodeError:
-                    parsed_args = {"raw_input": raw_args}
-            elif isinstance(raw_args, dict):
-                parsed_args = raw_args
+                parsed_args: dict[str, Any] = {}
+                if isinstance(raw_args, str):
+                    try:
+                        parsed_args = json.loads(raw_args) if raw_args.strip() else {}
+                    except json.JSONDecodeError:
+                        parsed_args = {"raw_input": raw_args}
+                elif isinstance(raw_args, dict):
+                    parsed_args = raw_args
 
-            extracted_calls.append(ToolCall(id=call_id, name=func_name, args=parsed_args))
+                extracted_calls.append(ToolCall(id=call_id, name=func_name, args=parsed_args))
 
-        return EngineTurnResult(
-            text=text_content,
-            tool_calls=extracted_calls,
-            raw_response=data,
-        )
+            return EngineTurnResult(
+                text=text_content,
+                tool_calls=extracted_calls,
+                raw_response=data,
+            )
+        except (AttributeError, LookupError, TypeError, ValueError) as err:
+            raise ProviderError(f"{self.provider.upper()} returned a malformed response") from err

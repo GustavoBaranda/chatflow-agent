@@ -148,13 +148,12 @@ class AnthropicEngine(BaseEngine):
                         retries += 1
                         continue
                     raise ProviderError(
-                        f"Anthropic API error ({resp.status_code}): {resp.text}"
+                        f"Anthropic API error ({resp.status_code}): {resp.text[:1000]}"
                     )
 
                 if resp.status_code >= 400:
-                    raise ProviderError(f"Anthropic API error ({resp.status_code}): {resp.text}")
+                    raise ProviderError(f"Anthropic API error ({resp.status_code}): {resp.text[:1000]}")
 
-                data = resp.json()
                 break
             except (httpx.ConnectError, httpx.ConnectTimeout) as net_err:
                 if retries < self.max_retries:
@@ -173,24 +172,29 @@ class AnthropicEngine(BaseEngine):
                 if not self._external_client:
                     await client.aclose()
 
-        text_chunks: list[str] = []
-        extracted_calls: list[ToolCall] = []
+        # A successful generation may already be billed; never retry parsing failures.
+        try:
+            data = resp.json()
+            text_chunks: list[str] = []
+            extracted_calls: list[ToolCall] = []
 
-        for block in data.get("content", []):
-            b_type = block.get("type")
-            if b_type == "text":
-                text_chunks.append(block.get("text", ""))
-            elif b_type == "tool_use":
-                extracted_calls.append(
-                    ToolCall(
-                        id=block.get("id", ""),
-                        name=block.get("name", ""),
-                        args=block.get("input", {}),
+            for block in data.get("content", []):
+                b_type = block.get("type")
+                if b_type == "text":
+                    text_chunks.append(block.get("text", ""))
+                elif b_type == "tool_use":
+                    extracted_calls.append(
+                        ToolCall(
+                            id=block.get("id", ""),
+                            name=block.get("name", ""),
+                            args=block.get("input", {}),
+                        )
                     )
-                )
 
-        return EngineTurnResult(
-            text="".join(text_chunks) if text_chunks else None,
-            tool_calls=extracted_calls,
-            raw_response=data,
-        )
+            return EngineTurnResult(
+                text="".join(text_chunks) if text_chunks else None,
+                tool_calls=extracted_calls,
+                raw_response=data,
+            )
+        except (AttributeError, LookupError, TypeError, ValueError) as err:
+            raise ProviderError("Anthropic returned a malformed response") from err
