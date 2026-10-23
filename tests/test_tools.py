@@ -13,8 +13,7 @@ from chatflow_agent.core.tools import (
     _python_type_to_schema,
     tool,
 )
-from chatflow_agent.exceptions import ToolSchemaError
-from chatflow_agent.exceptions import ToolExecutionError
+from chatflow_agent.exceptions import ToolExecutionError, ToolSchemaError
 
 
 def sample_function(query: str, limit: int = 10, verbose: bool = False) -> dict:
@@ -663,6 +662,22 @@ def test_unsupported_union_member_fails_fast_with_descriptive_error() -> None:
         pass
 
     def f(v: int | Custom) -> None: ...
+
+    with pytest.raises(ToolSchemaError) as exc_info:
+        Tool(f)
+    message = str(exc_info.value)
+    assert "Custom" in message
+    assert "v" in message
+    assert "union" in message
+
+
+def test_optional_unknown_type_fails_fast_too() -> None:
+    """Optional[Custom] / Custom | None must also raise ToolSchemaError, not silently fall back to STRING."""
+
+    class Custom:
+        pass
+
+    def f(v: Custom | None = None) -> None: ...
 
     with pytest.raises(ToolSchemaError) as exc_info:
         Tool(f)

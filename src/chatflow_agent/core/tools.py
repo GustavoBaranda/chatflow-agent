@@ -109,6 +109,13 @@ def _union_to_schema(py_type: Any) -> dict[str, Any]:
         return {"type": "STRING"}
 
     if len(members) == 1:
+        if not _is_expressible_type(members[0]):
+            raise ToolSchemaError(
+                f"annotation {py_type!r}: union member {members[0]!r} has no concrete "
+                "schema type mapping, so the union cannot be expressed as a valid "
+                "function-calling schema; use supported primitives or collections "
+                "(str, int, float, bool, list, tuple, set, frozenset, dict) instead"
+            )
         schema = _python_type_to_schema(members[0])
         if nullable:
             schema = dict(schema)
@@ -131,7 +138,7 @@ def _union_to_schema(py_type: Any) -> dict[str, Any]:
             schema["nullable"] = True
         return schema
 
-    schema: dict[str, Any] = {
+    schema = {
         "anyOf": [_python_type_to_schema(member) for member in members]
     }
     if nullable:
