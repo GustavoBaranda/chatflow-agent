@@ -14,6 +14,11 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-23
+
+### Security
+- **Stricter API key scoping for custom endpoints:** API keys read from environment variables are now sent only to the official endpoint of the provider they belong to. Configurations that use a custom `base_url` (proxies, gateways, other providers) must pass `api_key` explicitly; `api_key=""` sends no credential. `OpenAIEngine` and `AnthropicEngine` no longer follow HTTP redirects, even with an injected client configured to. See GHSA-mcgm-q29p-3984.
+
 ## [0.3.3] - 2026-10-19
 
 ### Security
@@ -73,6 +78,11 @@ If you are upgrading from v0.2.0:
 ## Español
 
 ## [Unreleased]
+
+## [0.3.4] - 2026-10-23
+
+### Seguridad
+- **Alcance más estricto de las API keys en endpoints personalizados:** las API keys leídas de variables de entorno ahora se envían solo al endpoint oficial del proveedor al que pertenecen. Las configuraciones con un `base_url` personalizado (proxies, gateways, otros proveedores) deben pasar `api_key` explícitamente; `api_key=""` no envía ninguna credencial. `OpenAIEngine` y `AnthropicEngine` ya no siguen redirects HTTP, aunque el cliente inyectado esté configurado para hacerlo. Ver GHSA-mcgm-q29p-3984.
 
 ## [0.3.3] - 2026-10-19
 
