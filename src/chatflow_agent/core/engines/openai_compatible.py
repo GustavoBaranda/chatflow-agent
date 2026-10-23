@@ -354,6 +354,11 @@ class OpenAIEngine(BaseEngine):
                 "'message' is not an object"
             )
         text_content = choice_msg.get("content")
+        if text_content is not None and not isinstance(text_content, str):
+            raise ProviderError(
+                f"{self.provider.upper()} returned a malformed response: "
+                "'message.content' is not a string or null"
+            )
         raw_tool_calls = choice_msg.get("tool_calls") or []
         if not isinstance(raw_tool_calls, list):
             raise ProviderError(
@@ -376,6 +381,11 @@ class OpenAIEngine(BaseEngine):
                     "a tool call's 'function' is not an object"
                 )
             func_name = func_data.get("name", "")
+            if not isinstance(func_name, str):
+                raise ProviderError(
+                    f"{self.provider.upper()} returned a malformed response: "
+                    "a tool call's function name is not a string"
+                )
             raw_args = func_data.get("arguments", "{}")
 
             parsed_args: dict[str, Any] = {}

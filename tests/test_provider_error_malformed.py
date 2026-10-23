@@ -53,12 +53,47 @@ CASES = [
     ("openai", httpx.Response(200, text="<html>login</html>")),
     ("openai", httpx.Response(200, json=[1])),
     ("openai", httpx.Response(200, json={"choices": ["not-an-object"]})),
+    (
+        "openai",
+        httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {"id": "c", "function": {"name": None, "arguments": "{}"}}
+                            ]
+                        }
+                    }
+                ]
+            },
+        ),
+    ),
+    (
+        "openai",
+        httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": [{"type": "text"}]}}]},
+        ),
+    ),
     ("anthropic", httpx.Response(200, text="<html>")),
     ("anthropic", httpx.Response(200, json={"content": None})),
     (
         "anthropic",
         httpx.Response(
             200, json={"content": [{"type": "tool_use", "input": [1, 2]}]}
+        ),
+    ),
+    (
+        "anthropic",
+        httpx.Response(
+            200,
+            json={
+                "content": [
+                    {"type": "tool_use", "id": None, "name": None, "input": {}}
+                ]
+            },
         ),
     ),
 ]

@@ -210,6 +210,13 @@ class AnthropicEngine(BaseEngine):
                     )
                 text_chunks.append(text)
             elif b_type == "tool_use":
+                tool_id = block.get("id", "")
+                tool_name = block.get("name", "")
+                if not isinstance(tool_id, str) or not isinstance(tool_name, str):
+                    raise ProviderError(
+                        "Anthropic returned a malformed response: "
+                        "'tool_use.id' and 'tool_use.name' must be strings"
+                    )
                 tool_input = block.get("input", {})
                 if not isinstance(tool_input, dict):
                     raise ProviderError(
@@ -217,11 +224,7 @@ class AnthropicEngine(BaseEngine):
                         "'tool_use.input' is not an object"
                     )
                 extracted_calls.append(
-                    ToolCall(
-                        id=block.get("id", ""),
-                        name=block.get("name", ""),
-                        args=tool_input,
-                    )
+                    ToolCall(id=tool_id, name=tool_name, args=tool_input)
                 )
 
         return EngineTurnResult(
