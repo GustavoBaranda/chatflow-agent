@@ -3,9 +3,11 @@
 import asyncio
 import copy
 import json
+import logging
 import sqlite3
 import threading
 import uuid
+import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
@@ -14,7 +16,10 @@ from types import TracebackType
 from typing import Any
 
 from chatflow_agent.core.agent import Agent
+from chatflow_agent.exceptions import SessionDeletedError
 from chatflow_agent.types import Message, Role
+
+logger = logging.getLogger("chatflow_agent.memory")
 
 # Canonical Single Source of Truth for message deduplication TTL
 DEFAULT_DEDUP_TTL_HOURS: int = 192  # 8 days (exceeds Meta's 7-day webhook retry window)
@@ -71,6 +76,13 @@ class SessionContext:
     def clear_history(self) -> None:
         """Reset the conversation dialogue history."""
         self.history.clear()
+
+    def refresh(self) -> None:
+        """Reload the committed session state from the backing store.
+
+        Called by ``Runner`` after acquiring ``lock`` and before taking the rollback
+        checkpoint. In-memory sessions already hold the latest state, so this is a no-op.
+        """
 
     def rollback_to(self, checkpoint_len: int) -> None:
         """Roll back dialogue history to a previous checkpoint length.
@@ -305,6 +317,34 @@ def _get_sqlite_connection(db_path: str) -> Generator[sqlite3.Connection, None, 
         conn.close()
 
 
+class _SessionLockRegistry:
+    """Hands out one ``asyncio.Lock`` per (running event loop, session_id).
+
+    Locks are keyed by loop because an ``asyncio.Lock`` becomes bound to the first loop
+    that waits on it; ``Runner.run()`` starts a new loop for every call. Both levels are
+    weak: a lock lives while a session context uses it, and a loop's entries disappear
+    with the loop, so the registry does not grow with the number of sessions.
+    """
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._locks: weakref.WeakKeyDictionary[
+            asyncio.AbstractEventLoop, weakref.WeakValueDictionary[str, asyncio.Lock]
+        ] = weakref.WeakKeyDictionary()
+
+    def get(self, loop: asyncio.AbstractEventLoop, session_id: str) -> asyncio.Lock:
+        with self._guard:
+            loop_locks = self._locks.get(loop)
+            if loop_locks is None:
+                loop_locks = weakref.WeakValueDictionary()
+                self._locks[loop] = loop_locks
+            lock = loop_locks.get(session_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                loop_locks[session_id] = lock
+            return lock
+
+
 class SQLiteSessionContext(SessionContext):
     """Persistent SQLite-backed session context that updates disk on changes."""
 
@@ -317,6 +357,9 @@ class SQLiteSessionContext(SessionContext):
         metadata: dict[str, Any] | None = None,
         preloaded_history: list[Message] | None = None,
         store: "SQLiteSessionStore | None" = None,
+        *,
+        owner: "SQLiteSessionStore | None" = None,
+        default_agent: Agent | None = None,
     ) -> None:
         if max_turns <= 0:
             raise ValueError(f"max_turns must be a positive integer, got {max_turns}")
@@ -330,8 +373,100 @@ class SQLiteSessionContext(SessionContext):
         # In-memory contexts bind to their store so writes share one locked connection
         # and fail clearly after store.close() (ephemeral DB is gone with the keeper).
         self._store = store
+        # The store that created this context (disk or memory). It supplies the shared
+        # session lock and the agent resolver used by refresh().
+        self._owner = owner
+        self._default_agent = default_agent if default_agent is not None else initial_agent
+        self._lock_loop: asyncio.AbstractEventLoop | None = None
+        # Turn journal, active between refresh() and restore_history(): what this turn
+        # wrote, so a rollback can tell its own changes from other writers'.
+        self._journal_active = False
+        self._checkpoint_row_ids: set[int] = set()
+        self._turn_inserted_ids: list[int] = []
+        self._turn_pruned_rows: dict[int, tuple[str, str | None, str]] = {}
+        self._turn_written_agent: str | None = None
+        self._turn_written_metadata: str | None = None
+        # Session row as stored when the turn started, to recognise other writers' changes.
+        self._checkpoint_agent_name: str | None = None
+        self._checkpoint_metadata_json: str | None = None
         if preloaded_history:
             self.history = list(preloaded_history)
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        """Lock shared by every context of this session within the running event loop."""
+        if self._owner is None:
+            return super().lock
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop: nothing can await the lock here; keep a private one.
+            return super().lock
+        if self._lock is None or self._lock_loop is not loop:
+            self._lock = self._owner._session_locks.get(loop, self.session_id)
+            self._lock_loop = loop
+        return self._lock
+
+    def refresh(self) -> None:
+        """Reload history, active agent and metadata committed by earlier turns.
+
+        Also starts the turn journal used by ``restore_history()``. If the session was
+        deleted while this turn waited for the lock, it starts again from an empty session
+        with the default agent; rows orphaned by the deletion are discarded, never reloaded.
+        """
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT active_agent_name, metadata_json FROM chatflow_sessions WHERE session_id = ?",
+                (self.session_id,),
+            ).fetchone()
+            if row is None:
+                logger.warning(
+                    "Session %r was deleted while a turn was waiting for it; "
+                    "the turn starts a new, empty session.",
+                    self.session_id,
+                )
+                conn.execute(
+                    "DELETE FROM chatflow_messages WHERE session_id = ?", (self.session_id,)
+                )
+                conn.execute(
+                    """
+                    INSERT INTO chatflow_sessions (session_id, active_agent_name, metadata_json)
+                    VALUES (?, ?, '{}')
+                    """,
+                    (self.session_id, self._default_agent.name),
+                )
+                agent_name, metadata_json, msg_rows = self._default_agent.name, "{}", []
+            else:
+                agent_name, metadata_json = row["active_agent_name"], row["metadata_json"]
+                msg_rows = conn.execute(
+                    """
+                    SELECT id, message_json FROM chatflow_messages
+                    WHERE session_id = ? ORDER BY id ASC
+                    """,
+                    (self.session_id,),
+                ).fetchall()
+
+        history = [Message.model_validate_json(r["message_json"]) for r in msg_rows]
+        metadata = json.loads(metadata_json) if metadata_json else {}
+        # Same resolution as SQLiteSessionStore.get_or_create().
+        active_agent = self._default_agent
+        resolver = self._owner._agent_resolver if self._owner is not None else None
+        if resolver is not None:
+            resolved = resolver(agent_name)
+            if resolved is not None:
+                active_agent = resolved
+
+        self.history = history
+        self.metadata = metadata
+        self.active_agent = active_agent
+        self._journal_active = True
+        self._checkpoint_agent_name = agent_name
+        self._checkpoint_metadata_json = metadata_json
+        self._checkpoint_row_ids = {r["id"] for r in msg_rows}
+        self._turn_inserted_ids = []
+        self._turn_pruned_rows = {}
+        self._turn_written_agent = None
+        self._turn_written_metadata = None
 
     @contextmanager
     def _db(self) -> Generator[sqlite3.Connection, None, None]:
@@ -344,16 +479,23 @@ class SQLiteSessionContext(SessionContext):
                 yield conn
 
     def add_message(self, message: Message) -> None:
-        """Append message to memory, commit to SQLite, and enforce FIFO message pruning."""
+        """Append message to memory, commit to SQLite, and enforce FIFO message pruning.
+
+        Raises ``SessionDeletedError`` if the session was deleted meanwhile; nothing is
+        stored then, so a deleted session never receives messages from a running turn.
+        """
+        previous_history = list(self.history)
         super().add_message(message)
+        pruned_rows: dict[int, tuple[str, str | None, str]] = {}
         with self._db() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO chatflow_messages (session_id, role, content, message_json)
                 VALUES (?, ?, ?, ?)
                 """,
                 (self.session_id, message.role.value, message.content, message.model_dump_json()),
             )
+            inserted_id = cursor.lastrowid
             # Prune old turns from SQLite: find the earliest user message ID to retain
             # To keep max_turns complete turns, the oldest retained user message is at offset max_turns - 1
             retain_offset = max(0, self.max_turns - 1)
@@ -369,6 +511,19 @@ class SQLiteSessionContext(SessionContext):
 
             if cutoff_row is not None:
                 cutoff_id = cutoff_row["id"]
+                if self._journal_active:
+                    for pruned in conn.execute(
+                        """
+                        SELECT id, role, content, message_json FROM chatflow_messages
+                        WHERE session_id = ? AND role != 'system' AND id < ?
+                        """,
+                        (self.session_id, cutoff_id),
+                    ).fetchall():
+                        pruned_rows[pruned["id"]] = (
+                            pruned["role"],
+                            pruned["content"],
+                            pruned["message_json"],
+                        )
                 conn.execute(
                     """
                     DELETE FROM chatflow_messages
@@ -376,7 +531,7 @@ class SQLiteSessionContext(SessionContext):
                     """,
                     (self.session_id, cutoff_id),
                 )
-            conn.execute(
+            session_row = conn.execute(
                 """
                 UPDATE chatflow_sessions
                 SET active_agent_name = ?, updated_at = CURRENT_TIMESTAMP
@@ -384,6 +539,18 @@ class SQLiteSessionContext(SessionContext):
                 """,
                 (self.active_agent.name, self.session_id),
             )
+            if session_row.rowcount == 0:
+                # Raised before the commit: the INSERT and pruning above are rolled back.
+                self.history = previous_history
+                raise SessionDeletedError(
+                    f"Session '{self.session_id}' was deleted; the message was not stored."
+                )
+        # Journal only what was committed.
+        if self._journal_active:
+            if inserted_id is not None:
+                self._turn_inserted_ids.append(inserted_id)
+            self._turn_pruned_rows.update(pruned_rows)
+            self._turn_written_agent = self.active_agent.name
 
     def rollback_to(self, checkpoint_len: int) -> None:
         """Roll back dialogue history in memory and database to checkpoint length.
@@ -410,41 +577,169 @@ class SQLiteSessionContext(SessionContext):
         active_agent: Agent | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Restore a history snapshot in memory and persist it to SQLite."""
+        """Restore a history snapshot in memory and persist it to SQLite.
+
+        During a ``Runner`` turn (after ``refresh()``), checking for other writers and
+        rolling back happen in one ``BEGIN IMMEDIATE`` transaction:
+
+        * If only this turn changed the session since its checkpoint (same message rows
+          apart from its own, and the stored agent and metadata are still the ones it
+          started from or last wrote), the snapshot is written back in full. This also
+          restores rows pruned during the turn.
+        * Otherwise another writer changed the session meanwhile (another context of the
+          same store, another store instance, process or thread, a reset or a delete).
+          Only this turn's own changes are reverted and a warning is logged: rows, agent
+          and metadata written by others are kept, and a deleted session is not recreated.
+          Rows this turn pruned are put back unless the other writer deleted rows itself
+          (restoring them could undo a reset, and a concurrent prune would have removed
+          them too). The in-memory state of this context is still set to the snapshot.
+
+        Agent and metadata are compared by value: if another writer stores exactly the
+        value this turn wrote, the change cannot be told apart from the turn's own.
+
+        Outside a turn, the snapshot is written back in full, as before.
+        """
         restored_agent = active_agent if active_agent is not None else self.active_agent
         restored_metadata = (
             copy.deepcopy(metadata) if metadata is not None else dict(self.metadata)
         )
         metadata_json = json.dumps(restored_metadata)
         with self._db() as conn:
-            conn.execute(
-                "DELETE FROM chatflow_messages WHERE session_id = ?",
-                (self.session_id,),
-            )
+            if not self._journal_active:
+                self._write_snapshot(conn, history, restored_agent.name, metadata_json)
+            else:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT active_agent_name, metadata_json FROM chatflow_sessions WHERE session_id = ?",
+                    (self.session_id,),
+                ).fetchone()
+                current_ids = {
+                    r["id"]
+                    for r in conn.execute(
+                        "SELECT id FROM chatflow_messages WHERE session_id = ?",
+                        (self.session_id,),
+                    ).fetchall()
+                }
+                expected_ids = (self._checkpoint_row_ids - self._turn_pruned_rows.keys()) | set(
+                    self._turn_inserted_ids
+                )
+                expected_agent = (
+                    self._turn_written_agent
+                    if self._turn_written_agent is not None
+                    else self._checkpoint_agent_name
+                )
+                expected_metadata = (
+                    self._turn_written_metadata
+                    if self._turn_written_metadata is not None
+                    else self._checkpoint_metadata_json
+                )
+                if (
+                    row is not None
+                    and current_ids == expected_ids
+                    and row["active_agent_name"] == expected_agent
+                    and row["metadata_json"] == expected_metadata
+                ):
+                    self._write_snapshot(conn, history, restored_agent.name, metadata_json)
+                else:
+                    self._revert_own_changes(
+                        conn, row, current_ids, restored_agent.name, metadata_json
+                    )
+        self._journal_active = False
+        super().restore_history(history, active_agent=active_agent, metadata=metadata)
+
+    def _write_snapshot(
+        self,
+        conn: sqlite3.Connection,
+        history: list[Message],
+        agent_name: str,
+        metadata_json: str,
+    ) -> None:
+        """Replace the persisted session with ``history``, ``agent_name`` and metadata."""
+        conn.execute(
+            "DELETE FROM chatflow_messages WHERE session_id = ?",
+            (self.session_id,),
+        )
+        conn.executemany(
+            """
+            INSERT INTO chatflow_messages (session_id, role, content, message_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (
+                    self.session_id,
+                    message.role.value,
+                    message.content,
+                    message.model_dump_json(),
+                )
+                for message in history
+            ],
+        )
+        conn.execute(
+            """
+            UPDATE chatflow_sessions
+            SET active_agent_name = ?, metadata_json = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE session_id = ?
+            """,
+            (agent_name, metadata_json, self.session_id),
+        )
+
+    def _revert_own_changes(
+        self,
+        conn: sqlite3.Connection,
+        row: sqlite3.Row | None,
+        current_ids: set[int],
+        agent_name: str,
+        metadata_json: str,
+    ) -> None:
+        """Undo only what this turn wrote, leaving other writers' changes in place."""
+        logger.warning(
+            "Session %r was modified outside its lock during a failed turn; "
+            "reverting only this turn's own changes. Concurrent use of one session from "
+            "several store instances, processes or threads is not supported.",
+            self.session_id,
+        )
+        conn.executemany(
+            "DELETE FROM chatflow_messages WHERE id = ?",
+            [(row_id,) for row_id in self._turn_inserted_ids if row_id in current_ids],
+        )
+        if row is None:
+            # The session was deleted: do not bring back its rows or its session record.
+            return
+        removed_by_others = (self._checkpoint_row_ids - self._turn_pruned_rows.keys()) - current_ids
+        if not removed_by_others:
+            # Put back what this turn pruned, with the original ids so ordering is kept.
+            # Skipped when another writer deleted rows (e.g. a reset): restoring them would
+            # undo that deletion.
             conn.executemany(
                 """
-                INSERT INTO chatflow_messages (session_id, role, content, message_json)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO chatflow_messages (id, session_id, role, content, message_json)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 [
-                    (
-                        self.session_id,
-                        message.role.value,
-                        message.content,
-                        message.model_dump_json(),
+                    (row_id, self.session_id, role, content, message_json)
+                    for row_id, (role, content, message_json) in sorted(
+                        self._turn_pruned_rows.items()
                     )
-                    for message in history
+                    if row_id not in current_ids
                 ],
             )
+        # Restore the agent and metadata only where the stored value is still ours.
+        if (
+            self._turn_written_agent is not None
+            and row["active_agent_name"] == self._turn_written_agent
+        ):
             conn.execute(
-                """
-                UPDATE chatflow_sessions
-                SET active_agent_name = ?, metadata_json = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE session_id = ?
-                """,
-                (restored_agent.name, metadata_json, self.session_id),
+                "UPDATE chatflow_sessions SET active_agent_name = ? WHERE session_id = ?",
+                (agent_name, self.session_id),
             )
-        super().restore_history(history, active_agent=active_agent, metadata=metadata)
+        if (
+            self._turn_written_metadata is not None
+            and row["metadata_json"] == self._turn_written_metadata
+        ):
+            conn.execute(
+                "UPDATE chatflow_sessions SET metadata_json = ? WHERE session_id = ?",
+                (metadata_json, self.session_id),
+            )
 
     def update_metadata(self, updates: dict[str, Any]) -> None:
         """Persist merged metadata before updating the in-memory state."""
@@ -461,6 +756,8 @@ class SQLiteSessionContext(SessionContext):
                 """,
                 (metadata_json, self.session_id),
             )
+        if self._journal_active:
+            self._turn_written_metadata = metadata_json
         super().update_metadata(updates)
 
     def set_active_agent(
@@ -482,6 +779,9 @@ class SQLiteSessionContext(SessionContext):
                 """,
                 (agent.name, metadata_json, self.session_id),
             )
+        if self._journal_active:
+            self._turn_written_agent = agent.name
+            self._turn_written_metadata = metadata_json
         super().set_active_agent(agent, context_updates)
 
     def clear_history(self) -> None:
@@ -510,6 +810,24 @@ class SQLiteSessionStore(BaseSessionStore):
         Configured with WAL mode and PRAGMA busy_timeout=10000 ms. Designed for
         single-process deployments (1 Uvicorn worker). For multi-worker or multi-node
         clusters, use an external distributed session store to avoid SQLite file lock contention.
+
+        Within one process, one store instance and one running event loop, ``Runner``
+        turns for the same ``session_id`` run one at a time: every context of a session
+        shares one lock per event loop, and each turn reloads the committed state after
+        acquiring it. A failed or cancelled turn restores the state it started from,
+        including messages pruned during the turn, and never deletes messages committed
+        by another turn.
+
+        Not provided: serialization across store instances on the same file, across
+        processes, or across threads running their own event loops. In those cases a
+        failed turn still reverts only its own changes, but turns may interleave and
+        read stale history.
+
+        ``delete()`` and ``clear()`` do not wait for running turns. A turn that is running
+        when its session is deleted fails with ``SessionDeletedError`` the next time it
+        stores a message, and its rollback leaves no rows behind. A turn that was waiting
+        for the session starts a new, empty one. Deleting a session erases its data; it
+        does not stop new messages from creating a session with the same id again.
     """
 
     def __init__(
@@ -525,6 +843,7 @@ class SQLiteSessionStore(BaseSessionStore):
         self.default_max_turns = default_max_turns
         self.dedup_ttl_hours = dedup_ttl_hours
         self._agent_resolver: Callable[[str], Agent | None] | None = None
+        self._session_locks = _SessionLockRegistry()
         self._closed = False
         self._db_lock = threading.RLock()
         self._keeper_conn: sqlite3.Connection | None = None
@@ -735,6 +1054,8 @@ class SQLiteSessionStore(BaseSessionStore):
                 preloaded_history=history,
                 # Bind only in-memory contexts: disk contexts keep independent file access.
                 store=self if self._in_memory else None,
+                owner=self,
+                default_agent=default_agent,
             )
 
     def get(self, session_id: str) -> SessionContext | None:

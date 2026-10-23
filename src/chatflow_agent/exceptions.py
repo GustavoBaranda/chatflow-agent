@@ -36,3 +36,14 @@ class AgentHandoffError(ChatFlowError):
 
 class ProviderError(ChatFlowError):
     """Raised when communication with the LLM provider fails."""
+
+
+class ReentrantTurnError(ChatFlowError, RuntimeError):
+    """Raised when code running inside a turn starts another turn of the same session.
+
+    Subclasses ``RuntimeError`` for compatibility with code that caught the previous error.
+    """
+
+
+class SessionDeletedError(ChatFlowError):
+    """Raised when a turn tries to store a message in a session that was deleted meanwhile."""

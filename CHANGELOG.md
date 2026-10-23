@@ -14,6 +14,25 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+- **SQLite Session Integrity Under Concurrent Requests (Issue #31):** Turns for the same `session_id` on a `SQLiteSessionStore` now share one lock per event loop and run one at a time, in the order they start waiting for it; previously every request got its own lock and turns ran in parallel. Each turn reloads the history, active agent and metadata committed by earlier turns after acquiring the lock. A failed or cancelled turn restores the state it started from, including messages pruned during the turn (#34). It no longer deletes or overwrites what someone else committed meanwhile (another turn's messages, or agent and metadata changed through another context): it then reverts only its own changes, in a single `BEGIN IMMEDIATE` transaction, and logs a warning. The lock registry holds locks weakly, so it does not grow with the number of sessions, and it creates separate locks per event loop, so successive `Runner.run()` calls keep working.
+- **Deleted Sessions No Longer Get Orphan Messages:** a turn that is running when its SQLite session is deleted fails with the new `SessionDeletedError` instead of storing its reply without a session (rows that later reappeared when the id was reused). A turn waiting for a deleted session starts a new, empty one; deleted content is never restored. Deleting a session erases its data but does not block its id.
+
+### Added
+- **`Runner.spawn_turn()`:** starts a turn as an independent task, outside any running turn. Tools use it to queue a follow-up turn for their own session; it runs after the current turn ends and must not be awaited inside it. The runner keeps the task alive until it finishes.
+- **`ReentrantTurnError`** (subclass of `ChatFlowError` and `RuntimeError`) and **`SessionDeletedError`** (subclass of `ChatFlowError`), exported from `chatflow_agent`.
+
+### Changed
+- **Queued Turns Wait:** Concurrent requests for the same SQLite session are now processed sequentially, so a queued request waits for the previous turn.
+- **Turns Started From Inside a Turn Raise:** Calling `Runner.run_async()` or `Runner.run()` for a session from code started by a running turn of that same session (a tool, or any task or thread it starts: `create_task`, `gather`, `wait_for`, `TaskGroup`, `asyncio.to_thread`) now raises `ReentrantTurnError` immediately. Previously these calls waited forever (in-memory store), or ran unserialized alongside the outer turn (SQLite). Use `Runner.spawn_turn()` for follow-up turns. This applies to every session store, including custom ones.
+- **New Method:** `SessionContext.refresh()` reloads committed state; it is a no-op for in-memory sessions and is called by `Runner` after acquiring the session lock.
+
+### Known Issues
+- **WhatsApp Timeout Includes Queue Time:** `WhatsAppChannel`'s `llm_timeout_seconds` covers both the wait for the session lock and the turn itself. Because SQLite turns of one session are now serialized, a burst of messages with slow turns can time out while queued. A fix separating both deadlines is required before v0.4.0.
+- **Concurrency Scope:** Serialization is not provided across store instances on the same file, across processes, or across threads running their own event loops.
+- **Nested Turns Outside the Turn's Tasks:** a tool that waits for work done by a task that was not started from the turn (for example, a worker created earlier) can still deadlock if that work runs a turn of the same session. Awaiting a task returned by `spawn_turn()` inside the turn that spawned it deadlocks as well.
+- **Reset and Delete During a Turn:** `clear_history()` and `delete()` are not coordinated with running turns beyond the rollback and `SessionDeletedError` guarantees above (tracked separately).
+
 ## [0.3.3] - 2026-10-19
 
 ### Security
@@ -73,6 +92,25 @@ If you are upgrading from v0.2.0:
 ## Español
 
 ## [Unreleased]
+
+### Corregido
+- **Integridad de Sesiones SQLite ante Solicitudes Concurrentes (Issue #31):** Los turnos de un mismo `session_id` en un `SQLiteSessionStore` ahora comparten un candado por event loop y se ejecutan de a uno, en el orden en que empiezan a esperarlo; antes cada solicitud obtenía su propio candado y los turnos corrían en paralelo. Cada turno vuelve a leer el historial, el agente activo y la metadata confirmados por los turnos anteriores después de adquirir el candado. Un turno fallido o cancelado restaura el estado con el que empezó, incluidos los mensajes podados durante el turno (#34). Ya no borra ni sobrescribe lo que otro confirmó mientras tanto (mensajes de otro turno, o agente y metadata cambiados desde otro contexto): en ese caso solo revierte sus propios cambios, en una única transacción `BEGIN IMMEDIATE`, y registra una advertencia. El registro de candados los mantiene con referencias débiles, por lo que no crece con la cantidad de sesiones, y crea candados separados por event loop, por lo que las llamadas sucesivas a `Runner.run()` siguen funcionando.
+- **Las Sesiones Borradas Ya No Reciben Mensajes Huérfanos:** un turno que se está ejecutando cuando se borra su sesión SQLite falla con la nueva `SessionDeletedError` en lugar de guardar su respuesta sin sesión (filas que reaparecían al reutilizar el id). Un turno que esperaba una sesión borrada inicia una sesión nueva y vacía; el contenido borrado nunca se restaura. Borrar una sesión elimina sus datos, pero no bloquea su id.
+
+### Agregado
+- **`Runner.spawn_turn()`:** inicia un turno como tarea independiente, fuera de cualquier turno en curso. Las tools lo usan para encolar un turno posterior de su propia sesión; se ejecuta cuando termina el turno actual y no debe esperarse dentro de él. El runner mantiene viva la tarea hasta que termina.
+- **`ReentrantTurnError`** (subclase de `ChatFlowError` y `RuntimeError`) y **`SessionDeletedError`** (subclase de `ChatFlowError`), exportadas desde `chatflow_agent`.
+
+### Cambiado
+- **Los Turnos en Espera Esperan:** Las solicitudes concurrentes para una misma sesión SQLite ahora se procesan en secuencia, por lo que una solicitud encolada espera al turno anterior.
+- **Los Turnos Iniciados Desde un Turno Fallan:** Llamar `Runner.run_async()` o `Runner.run()` para una sesión desde código iniciado por un turno en curso de esa misma sesión (una tool, o cualquier tarea o thread que inicie: `create_task`, `gather`, `wait_for`, `TaskGroup`, `asyncio.to_thread`) ahora lanza `ReentrantTurnError` de inmediato. Antes esas llamadas esperaban para siempre (store en memoria) o corrían sin serializar junto al turno externo (SQLite). Usa `Runner.spawn_turn()` para turnos posteriores. Aplica a todos los stores de sesión, incluidos los personalizados.
+- **Nuevo Método:** `SessionContext.refresh()` recarga el estado confirmado; no hace nada en sesiones en memoria y `Runner` lo llama después de adquirir el candado de la sesión.
+
+### Problemas Conocidos
+- **El Timeout de WhatsApp Incluye la Espera:** `llm_timeout_seconds` de `WhatsAppChannel` cubre tanto la espera del candado de la sesión como el turno. Como los turnos SQLite de una sesión ahora se serializan, una ráfaga de mensajes con turnos lentos puede vencer mientras espera. Antes de v0.4.0 se requiere una corrección que separe ambos plazos.
+- **Alcance de la Concurrencia:** No se serializan turnos entre instancias del store sobre el mismo archivo, entre procesos ni entre threads con su propio event loop.
+- **Turnos Anidados Fuera de las Tareas del Turno:** una tool que espera trabajo hecho por una tarea que no fue iniciada desde el turno (por ejemplo, un worker creado antes) todavía puede quedar bloqueada si ese trabajo ejecuta un turno de la misma sesión. Esperar, dentro del turno que la creó, una tarea devuelta por `spawn_turn()` también la bloquea.
+- **Reset y Delete Durante un Turno:** `clear_history()` y `delete()` no se coordinan con los turnos en curso más allá de las garantías de rollback y de `SessionDeletedError` descritas arriba (se trata por separado).
 
 ## [0.3.3] - 2026-10-19
 

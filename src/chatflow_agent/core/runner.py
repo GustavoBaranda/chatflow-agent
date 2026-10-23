@@ -1,16 +1,19 @@
 """Multi-agent Swarm-style execution Runner for chatflow-agent."""
 
 import asyncio
+import contextvars
 import copy
 import logging
 import threading
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import BaseEngine, GeminiEngine, resolve_engine
 from chatflow_agent.core.memory import BaseSessionStore, SessionContext, SessionStore
-from chatflow_agent.exceptions import AgentHandoffError
+from chatflow_agent.exceptions import AgentHandoffError, ReentrantTurnError
 from chatflow_agent.types import (
     AgentResponse,
     Handoff,
@@ -20,6 +23,59 @@ from chatflow_agent.types import (
 )
 
 logger = logging.getLogger("chatflow_agent.runner")
+
+class _TurnToken:
+    """Marks a running turn for every piece of code it starts."""
+
+    __slots__ = ("store", "session_id", "active")
+
+    def __init__(self, store: object, session_id: str) -> None:
+        self.store = store
+        self.session_id = session_id
+        self.active = True
+
+
+# The turns the current code runs inside. Context variables are copied into tasks created
+# during a turn (create_task, gather, wait_for, TaskGroup) and into asyncio.to_thread workers,
+# so tools and everything they start see the turn that started them.
+_turn_lineage: contextvars.ContextVar[tuple[_TurnToken, ...]] = contextvars.ContextVar(
+    "chatflow_turn_lineage", default=()
+)
+
+
+def _refuse_nested_turn(store: object, session_id: str) -> None:
+    """Refuse a turn started from inside a still-running turn of the same session.
+
+    Code started by a turn cannot know whether that turn is waiting for it, and if it is,
+    waiting for the session lock would never end. The check covers the turn's own task and
+    every task or thread it starts, in any asyncio pattern.
+    """
+    if any(
+        token.active and token.store is store and token.session_id == session_id
+        for token in _turn_lineage.get()
+    ):
+        raise ReentrantTurnError(
+            f"Runner.run_async() was called for session '{session_id}' while code started by "
+            "a turn of that session is already running a turn for it (for example, from inside "
+            "a tool or a task it created). Waiting for the session lock could deadlock. To "
+            "queue a follow-up turn, use Runner.spawn_turn() and do not await it inside the "
+            "current turn."
+        )
+
+
+@asynccontextmanager
+async def _hold_session_lock(
+    store: object, session_id: str, lock: asyncio.Lock
+) -> AsyncIterator[None]:
+    """Hold the session lock and mark the turn in the context of the code it runs."""
+    async with lock:
+        token = _TurnToken(store, session_id)
+        reset = _turn_lineage.set(_turn_lineage.get() + (token,))
+        try:
+            yield
+        finally:
+            token.active = False
+            _turn_lineage.reset(reset)
 
 
 class Runner:
@@ -42,6 +98,10 @@ class Runner:
         self._engine_provided = engine is not None
         self.max_handoffs_per_turn = max_handoffs_per_turn
         self.max_tool_iterations = max_tool_iterations
+
+        # Turns started with spawn_turn(): asyncio keeps only weak references to tasks, so
+        # they are held here until they finish.
+        self._spawned_turns: set[asyncio.Task[AgentResponse]] = set()
 
         # Registry of all known agents (starting agent + all transitive handoffs)
         self._agents_registry: dict[str, Agent] = {}
@@ -104,14 +164,25 @@ class Runner:
         """Process a user message through the active agent and resolve tools/handoffs.
 
         Merge incoming metadata into the session before processing this turn.
+
+        Turns of the same session run one at a time. Calling this method for a session from
+        code started by a turn of that same session (a tool, or a task or thread it starts)
+        while that turn is running raises ``ReentrantTurnError``; use ``spawn_turn()`` to
+        queue a follow-up turn instead.
         """
+        _refuse_nested_turn(self.session_store, session_id)
         session = self.session_store.get_or_create(
             session_id=session_id,
             default_agent=self.starting_agent,
             metadata=metadata,
         )
 
-        async with session.lock:
+        async with _hold_session_lock(self.session_store, session_id, session.lock):
+            # Reload the state committed by turns that held the lock before this one.
+            # Outside the try: nothing has changed yet if it fails.
+            refresh = getattr(session, "refresh", None)
+            if callable(refresh):
+                refresh()
             checkpoint_history = list(session.history)
             checkpoint_agent = session.active_agent
             checkpoint_metadata = copy.deepcopy(session.metadata)
@@ -281,6 +352,31 @@ class Runner:
                     metadata=checkpoint_metadata,
                 )
                 raise
+
+    def spawn_turn(
+        self,
+        session_id: str,
+        user_message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> "asyncio.Task[AgentResponse]":
+        """Start a turn as an independent task, outside any turn that is running.
+
+        Meant for tools that need a follow-up turn for their own session: the new turn
+        waits until the current turn of that session ends, then runs. It is not a nested
+        call: **never await the returned task inside the turn that spawned it** (that turn
+        would wait for a turn that waits for it). Await it, or read ``task.exception()``,
+        after that turn ends if you need the result or its errors.
+
+        The runner keeps a reference to the task until it finishes. Must be called while an
+        event loop is running.
+        """
+        context = contextvars.copy_context()
+        context.run(_turn_lineage.set, ())
+        coro = self.run_async(session_id, user_message, metadata=metadata)
+        task: asyncio.Task[AgentResponse] = context.run(asyncio.ensure_future, coro)
+        self._spawned_turns.add(task)
+        task.add_done_callback(self._spawned_turns.discard)
+        return task
 
     def run(
         self,
