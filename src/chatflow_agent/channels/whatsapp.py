@@ -7,6 +7,8 @@ import hmac
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
 from chatflow_agent.channels.base import BaseChannel, split_message
@@ -37,6 +39,11 @@ class WhatsAppChannel(BaseChannel):
     It is a total turn deadline, not a guarantee that every provider retry fits;
     pass an explicit value to match your provider and workload. Webhook HTTP
     acknowledgement remains immediate and is separate from this deadline.
+
+    While the app's lifespan runs (``run()``, or any ASGI server that runs the lifespan),
+    the attached runner's connection-pooling scope (``async with runner:``) is open, so
+    webhook turns reuse connections. Startup and shutdown handlers on ``self.app`` run
+    inside the scope.
     """
 
     def __init__(
@@ -117,7 +124,41 @@ class WhatsAppChannel(BaseChannel):
             redoc_url=redoc_url,
             openapi_url=openapi_url,
         )
+        # Wrapped rather than replaced via FastAPI(lifespan=...), which would stop
+        # @app.on_event("startup"/"shutdown") handlers from running.
+        self.app.router.lifespan_context = self._with_runner_scope(
+            self.app.router.lifespan_context
+        )
         self._setup_routes()
+
+    def _with_runner_scope(
+        self, lifespan: Callable[[Any], AbstractAsyncContextManager[Any]]
+    ) -> Callable[[Any], AbstractAsyncContextManager[Any]]:
+        """Wrap the app's lifespan in the attached runner's ``async with runner:`` scope."""
+
+        @asynccontextmanager
+        async def runner_scope_lifespan(app: Any) -> AsyncIterator[Any]:
+            # Read at startup, since attach() comes after __init__; the same runner is closed.
+            runner = self.runner
+            if runner is None:
+                async with lifespan(app) as state:
+                    yield state
+                return
+            # Opened first and closed last, so startup and shutdown handlers can use it.
+            await runner.__aenter__()
+            try:
+                async with lifespan(app) as state:
+                    yield state
+            except BaseException:
+                try:
+                    await runner.__aexit__(None, None, None)
+                except Exception as err:
+                    # Keep the error startup or shutdown failed with; report this one.
+                    logger.error(f"Failed to close the runner's connection scope: {err!r}")
+                raise
+            await runner.__aexit__(None, None, None)
+
+        return runner_scope_lifespan
 
     def _setup_routes(self) -> None:
         """Register webhook endpoints on the FastAPI application."""

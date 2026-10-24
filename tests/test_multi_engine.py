@@ -1,7 +1,7 @@
 """Tests for Multi-Provider engines (OpenAI, Grok, Gemma/Ollama, Claude) and heterogeneous swarms."""
 
 import json
-from typing import Any, cast
+from typing import Any
 
 import httpx
 import pytest
@@ -635,22 +635,15 @@ async def test_anthropic_appends_history_system_messages_to_the_system_prompt() 
 
 @pytest.mark.asyncio
 async def test_gemini_appends_history_system_messages_to_the_system_instruction() -> None:
-    from types import SimpleNamespace
-
-    seen: dict[str, Any] = {}
-
-    async def generate_content(**kwargs: Any) -> Any:
-        seen.update(kwargs)
-        return SimpleNamespace(candidates=[])
-
-    engine = GeminiEngine(api_key="test-key")
-    engine.client = cast(Any, SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))))
+    transport = MockTransport(lambda req: (200, {"candidates": []}))
+    engine = GeminiEngine(api_key="test-key", http_client=httpx.AsyncClient(transport=transport))
     agent = Agent(name="Bot", model="gemini-2.5-flash", instructions="Base instructions")
 
     await engine.generate_turn_async(agent=agent, history=SYSTEM_HISTORY)
 
-    assert seen["config"].system_instruction == (
-        "Base instructions\n\nDynamic safety constraint\n\nAnswer in Spanish"
-    )
-    assert [c.role for c in seen["contents"]] == ["user"]
+    payload = json.loads(transport.requests_received[0].content)
+    assert payload["systemInstruction"] == {
+        "parts": [{"text": "Base instructions\n\nDynamic safety constraint\n\nAnswer in Spanish"}]
+    }
+    assert [c["role"] for c in payload["contents"]] == ["user"]
 
