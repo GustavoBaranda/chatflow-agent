@@ -1612,8 +1612,10 @@ def test_loopback_without_scope_opens_and_closes_a_connection_per_request(loopba
 
 def test_loopback_an_attempt_that_runs_out_of_time_after_sending_is_not_retried(loopback: LoopbackServer) -> None:
     """Over a real connection, httpcore reports that the request was sent before the deadline."""
-    runner = make_runner(timeout_seconds=0.2, max_retries=2)
-    with pytest.raises(ProviderError, match="Gemini API request failed \\(TimeoutError\\)"):
+    # Long enough for a slow runner to open the connection within it. The attempt's deadline
+    # and httpx's read timeout are equal, so either may end the attempt; neither is retried.
+    runner = make_runner(timeout_seconds=1.0, max_retries=2)
+    with pytest.raises(ProviderError, match=r"Gemini API request failed \((TimeoutError|ReadTimeout)\)"):
         runner.run("s1", "SLOW")
 
     assert loopback.slow_entered.is_set()
