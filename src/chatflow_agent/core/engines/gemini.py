@@ -224,11 +224,18 @@ def _api_base_url() -> str:
 
 def _retry_after_seconds(value: str) -> float:
     """Seconds requested by a Retry-After header: a number, or an HTTP-date (a past date is 0).
-    An unusable value gives NaN."""
-    try:
+    Digits too many for a float (RFC 9110 delay-seconds has no limit) give inf; an unusable
+    value gives NaN."""
+    value = value.strip()
+    if re.fullmatch(r"[0-9]+", value):
         return float(value)
+    try:
+        seconds = float(value)
     except ValueError:
         pass
+    else:
+        # Other numbers, such as 2.5, are accepted too, but not inf, nan or 1e999.
+        return seconds if math.isfinite(seconds) else math.nan
     try:
         when = email.utils.parsedate_to_datetime(value)
     except (TypeError, ValueError, OverflowError):
@@ -365,12 +372,14 @@ class GeminiEngine(BaseEngine):
 
     def _retry_delay(self, retries: int, retry_after: str | None = None) -> float:
         """Exponential backoff with jitter; a valid Retry-After (seconds or an HTTP-date)
-        replaces the base. The delay is capped at max_delay either way."""
+        replaces the base. The delay is capped at max_delay either way, however long the server
+        asks to wait."""
         base: float = self.base_delay * (2 ** retries)
         if retry_after:
             parsed = _retry_after_seconds(retry_after)
-            if math.isfinite(parsed) and parsed >= 0:
-                base = parsed
+            if parsed >= 0:  # NaN (unusable) is not
+                # Capped before the jitter, which would otherwise turn inf into nan.
+                base = min(parsed, self.max_delay)
         return min(self.max_delay, base + random.uniform(0.0, 0.25 * base))
 
     async def _post(
@@ -397,12 +406,17 @@ class GeminiEngine(BaseEngine):
                 follow_redirects=False,
                 extensions=extensions,
             )
+        # A client that cannot be created raises after the except block, so the original error
+        # (which may quote a proxy URL or a certificate path) is not kept as __context__ either.
+        failure: ProviderError | None = None
         pool = _lent_pool.get()
         if pool is not None and pool.loop is asyncio.get_running_loop():
             try:
                 pooled = pool.acquire()
             except Exception as err:
-                raise _client_creation_failed(err) from None
+                failure = _client_creation_failed(err)
+            if failure is not None:
+                raise failure from None
             if pooled is not None:
                 try:
                     return await pooled.post(
@@ -419,7 +433,9 @@ class GeminiEngine(BaseEngine):
         try:
             client = _new_attempt_client(self.timeout_seconds)
         except Exception as err:
-            raise _client_creation_failed(err) from None
+            failure = _client_creation_failed(err)
+        if failure is not None:
+            raise failure from None
         async with client:
             return await client.post(
                 url,

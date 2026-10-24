@@ -4,11 +4,17 @@ import asyncio
 import json
 import logging
 import random
+import re
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult, system_prompt
+from chatflow_agent.core.engines.base import (
+    BaseEngine,
+    EngineTurnResult,
+    replacement_tool_call_id,
+    system_prompt,
+)
 from chatflow_agent.core.engines.openai_compatible import (
     _body_excerpt,
     _lowercase_schema_types,
@@ -23,6 +29,14 @@ if TYPE_CHECKING:
     from chatflow_agent.core.agent import Agent
 
 ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+
+# The format Anthropic's API reference gives for tool_use.id and tool_result.tool_use_id.
+_TOOL_USE_ID = re.compile(r"[a-zA-Z0-9_-]+")
+
+
+def _tool_use_id(call_id: str) -> str:
+    """The history's tool-call ID, unless Anthropic would reject it (e.g. one from another provider)."""
+    return call_id if _TOOL_USE_ID.fullmatch(call_id) else replacement_tool_call_id(call_id)
 
 
 class AnthropicEngine(BaseEngine):
@@ -68,7 +82,7 @@ class AnthropicEngine(BaseEngine):
                     for call in msg.tool_calls:
                         content_blocks.append({
                             "type": "tool_use",
-                            "id": call.id,
+                            "id": _tool_use_id(call.id),
                             "name": call.name,
                             "input": call.args,
                         })
@@ -85,7 +99,7 @@ class AnthropicEngine(BaseEngine):
                     )
                     content_blocks.append({
                         "type": "tool_result",
-                        "tool_use_id": res.tool_call_id,
+                        "tool_use_id": _tool_use_id(res.tool_call_id),
                         "content": content_str,
                         "is_error": res.is_error,
                     })

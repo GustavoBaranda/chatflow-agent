@@ -5,6 +5,7 @@ import dataclasses
 import inspect
 import json
 import logging
+import re
 import traceback
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta, timezone
@@ -871,6 +872,8 @@ async def test_http_client_creation_errors_raise_provider_error_without_details(
     for secret in [API_KEY, value, *secrets]:
         assert secret not in message
     assert excinfo.value.__cause__ is None and excinfo.value.__suppress_context__
+    # The original error quotes the proxy URL or the file path; it is not reachable either.
+    assert excinfo.value.__context__ is None
     assert runner._client_pools == {}
 
 
@@ -977,6 +980,49 @@ async def test_http_date_retry_after_is_honoured_when_retrying(caplog: pytest.Lo
     assert result.text == "Recovered"
     assert len(recorder.requests) == 2
     assert "HTTP 503. Retrying in 0.00s" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "retry_after",
+    ["99999999999999999999", "1" + "0" * 400, "Fri, 31 Dec 9999 23:59:59 GMT"],
+    ids=["20-digits", "too-large-for-a-float", "far-future-http-date"],
+)
+async def test_excessive_retry_after_waits_exactly_max_delay(
+    retry_after: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """max_delay bounds the wait however long the server asks for, even beyond a float."""
+    recorder = Recorder(httpx.Response(429, json={}, headers={"Retry-After": retry_after}), text_payload("Recovered"))
+    with caplog.at_level(logging.WARNING, logger="chatflow_agent.engine.gemini"):
+        result = await make_engine(recorder, max_delay=0.05).generate_turn_async(bot(), USER_HELLO)
+    assert result.text == "Recovered"
+    assert len(recorder.requests) == 2
+    assert "HTTP 429. Retrying in 0.05s" in caplog.text
+
+
+@pytest.mark.parametrize("retry_after", ["soon", "-5", "1e999", "Wed, 32 Oct 2015 07:28:00 GMT"])
+async def test_malformed_retry_after_falls_back_to_exponential_backoff_when_retrying(
+    retry_after: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    recorder = Recorder(httpx.Response(503, json={}, headers={"Retry-After": retry_after}), text_payload("Recovered"))
+    with caplog.at_level(logging.WARNING, logger="chatflow_agent.engine.gemini"):
+        result = await make_engine(recorder, base_delay=0.04).generate_turn_async(bot(), USER_HELLO)
+    assert result.text == "Recovered"
+    assert len(recorder.requests) == 2
+    retrying = re.search(r"HTTP 503\. Retrying in ([0-9.]+)s", caplog.text)
+    assert retrying is not None
+    assert 0.04 <= float(retrying.group(1)) <= 0.05  # base_delay plus at most 25% jitter
+
+
+@pytest.mark.parametrize(
+    "retry_after",
+    ["Sunday, 06-Nov-94 08:49:37 GMT", "Sun Nov  6 08:49:37 1994"],
+    ids=["rfc850-date", "asctime-date"],
+)
+def test_obsolete_http_date_formats_are_accepted(retry_after: str) -> None:
+    """RFC 9110 requires recipients to accept them. These dates are past, so there is no delay;
+    were they not parsed, the delay would be the 50 s exponential base."""
+    engine = GeminiEngine(api_key=API_KEY, base_delay=50.0, max_delay=100.0)
+    assert engine._retry_delay(0, retry_after) == 0.0
 
 
 async def test_cancellation_propagates_as_cancelled_error() -> None:

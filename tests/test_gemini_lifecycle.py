@@ -486,6 +486,38 @@ async def test_provider_errors_and_cancelled_attempts_leave_the_pool_usable(clie
     assert clients.attempt == []
 
 
+async def test_a_turn_timeout_during_a_pooled_request_releases_the_client_and_rolls_back(clients: Clients) -> None:
+    """turn_timeout cancels the turn mid-request: the pooled client is released, the turn rolled
+    back, and the scope still closes the client once."""
+    runner = make_runner()
+    loop = asyncio.get_running_loop()
+    in_use_after_timeout: list[int] = []
+
+    async def scenario() -> None:
+        async with runner:
+            assert (await runner.run_async("s1", "first")).content == "ok"
+            gate = Gate()
+            clients.reply = gate
+            with pytest.raises(asyncio.TimeoutError):
+                await runner.run_async("s1", "slow", turn_timeout=0.5)
+            assert gate.entered.is_set()
+            in_use_after_timeout.append(runner._client_pools[loop][0]._in_use)
+            assert history_of(runner, "s1") == ["first", "ok"]
+
+            clients.reply = reply_text
+            assert (await runner.run_async("s1", "after")).content == "ok"
+
+    # Bounded: if the timed-out attempt kept the client, the scope exit would wait for it forever.
+    await asyncio.wait_for(scenario(), timeout=5)
+    assert in_use_after_timeout == [0]
+    [pooled] = clients.pooled
+    assert len(pooled.sent_on) == 3
+    assert pooled.is_closed and pooled.close_calls == 1
+    assert pooled.closed_while_loop_running is True
+    assert clients.attempt == []
+    assert runner._client_pools == {}
+
+
 # --- Scope contract --------------------------------------------------------------------
 
 

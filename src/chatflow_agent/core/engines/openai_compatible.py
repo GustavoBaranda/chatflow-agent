@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult
+from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult, replacement_tool_call_id
 from chatflow_agent.exceptions import ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
 
@@ -22,6 +22,10 @@ logger = logging.getLogger("chatflow_agent.engine.openai")
 
 if TYPE_CHECKING:
     from chatflow_agent.core.agent import Agent
+
+# OpenAI rejects longer tool-call IDs ("string too long", as users report it; its published API
+# spec sets no limit). No limit is known for the other OpenAI-compatible providers.
+_OPENAI_MAX_TOOL_CALL_ID_LENGTH = 40
 
 _LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
 # Explicit compatibility exception for local dev servers bound to 0.0.0.0 (not a loopback address)
@@ -227,6 +231,12 @@ class OpenAIEngine(BaseEngine):
         self.max_delay = 10.0
         self._external_client = http_client
 
+    def _tool_call_id(self, call_id: str) -> str:
+        """The history's tool-call ID, unless OpenAI would reject it (e.g. one from another provider)."""
+        if self.provider != "openai" or 0 < len(call_id) <= _OPENAI_MAX_TOOL_CALL_ID_LENGTH:
+            return call_id
+        return replacement_tool_call_id(call_id)
+
     def _format_history_to_messages(
         self,
         instructions: str | None,
@@ -255,7 +265,7 @@ class OpenAIEngine(BaseEngine):
                     formatted_calls = []
                     for call in msg.tool_calls:
                         formatted_calls.append({
-                            "id": call.id,
+                            "id": self._tool_call_id(call.id),
                             "type": "function",
                             "function": {
                                 "name": call.name,
@@ -274,7 +284,7 @@ class OpenAIEngine(BaseEngine):
                     )
                     messages.append({
                         "role": "tool",
-                        "tool_call_id": res.tool_call_id,
+                        "tool_call_id": self._tool_call_id(res.tool_call_id),
                         "name": res.name,
                         "content": content_str,
                     })
