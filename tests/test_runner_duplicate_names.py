@@ -121,6 +121,7 @@ async def test_late_replacement_conflicts_when_old_still_reachable() -> None:
 
 @pytest.mark.asyncio
 async def test_sqlite_session_resolves_replaced_active_agent(tmp_path: Path) -> None:
+    """Existing SQLite session uses the new peer after late replacement (real turns)."""
     old_support = Agent(name="Support", instructions="OLD support", tools=[refund])
     new_support = Agent(name="Support", instructions="NEW support", tools=[reboot])
     desk = Agent(name="Desk", instructions="desk", handoffs=[old_support])
@@ -132,11 +133,78 @@ async def test_sqlite_session_resolves_replaced_active_agent(tmp_path: Path) -> 
 
     first = await runner.run_async("s1", "go")
     assert first.active_agent_name == "Support"
-    assert runner.get_session("s1") is not None
+    assert first.content == "OLD support with tools ['refund']"
     assert runner.get_session("s1").active_agent is old_support
 
     desk.add_handoff(new_support)
-    # Trigger registry replacement via handoff resolve, then reload session.
-    runner._resolve_handoff_target(desk, "Support")
+    # Another real turn performs the late-replacement handoff (not a private helper).
+    other = await runner.run_async("s2", "go")
+    assert other.content == "NEW support with tools ['reboot']"
+    assert runner._agents_registry["Support"] is new_support
+
+    # Existing SQLite session re-resolves active agent by name on the next turn.
+    second = await runner.run_async("s1", "still broken")
+    assert second.active_agent_name == "Support"
+    assert second.content == "NEW support with tools ['reboot']"
     reloaded = store.get_or_create("s1", default_agent=root)
     assert reloaded.active_agent is new_support
+
+
+def test_register_agent_tree_is_atomic_on_deep_duplicate() -> None:
+    root = Agent(name="Root", instructions="root")
+    runner = Runner(starting_agent=root, engine=MockEngine([]))
+    # Pre-register a conflicting leaf name.
+    runner.register_agent(Agent(name="Leaf", instructions="existing"))
+    before = dict(runner._agents_registry)
+
+    branch = Agent(name="Branch", instructions="branch")
+    mid = Agent(name="Mid", instructions="mid", handoffs=[branch])
+    conflict = Agent(name="Leaf", instructions="conflict")
+    branch.add_handoff(conflict)
+
+    with pytest.raises(ValueError, match="Duplicate agent name 'Leaf'"):
+        runner.register_agent(mid)
+
+    assert runner._agents_registry == before
+    assert "Branch" not in runner._agents_registry
+    assert "Mid" not in runner._agents_registry
+
+
+@pytest.mark.asyncio
+async def test_late_replacement_validation_failure_leaves_registry_unchanged() -> None:
+    old_support = Agent(name="Support", instructions="OLD", tools=[refund])
+    desk = Agent(name="Desk", instructions="desk", handoffs=[old_support])
+    root = Agent(name="Root", instructions="root", handoffs=[desk])
+    runner = Runner(starting_agent=root, engine=MockEngine([]))
+    before = dict(runner._agents_registry)
+
+    # New Support brings a child that collides with an existing agent name.
+    conflict_child = Agent(name="Desk", instructions="should conflict")
+    new_support = Agent(
+        name="Support", instructions="NEW", tools=[reboot], handoffs=[conflict_child]
+    )
+    desk.add_handoff(new_support)
+
+    with pytest.raises(ValueError, match="Duplicate agent name 'Desk'"):
+        runner._resolve_handoff_target(desk, "Support")
+
+    assert runner._agents_registry == before
+    assert runner._agents_registry["Support"] is old_support
+
+
+def test_late_replacement_rejects_manually_registered_agent() -> None:
+    root = Agent(name="Root", instructions="root")
+    runner = Runner(starting_agent=root, engine=MockEngine([]))
+    manual = Agent(name="Support", instructions="MANUAL", tools=[refund])
+    runner.register_agent(manual)
+    assert "Support" in runner._manual_agent_names
+
+    desk = Agent(name="Desk", instructions="desk")
+    root.add_handoff(desk)
+    runner.register_agent(desk)
+    replacement = Agent(name="Support", instructions="LATE", tools=[reboot])
+    desk.add_handoff(replacement)
+
+    with pytest.raises(ValueError, match="manually registered agent 'Support'"):
+        runner._resolve_handoff_target(desk, "Support")
+    assert runner._agents_registry["Support"] is manual

@@ -105,6 +105,8 @@ class Runner:
 
         # Registry of all known agents (starting agent + all transitive handoffs)
         self._agents_registry: dict[str, Agent] = {}
+        # Names registered via register_agent() (not the construction-time tree).
+        self._manual_agent_names: set[str] = set()
         self._registry_lock = threading.Lock()
         self._register_agent_tree(self.starting_agent)
 
@@ -116,23 +118,61 @@ class Runner:
         with self._registry_lock:
             self._register_agent_tree_unlocked(root)
 
-    def _register_agent_tree_unlocked(self, root: Agent) -> None:
-        """Index ``root`` and its reachable peers. Caller must hold ``_registry_lock``.
+    def _collect_new_agents_unlocked(
+        self,
+        root: Agent,
+        registry: dict[str, Agent] | None = None,
+    ) -> dict[str, Agent]:
+        """Return agents to add from ``root``'s graph without mutating the registry.
 
-        The same agent instance may appear on several branches (a DAG). Two
-        distinct instances that share a name are a configuration error.
+        Caller must hold ``_registry_lock``. Raises ``ValueError`` on duplicate
+        names. The same instance may appear on several branches. ``registry``
+        defaults to the live registry; pass a trial map to validate a planned
+        replacement before committing.
         """
-        existing = self._agents_registry.get(root.name)
-        if existing is not None:
-            if existing is root:
-                return
-            raise ValueError(
-                f"Duplicate agent name {root.name!r}: distinct Agent instances "
-                "cannot share a name in one Runner tree."
-            )
-        self._agents_registry[root.name] = root
-        for peer in root.handoffs:
-            self._register_agent_tree_unlocked(peer)
+        view = self._agents_registry if registry is None else registry
+        to_add: dict[str, Agent] = {}
+        seen: set[int] = set()
+        stack = [root]
+        while stack:
+            agent = stack.pop()
+            identity = id(agent)
+            if identity in seen:
+                continue
+            seen.add(identity)
+
+            existing = view.get(agent.name)
+            if existing is not None:
+                if existing is agent:
+                    stack.extend(agent.handoffs)
+                    continue
+                raise ValueError(
+                    f"Duplicate agent name {agent.name!r}: distinct Agent instances "
+                    "cannot share a name in one Runner tree."
+                )
+
+            planned = to_add.get(agent.name)
+            if planned is not None:
+                if planned is agent:
+                    stack.extend(agent.handoffs)
+                    continue
+                raise ValueError(
+                    f"Duplicate agent name {agent.name!r}: distinct Agent instances "
+                    "cannot share a name in one Runner tree."
+                )
+
+            to_add[agent.name] = agent
+            stack.extend(agent.handoffs)
+        return to_add
+
+    def _register_agent_tree_unlocked(self, root: Agent) -> None:
+        """Index ``root`` and its reachable peers atomically. Caller must hold lock.
+
+        Collects the full set of new agents first, then commits. A duplicate
+        deeper in the graph leaves the registry unchanged.
+        """
+        to_add = self._collect_new_agents_unlocked(root)
+        self._agents_registry.update(to_add)
 
     def _agent_reachable_unlocked(self, target: Agent) -> bool:
         """Return whether ``target`` is reachable from ``starting_agent``."""
@@ -156,7 +196,8 @@ class Runner:
         accepted only when declared on ``current_agent.handoffs``. Unauthorized
         names fail closed with ``AgentHandoffError``. When a late replacement
         swaps in a new object under the same name, the registry is updated to
-        that object unless the previous instance is still reachable elsewhere.
+        that object unless the previous instance is still reachable elsewhere,
+        was manually registered, or the replacement tree fails validation.
         """
         # Authorization first: the target must be declared on the current
         # agent's own handoffs. Presence in the global registry alone is not
@@ -177,19 +218,43 @@ class Runner:
                 return authorized
             if existing is authorized:
                 return authorized
+            if target_name in self._manual_agent_names:
+                raise ValueError(
+                    f"Cannot replace manually registered agent {target_name!r} "
+                    "via late handoff."
+                )
             if self._agent_reachable_unlocked(existing):
                 raise ValueError(
                     f"Duplicate agent name {target_name!r}: distinct Agent instances "
                     "cannot share a name in one Runner tree."
                 )
-            self._agents_registry[target_name] = authorized
+
+            # Validate the full replacement against a trial registry, then commit.
+            trial = dict(self._agents_registry)
+            trial[target_name] = authorized
+            peers_to_add: dict[str, Agent] = {}
             for peer in authorized.handoffs:
-                self._register_agent_tree_unlocked(peer)
+                peers_to_add.update(
+                    self._collect_new_agents_unlocked(peer, registry=trial)
+                )
+                trial.update(peers_to_add)
+            self._agents_registry[target_name] = authorized
+            self._agents_registry.update(peers_to_add)
             return authorized
 
     def register_agent(self, agent: Agent) -> None:
-        """Manually register an agent to the runner index."""
-        self._register_agent_tree(agent)
+        """Manually register an agent to the runner index.
+
+        Names added through this API are protected from silent late handoff
+        replacement.
+        """
+        with self._registry_lock:
+            before = set(self._agents_registry.keys())
+            self._register_agent_tree_unlocked(agent)
+            for name in set(self._agents_registry.keys()) - before:
+                self._manual_agent_names.add(name)
+            if self._agents_registry.get(agent.name) is agent:
+                self._manual_agent_names.add(agent.name)
 
     def get_session(self, session_id: str) -> SessionContext | None:
         """Fetch session context by session_id."""
