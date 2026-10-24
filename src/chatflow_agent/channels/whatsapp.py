@@ -325,8 +325,11 @@ class WhatsAppChannel(BaseChannel):
                     else:
                         results.append((str(wamid), str(sender), None))
 
-        # 2. Generic / Evolution API format
-        if not results:
+        # 2. Generic / Evolution API format.
+        # Meta Cloud API payloads always carry ``entry``. Never fall through to the
+        # generic extractor for them: ignored reaction/system events would otherwise
+        # be revived by top-level ``from`` / ``text`` fields.
+        if not results and "entry" not in payload:
             sender = payload.get("phone") or payload.get("from") or payload.get("sender")
             if sender:
                 wamid = payload.get("id") or payload.get("wamid") or f"gen_{uuid.uuid4().hex}"

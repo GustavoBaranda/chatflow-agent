@@ -238,3 +238,101 @@ def test_hmac_still_required_before_parse() -> None:
         headers={"Content-Type": "application/json", "X-Hub-Signature-256": "sha256=deadbeef"},
     )
     assert response.status_code == 403
+
+
+def _attach_spies(channel: WhatsAppChannel) -> tuple[list[str], list[tuple]]:
+    sent: list[str] = []
+    dispatches: list[tuple] = []
+
+    async def capture(to_phone: str, text: str) -> None:
+        sent.append(text)
+
+    original_dispatch = channel.dispatch_async
+
+    async def spy_dispatch(*, session_id: str, message: str, metadata=None):
+        dispatches.append((session_id, message, metadata))
+        return await original_dispatch(session_id=session_id, message=message, metadata=metadata)
+
+    channel._send_single_outbound_whatsapp = capture  # type: ignore[method-assign]
+    channel.dispatch_async = spy_dispatch  # type: ignore[method-assign]
+    return sent, dispatches
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {
+            "from": "5491100000000",
+            "id": "wamid.R1",
+            "type": "reaction",
+            "reaction": {"message_id": "wamid.prev", "emoji": "👍"},
+        },
+        {
+            "from": "5491100000000",
+            "id": "wamid.R2",
+            "type": "reaction",
+            "reaction": {"message_id": "wamid.prev"},
+        },
+        {
+            "from": "5491100000000",
+            "id": "wamid.S1",
+            "type": "system",
+            "system": {"body": "number changed"},
+        },
+    ],
+)
+def test_http_ignored_meta_events_no_runner_or_outbound(message: dict) -> None:
+    """Signed HTTP path: ignored Meta events yield 200, no dispatch, no outbound."""
+    channel = _make_channel()
+    sent, dispatches = _attach_spies(channel)
+    client = TestClient(channel.app)
+    response = _post_signed(client, _meta_payload(message))
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored_or_status_update"
+    assert dispatches == []
+    assert sent == []
+
+
+def test_http_ignored_reaction_with_top_level_from_text_no_fallback() -> None:
+    """Meta reaction plus top-level from/text must not revive generic extraction."""
+    channel = _make_channel()
+    sent, dispatches = _attach_spies(channel)
+    client = TestClient(channel.app)
+    payload = _meta_payload(
+        {
+            "from": "5491100000000",
+            "id": "wamid.R3",
+            "type": "reaction",
+            "reaction": {"message_id": "wamid.prev", "emoji": "👍"},
+        }
+    )
+    payload["from"] = "5491100000000"
+    payload["text"] = "should-not-run"
+    assert channel._extract_messages(payload) == []
+    response = _post_signed(client, payload)
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored_or_status_update"
+    assert dispatches == []
+    assert sent == []
+
+
+def test_http_text_still_dispatches_via_signed_webhook() -> None:
+    channel = _make_channel()
+    sent, dispatches = _attach_spies(channel)
+    client = TestClient(channel.app)
+    response = _post_signed(
+        client,
+        _meta_payload(
+            {
+                "from": "5491100000000",
+                "id": "wamid.T2",
+                "type": "text",
+                "text": {"body": "hola"},
+            }
+        ),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    assert len(dispatches) == 1
+    assert dispatches[0][1] == "hola"
+    assert sent == ["reply"]
