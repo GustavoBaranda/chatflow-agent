@@ -1,4 +1,3 @@
-
 """WhatsApp channel adapter using FastAPI and Meta Cloud API webhooks."""
 
 import asyncio
@@ -51,9 +50,7 @@ class WhatsAppChannel(BaseChannel):
             "Disculpa, estamos experimentando una demora temporal con nuestro servicio. "
             "Por favor intenta nuevamente en unos momentos."
         ),
-        unsupported_media_message: str = (
-            "Por el momento solo puedo procesar mensajes de texto."
-        ),
+        unsupported_media_message: str = ("Por el momento solo puedo procesar mensajes de texto."),
         llm_timeout_seconds: float = 120.0,
         max_outbound_retries: int = 3,
         outbound_base_delay: float = 1.0,
@@ -196,9 +193,10 @@ class WhatsAppChannel(BaseChannel):
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="Missing or malformed X-Hub-Signature-256 header",
                     )
-                expected = "sha256=" + hmac.new(
-                    self.app_secret.encode(), raw_body, hashlib.sha256
-                ).hexdigest()
+                expected = (
+                    "sha256="
+                    + hmac.new(self.app_secret.encode(), raw_body, hashlib.sha256).hexdigest()
+                )
                 if not hmac.compare_digest(sig_header.encode(), expected.encode()):
                     logger.warning("Rejected webhook: X-Hub-Signature-256 mismatch.")
                     raise HTTPException(
@@ -255,42 +253,86 @@ class WhatsAppChannel(BaseChannel):
                 }
             )
 
-
-
-    def _extract_messages(
-        self, payload: dict[str, Any]
-    ) -> list[tuple[str, str, str | None]]:
+    def _extract_messages(self, payload: dict[str, Any]) -> list[tuple[str, str, str | None]]:
         """Extract all (wamid, sender_phone, text_or_None) from a webhook payload.
 
         Handles Meta Cloud API (entry[].changes[].value.messages[]) and generic formats.
         Returns an empty list for status-update notifications.
+
+        ``reaction`` and ``system`` events are ignored (no outbound reply). Other
+        non-text types yield ``text_or_None=None`` so the background worker can
+        send the unsupported-media notice. Malformed nested shapes are skipped
+        with a warning so a signed webhook never raises into a 500.
         """
         results: list[tuple[str, str, str | None]] = []
 
+        def _warn_malformed(kind: str) -> None:
+            logger.warning("Ignoring malformed WhatsApp webhook %s (no content logged).", kind)
+
         # 1. Standard Meta Cloud API format
-        for entry in payload.get("entry", []):
-            for change in entry.get("changes", []):
-                for msg in change.get("value", {}).get("messages", []):
+        entries = payload.get("entry", [])
+        if not isinstance(entries, list):
+            _warn_malformed("entry")
+            entries = []
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                _warn_malformed("entry item")
+                continue
+            changes = entry.get("changes", [])
+            if not isinstance(changes, list):
+                _warn_malformed("changes")
+                continue
+            for change in changes:
+                if not isinstance(change, dict):
+                    _warn_malformed("changes item")
+                    continue
+                value = change.get("value", {})
+                if value is None:
+                    _warn_malformed("value")
+                    continue
+                if not isinstance(value, dict):
+                    _warn_malformed("value")
+                    continue
+                messages = value.get("messages", [])
+                if messages is None:
+                    continue
+                if not isinstance(messages, list):
+                    _warn_malformed("messages")
+                    continue
+                for msg in messages:
+                    if not isinstance(msg, dict):
+                        _warn_malformed("messages item")
+                        continue
                     wamid = msg.get("id") or f"gen_{hash(str(msg))}"
                     sender = msg.get("from")
                     if not sender:
                         continue
-                    if msg.get("type", "text") == "text":
-                        body = msg.get("text", {}).get("body")
+                    msg_type = msg.get("type", "text")
+                    if msg_type in ("reaction", "system"):
+                        # Acknowledge silently: no unsupported-media reply.
+                        continue
+                    if msg_type == "text":
+                        text_node = msg.get("text", {})
+                        if isinstance(text_node, str):
+                            _warn_malformed("text")
+                            continue
+                        if not isinstance(text_node, dict):
+                            _warn_malformed("text")
+                            continue
+                        body = text_node.get("body")
                         results.append((str(wamid), str(sender), str(body) if body else None))
                     else:
                         results.append((str(wamid), str(sender), None))
 
-        # 2. Generic / Evolution API format
-        if not results:
-            sender = (
-                payload.get("phone") or payload.get("from") or payload.get("sender")
-            )
+        # 2. Generic / Evolution API format.
+        # Meta Cloud API payloads always carry ``entry``. Never fall through to the
+        # generic extractor for them: ignored reaction/system events would otherwise
+        # be revived by top-level ``from`` / ``text`` fields.
+        if not results and "entry" not in payload:
+            sender = payload.get("phone") or payload.get("from") or payload.get("sender")
             if sender:
-                wamid = (
-                    payload.get("id") or payload.get("wamid")
-                    or f"gen_{uuid.uuid4().hex}"
-                )
+                wamid = payload.get("id") or payload.get("wamid") or f"gen_{uuid.uuid4().hex}"
                 body = payload.get("message") or payload.get("text") or payload.get("body")
                 results.append((str(wamid), str(sender), str(body) if body else None))
 
@@ -325,9 +367,7 @@ class WhatsAppChannel(BaseChannel):
                 )
                 reply_text = self.fallback_message
             except Exception as err:
-                logger.exception(
-                    f"Error dispatching wamid={wamid} from {masked_phone}: {err}"
-                )
+                logger.exception(f"Error dispatching wamid={wamid} from {masked_phone}: {err}")
                 reply_text = self.fallback_message
 
             if self.access_token and self.phone_number_id:
@@ -341,9 +381,7 @@ class WhatsAppChannel(BaseChannel):
                         to_phone=sender_phone, text=self.fallback_message
                     )
                 except Exception as fb_err:
-                    logger.exception(
-                        f"Failed to deliver fallback to {masked_phone}: {fb_err}"
-                    )
+                    logger.exception(f"Failed to deliver fallback to {masked_phone}: {fb_err}")
 
     async def _send_outbound_whatsapp(self, to_phone: str, text: str) -> None:
         """Send message back to user via Meta WhatsApp Cloud API, chunking long replies."""
@@ -391,7 +429,7 @@ class WhatsAppChannel(BaseChannel):
                             if parsed_retry_after is not None:
                                 base_delay = parsed_retry_after
                             else:
-                                base_delay = self.outbound_base_delay * (2 ** retries)
+                                base_delay = self.outbound_base_delay * (2**retries)
 
                             jitter = random.uniform(0.0, 0.25 * base_delay)
                             delay = min(self.outbound_max_delay, base_delay + jitter)
@@ -439,7 +477,7 @@ class WhatsAppChannel(BaseChannel):
             # ONLY retry on connect errors (connection failed before request could be accepted by Meta)
             except (self._httpx.ConnectError, self._httpx.ConnectTimeout) as net_err:
                 if retries < self.max_outbound_retries:
-                    base_delay = self.outbound_base_delay * (2 ** retries)
+                    base_delay = self.outbound_base_delay * (2**retries)
                     jitter = random.uniform(0.0, 0.25 * base_delay)
                     delay = min(self.outbound_max_delay, base_delay + jitter)
                     logger.warning(
