@@ -213,7 +213,9 @@ async def test_burst_longer_than_llm_timeout_is_fully_answered_in_order(any_stor
     """Ten concurrent messages queue behind a running turn for longer than
     llm_timeout_seconds; each of their turns fits in it. Before the fix most of them timed
     out while queued (audit case 2)."""
-    channel, runner, engine, sent = build(any_store, queue=10.0, turn=0.2)
+    # Each turn must fit in its own limit even on slow CI runners (SQLite on disk), while
+    # the queue still lasts longer than that limit: turn=1.0 s, wait before release 1.2 s.
+    channel, runner, engine, sent = build(any_store, queue=30.0, turn=1.0)
     engine.gates["hold"] = asyncio.Event()
     holder = runner.spawn_turn(PHONE, "hold")
     await bounded(engine.started_event("hold").wait())
@@ -222,7 +224,7 @@ async def test_burst_longer_than_llm_timeout_is_fully_answered_in_order(any_stor
         engine.gates[text] = asyncio.Event()
     tasks = [process(channel, f"w{i}", text) for i, text in enumerate(texts)]
 
-    await asyncio.sleep(0.3)  # every message has now waited longer than llm_timeout_seconds
+    await asyncio.sleep(1.2)  # every message has now waited longer than llm_timeout_seconds
     engine.gates["hold"].set()
     await bounded(holder)
     for text in texts:  # release one turn at a time, as soon as it is the running one
