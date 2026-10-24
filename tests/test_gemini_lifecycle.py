@@ -742,7 +742,7 @@ async def cancel_turn() -> str:
     ("reply", "error", "sends"),
     [
         (bad_request, ProviderError, 1),
-        (too_slow, ProviderError, 2),  # each timed-out attempt, including the retry, is pooled
+        (too_slow, ProviderError, 1),  # the timed-out attempt is pooled and not retried
         (call_then_text("cancel_turn"), asyncio.CancelledError, 1),
     ],
     ids=["provider-error", "timeout", "cancelled"],
@@ -1575,6 +1575,18 @@ def test_loopback_without_scope_opens_and_closes_a_connection_per_request(loopba
         assert resource_warnings(record) == []
 
     assert loopback.opened == 3
+    assert loopback.wait_all_closed()
+
+
+def test_loopback_an_attempt_that_runs_out_of_time_after_sending_is_not_retried(loopback: LoopbackServer) -> None:
+    """Over a real connection, httpcore reports that the request was sent before the deadline."""
+    runner = make_runner(timeout_seconds=0.2, max_retries=2)
+    with pytest.raises(ProviderError, match="Gemini API request failed \\(TimeoutError\\)"):
+        runner.run("s1", "SLOW")
+
+    assert loopback.slow_entered.is_set()
+    loopback.release_slow.set()
+    assert loopback.requests == 1
     assert loopback.wait_all_closed()
 
 

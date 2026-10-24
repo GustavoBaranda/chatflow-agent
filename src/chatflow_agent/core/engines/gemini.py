@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import dataclasses
 import datetime
+import email.utils
 import http.cookiejar
 import json
 import logging
@@ -139,6 +140,29 @@ _lent_pool: contextvars.ContextVar[_ClientPool | None] = contextvars.ContextVar(
 )
 
 
+class _AttemptTrace:
+    """Records httpcore's ``trace`` events for one HTTP attempt.
+
+    They show whether an attempt that ran out of time was still opening a new connection
+    (TCP connect or TLS handshake) and had not started sending the request. Transports that
+    emit no events, such as ``httpx.MockTransport``, give no such evidence.
+    """
+
+    def __init__(self) -> None:
+        self.connecting = False
+        self.sending = False
+
+    async def __call__(self, event: str, info: dict[str, Any]) -> None:
+        if event.startswith("connection."):
+            self.connecting = True
+        elif event.endswith(".send_request_headers.started"):
+            self.sending = True
+
+    @property
+    def request_unsent(self) -> bool:
+        return self.connecting and not self.sending
+
+
 def _client_creation_failed(err: Exception) -> ProviderError:
     """The error for an httpx client that could not be created from the environment.
 
@@ -196,6 +220,22 @@ def _api_base_url() -> str:
         # The value is not echoed: it may embed credentials.
         raise ProviderError("GOOGLE_GEMINI_BASE_URL is not a valid http(s) base URL.")
     return f"{override.rstrip('/')}/{_API_VERSION}"
+
+
+def _retry_after_seconds(value: str) -> float:
+    """Seconds requested by a Retry-After header: a number, or an HTTP-date (a past date is 0).
+    An unusable value gives NaN."""
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return math.nan
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    return max(0.0, (when - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
 
 
 def _json_default(value: Any) -> Any:
@@ -269,7 +309,8 @@ class GeminiEngine(BaseEngine):
                     parts.append({"text": msg.content})
                 if msg.tool_calls:
                     for call in msg.tool_calls:
-                        parts.append({"functionCall": {"name": call.name, "args": call.args}})
+                        function_call = {"name": call.name, "args": call.args}
+                        parts.append({"functionCall": _with_provider_id(function_call, call.id, call.name)})
                 if parts:
                     contents.append({"role": "model", "parts": parts})
 
@@ -277,7 +318,10 @@ class GeminiEngine(BaseEngine):
             elif msg.role == Role.TOOL and msg.tool_results:
                 for res in msg.tool_results:
                     payload = res.content if isinstance(res.content, dict) else {"output": res.content}
-                    parts.append({"functionResponse": {"name": res.name, "response": payload}})
+                    function_response = {"name": res.name, "response": payload}
+                    parts.append(
+                        {"functionResponse": _with_provider_id(function_response, res.tool_call_id, res.name)}
+                    )
                 if parts:
                     contents.append({"role": "user", "parts": parts})
 
@@ -320,13 +364,11 @@ class GeminiEngine(BaseEngine):
         return text
 
     def _retry_delay(self, retries: int, retry_after: str | None = None) -> float:
-        """Exponential backoff with jitter; a valid Retry-After (seconds) replaces the base."""
+        """Exponential backoff with jitter; a valid Retry-After (seconds or an HTTP-date)
+        replaces the base. The delay is capped at max_delay either way."""
         base: float = self.base_delay * (2 ** retries)
         if retry_after:
-            try:
-                parsed = float(retry_after)
-            except ValueError:
-                parsed = math.nan
+            parsed = _retry_after_seconds(retry_after)
             if math.isfinite(parsed) and parsed >= 0:
                 base = parsed
         return min(self.max_delay, base + random.uniform(0.0, 0.25 * base))
@@ -337,6 +379,7 @@ class GeminiEngine(BaseEngine):
         content: bytes,
         headers: dict[str, str],
         params: dict[str, str] | None,
+        trace: _AttemptTrace,
     ) -> httpx.Response:
         """Send one HTTP attempt with the injected client, the Runner's lent pool, or a client
         of its own that is closed however the attempt ends.
@@ -344,9 +387,15 @@ class GeminiEngine(BaseEngine):
         Redirects are never followed, even by an injected client configured to: httpx keeps
         x-goog-api-key on a cross-origin redirect.
         """
+        extensions = {"trace": trace}
         if self._external_client is not None:
             return await self._external_client.post(
-                url, content=content, headers=headers, params=params, follow_redirects=False
+                url,
+                content=content,
+                headers=headers,
+                params=params,
+                follow_redirects=False,
+                extensions=extensions,
             )
         pool = _lent_pool.get()
         if pool is not None and pool.loop is asyncio.get_running_loop():
@@ -363,6 +412,7 @@ class GeminiEngine(BaseEngine):
                         params=params,
                         timeout=self.timeout_seconds,
                         follow_redirects=False,
+                        extensions=extensions,
                     )
                 finally:
                     pool.release()
@@ -372,7 +422,12 @@ class GeminiEngine(BaseEngine):
             raise _client_creation_failed(err) from None
         async with client:
             return await client.post(
-                url, content=content, headers=headers, params=params, follow_redirects=False
+                url,
+                content=content,
+                headers=headers,
+                params=params,
+                follow_redirects=False,
+                extensions=extensions,
             )
 
     async def generate_turn_async(
@@ -416,15 +471,26 @@ class GeminiEngine(BaseEngine):
 
         retries = 0
         while True:
+            attempt = _AttemptTrace()
+            # The original exception, the httpcore exception chained to it and its request may
+            # all hold the key. The error is therefore raised after the except block, where it
+            # gets no __context__, and "from None", so it has no __cause__ either.
+            failure: ProviderError | None = None
             try:
                 # timeout_seconds bounds the whole attempt, as with the previous SDK client.
                 resp = await asyncio.wait_for(
-                    self._post(url, content, headers, params),
+                    self._post(url, content, headers, params, attempt),
                     timeout=self.timeout_seconds,
                 )
             except (httpx.ConnectError, httpx.TimeoutException, asyncio.TimeoutError) as err:
+                # Only connection failures are retried: the request never reached Gemini. Other
+                # timeouts are not, since it may have; that includes an attempt that ran out of
+                # time, unless it was still opening a connection.
+                connection_failed = isinstance(err, (httpx.ConnectError, httpx.ConnectTimeout)) or (
+                    isinstance(err, asyncio.TimeoutError) and attempt.request_unsent
+                )
                 reason = self._redact(_describe(err))
-                if retries < self.max_retries:
+                if connection_failed and retries < self.max_retries:
                     delay = self._retry_delay(retries)
                     logger.warning(
                         f"Gemini API transient error ({reason}). Retrying in {delay:.2f}s (attempt {retries + 1}/{self.max_retries})..."
@@ -432,23 +498,25 @@ class GeminiEngine(BaseEngine):
                     await asyncio.sleep(delay)
                     retries += 1
                     continue
-                raise ProviderError(f"Gemini API request failed: {reason}") from err
+                failure = ProviderError(f"Gemini API request failed ({type(err).__name__}): {reason}")
             except httpx.RequestError as err:
-                raise ProviderError(
-                    f"Gemini API connection error: {self._redact(_describe(err))}"
-                ) from err
+                failure = ProviderError(
+                    f"Gemini API connection error ({type(err).__name__}): {self._redact(_describe(err))}"
+                )
             except httpx.InvalidURL as err:
-                raise ProviderError(
+                failure = ProviderError(
                     f"Gemini API request URL is invalid: {self._redact(_describe(err))}"
-                ) from err
+                )
             except RuntimeError as err:
                 # httpx raises RuntimeError for a closed client or one bound to a closed loop.
                 if self._external_client is None:
                     raise
-                raise ProviderError(
+                failure = ProviderError(
                     "Gemini API request failed: the provided http_client is closed or bound to "
                     f"another event loop ({self._redact(_describe(err))})"
-                ) from err
+                )
+            if failure is not None:
+                raise failure from None
 
             if resp.status_code in _RETRIABLE_STATUS_CODES and retries < self.max_retries:
                 delay = self._retry_delay(retries, resp.headers.get("Retry-After"))
@@ -533,7 +601,8 @@ def _optional_list(obj: dict[str, Any], key: str) -> list[Any]:
 
 
 def _parse_function_call(function_call: Any, part_idx: int) -> ToolCall:
-    """Convert a ``functionCall`` part into a ToolCall with the engine's historical ID format."""
+    """Convert a ``functionCall`` part into a ToolCall. Gemini's ``id`` is kept; without one,
+    the ID is synthetic, in the engine's historical format."""
     if not isinstance(function_call, dict):
         raise _malformed("'functionCall' is not an object")
     name = function_call.get("name")
@@ -542,8 +611,18 @@ def _parse_function_call(function_call: Any, part_idx: int) -> ToolCall:
     args = function_call.get("args")
     if args is not None and not isinstance(args, dict):
         raise _malformed("'functionCall.args' is not an object")
+    call_id = function_call.get("id")
+    if call_id is not None and not isinstance(call_id, str):
+        raise _malformed("'functionCall.id' is not a string")
     return ToolCall(
-        id=f"call_{name}_{part_idx}",
+        id=call_id or f"call_{name}_{part_idx}",
         name=name or "",
         args=dict(args or {}),
     )
+
+
+def _with_provider_id(part: dict[str, Any], call_id: str, name: str) -> dict[str, Any]:
+    """Add ``id`` to a functionCall/functionResponse part, unless the ID is a synthetic one."""
+    if not re.fullmatch(rf"call_{re.escape(name)}_\d+", call_id):
+        part["id"] = call_id
+    return part

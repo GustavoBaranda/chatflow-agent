@@ -5,8 +5,10 @@ import dataclasses
 import inspect
 import json
 import logging
+import traceback
 from collections.abc import Awaitable, Callable
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from email.utils import format_datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -417,6 +419,30 @@ async def test_single_and_multiple_function_calls_get_part_index_ids() -> None:
     ]
 
 
+async def test_function_call_ids_from_gemini_are_kept_and_missing_ones_are_synthetic() -> None:
+    payload = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"functionCall": {"name": "weather", "args": {"city": "Paris"}, "id": "fc-weather"}},
+                        {"functionCall": {"name": "clock", "id": ""}},
+                        {"functionCall": {"name": "clock"}},
+                    ],
+                }
+            }
+        ]
+    }
+    result = await make_engine(Recorder(payload)).generate_turn_async(bot(), USER_HELLO)
+
+    assert result.tool_calls == [
+        ToolCall(id="fc-weather", name="weather", args={"city": "Paris"}),
+        ToolCall(id="call_clock_1", name="clock", args={}),
+        ToolCall(id="call_clock_2", name="clock", args={}),
+    ]
+
+
 async def test_only_the_first_candidate_is_used() -> None:
     payload = {"candidates": [text_payload("first")["candidates"][0], text_payload("second")["candidates"][0]]}
     result = await make_engine(Recorder(payload)).generate_turn_async(bot(), USER_HELLO)
@@ -466,6 +492,7 @@ async def test_blocked_prompt_raises_provider_error() -> None:
         httpx.Response(
             200, json={"candidates": [{"content": {"parts": [{"functionCall": {"name": "f", "args": [1]}}]}}]}
         ),
+        httpx.Response(200, json={"candidates": [{"content": {"parts": [{"functionCall": {"name": "f", "id": 7}}]}}]}),
         httpx.Response(200, json={"promptFeedback": "blocked"}),
     ],
 )
@@ -595,12 +622,25 @@ async def test_api_key_is_redacted_before_the_error_body_is_truncated(offset: in
         assert BOUNDARY_KEY[:length] not in message, f"key fragment leaked: {BOUNDARY_KEY[:length]!r}"
 
 
-@pytest.mark.parametrize("error_cls", [httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout])
-async def test_connect_errors_and_timeouts_are_retried(error_cls: type[httpx.RequestError]) -> None:
+@pytest.mark.parametrize("error_cls", [httpx.ConnectError, httpx.ConnectTimeout])
+async def test_connection_failures_are_retried(error_cls: type[httpx.RequestError]) -> None:
     recorder = Recorder(error_cls("boom"), text_payload("Recovered"))
     result = await make_engine(recorder).generate_turn_async(bot(), USER_HELLO)
     assert result.text == "Recovered"
     assert len(recorder.requests) == 2
+
+
+@pytest.mark.parametrize("error_cls", [httpx.ReadTimeout, httpx.WriteTimeout])
+async def test_read_and_write_timeouts_are_not_retried(
+    error_cls: type[httpx.RequestError], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The request may already have reached Gemini, so sending it again could repeat it."""
+    recorder = Recorder(error_cls("timed out"), text_payload("unused"))
+    with caplog.at_level(logging.WARNING, logger="chatflow_agent.engine.gemini"):
+        with pytest.raises(ProviderError, match=f"Gemini API request failed \\({error_cls.__name__}\\): timed out"):
+            await make_engine(recorder, max_retries=3).generate_turn_async(bot(), USER_HELLO)
+    assert len(recorder.requests) == 1
+    assert "Retrying" not in caplog.text
 
 
 async def test_connect_errors_raise_provider_error_when_retries_are_exhausted() -> None:
@@ -617,16 +657,65 @@ async def test_other_transport_errors_are_not_retried() -> None:
     assert len(recorder.requests) == 1
 
 
-async def test_timeout_seconds_bounds_each_attempt_and_timeouts_are_retried() -> None:
+async def test_timeout_seconds_bounds_each_attempt_and_timeouts_are_not_retried() -> None:
     async def hang(request: httpx.Request) -> httpx.Response:
         await asyncio.sleep(10)
         return httpx.Response(200, json=text_payload("late"))
 
     recorder = Recorder(handler=hang)
     engine = make_engine(recorder, timeout_seconds=0.05, max_retries=1)
-    with pytest.raises(ProviderError, match="Gemini API request failed"):
+    with pytest.raises(ProviderError, match="Gemini API request failed \\(TimeoutError\\)"):
         await engine.generate_turn_async(bot(), USER_HELLO)
-    assert len(recorder.requests) == 2
+    assert len(recorder.requests) == 1
+
+
+# httpcore trace events (as httpcore 1.0 names them) reported before an attempt runs out of time.
+CONNECTING = ("connection.connect_tcp.started",)
+TLS_HANDSHAKE = ("connection.connect_tcp.started", "connection.connect_tcp.complete", "connection.start_tls.started")
+SENDING = ("connection.connect_tcp.started", "connection.connect_tcp.complete", "http11.send_request_headers.started")
+ON_A_REUSED_CONNECTION = ("http11.send_request_headers.started", "http11.send_request_headers.complete")
+
+
+@pytest.mark.parametrize(
+    ("events", "retried"),
+    [(CONNECTING, True), (TLS_HANDSHAKE, True), (SENDING, False), (ON_A_REUSED_CONNECTION, False)],
+    ids=["connecting", "tls-handshake", "sending", "reused-connection"],
+)
+@pytest.mark.parametrize("path", ["injected-client", "per-attempt-client", "pooled-client"])
+async def test_an_attempt_that_runs_out_of_time_is_retried_only_while_opening_a_connection(
+    monkeypatch: pytest.MonkeyPatch, path: str, events: tuple[str, ...], retried: bool
+) -> None:
+    """A connection that hangs while it is being opened has sent nothing, so retrying is safe."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if len(recorder.requests) == 1:
+            for event in events:
+                await request.extensions["trace"](event, {})
+            await asyncio.sleep(10)
+        return httpx.Response(200, json=text_payload("Recovered"))
+
+    recorder = Recorder(handler=handler)
+    monkeypatch.setattr(
+        gemini_module, "_new_attempt_client", lambda timeout: httpx.AsyncClient(transport=recorder.transport)
+    )
+    monkeypatch.setattr(gemini_module, "_new_pooled_client", lambda: httpx.AsyncClient(transport=recorder.transport))
+    injected = httpx.AsyncClient(transport=recorder.transport) if path == "injected-client" else None
+    engine = GeminiEngine(api_key=API_KEY, timeout_seconds=0.05, max_retries=1, base_delay=0.001, http_client=injected)
+
+    async def turn() -> str | None:
+        if path == "pooled-client":
+            runner = Runner(bot(), session_store=SessionStore(), engine=engine)
+            async with runner:
+                return (await runner.run_async("s1", "Hello")).content
+        return (await engine.generate_turn_async(bot(), USER_HELLO)).text
+
+    if retried:
+        assert await turn() == "Recovered"
+        assert len(recorder.requests) == 2
+    else:
+        with pytest.raises(ProviderError, match="Gemini API request failed \\(TimeoutError\\)"):
+            await turn()
+        assert len(recorder.requests) == 1
 
 
 @pytest.mark.parametrize(
@@ -696,6 +785,52 @@ async def test_api_key_is_redacted_from_injected_client_runtime_errors() -> None
     with pytest.raises(ProviderError, match="http_client is closed") as excinfo:
         await engine.generate_turn_async(bot(), USER_HELLO)
     assert_no_key(str(excinfo.value))
+
+
+@pytest.mark.parametrize(
+    ("error_cls", "expected"),
+    [
+        (httpx.ConnectError, "Gemini API request failed (ConnectError)"),
+        (httpx.ReadTimeout, "Gemini API request failed (ReadTimeout)"),
+        (httpx.ReadError, "Gemini API connection error (ReadError)"),
+        (httpx.InvalidURL, "Gemini API request URL is invalid"),
+        (RuntimeError, "the provided http_client is closed"),
+    ],
+)
+@pytest.mark.parametrize("in_query", [False, True], ids=["header-key", "query-key"])
+async def test_api_key_is_absent_from_the_formatted_traceback_and_exception_chain_of_provider_errors(
+    error_cls: type[Exception], expected: str, in_query: bool
+) -> None:
+    """The original exception, and the one chained to it, are neither part of the traceback
+    nor reachable from the error."""
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        try:
+            raise OSError(f"socket error while sending {URL_KEY}")
+        except OSError as inner:
+            if issubclass(error_cls, httpx.RequestError):
+                # As httpx's transports do: the request, with the key in its URL or headers.
+                raise error_cls(f"failed to send {request.url} with key {URL_KEY}", request=request) from inner
+            raise error_cls(f"failed to send {request.url} with key {URL_KEY}") from inner
+
+    recorder = Recorder(handler=fail)
+    engine = GeminiEngine(
+        api_key=URL_KEY,
+        api_key_in_query=in_query,
+        max_retries=1,
+        base_delay=0.001,
+        http_client=httpx.AsyncClient(transport=recorder.transport),
+    )
+    with pytest.raises(ProviderError) as excinfo:
+        await engine.generate_turn_async(bot(), USER_HELLO)
+
+    formatted = "".join(traceback.format_exception(excinfo.value))
+    assert_no_key(formatted)
+    assert "socket error" not in formatted
+    assert excinfo.value.__cause__ is None and excinfo.value.__suppress_context__
+    # Code that walks __context__ regardless of __suppress_context__ finds nothing either.
+    assert excinfo.value.__context__ is None
+    assert expected in formatted
 
 
 async def test_engine_owned_client_runtime_errors_are_not_wrapped(
@@ -801,7 +936,7 @@ def test_numeric_retry_after_replaces_the_exponential_base(retry_after: str) -> 
 
 @pytest.mark.parametrize(
     "retry_after",
-    ["Wed, 21 Oct 2015 07:28:00 GMT", "soon", "-5", "nan", "inf", "", "1e999"],
+    ["soon", "-5", "nan", "inf", "", "1e999", "Wed, 32 Oct 2015 07:28:00 GMT", "Wed, 21 Foo 2015 07:28:00 GMT"],
 )
 def test_unusable_retry_after_falls_back_to_exponential_backoff(retry_after: str) -> None:
     engine = GeminiEngine(api_key=API_KEY, base_delay=1.0, max_delay=100.0)
@@ -809,14 +944,39 @@ def test_unusable_retry_after_falls_back_to_exponential_backoff(retry_after: str
         assert 4.0 <= engine._retry_delay(2, retry_after) <= 5.0
 
 
-async def test_http_date_retry_after_is_retried_with_backoff() -> None:
+def http_date(seconds_from_now: float) -> str:
+    return format_datetime(datetime.now(timezone.utc) + timedelta(seconds=seconds_from_now), usegmt=True)
+
+
+def test_future_http_date_retry_after_replaces_the_exponential_base() -> None:
+    engine = GeminiEngine(api_key=API_KEY, base_delay=1.0, max_delay=100.0)
+    for _ in range(20):
+        # HTTP-dates have a resolution of one second.
+        assert 28.0 <= engine._retry_delay(0, http_date(30)) <= 30.0 * 1.25
+
+
+@pytest.mark.parametrize("retry_after", ["Wed, 21 Oct 2015 07:28:00 GMT", "Wed, 21 Oct 2015 07:28:00 -0000"])
+def test_past_http_date_retry_after_means_no_delay(retry_after: str) -> None:
+    engine = GeminiEngine(api_key=API_KEY, base_delay=1.0, max_delay=100.0)
+    assert engine._retry_delay(2, retry_after) == 0.0
+
+
+def test_http_date_retry_after_is_capped_at_max_delay() -> None:
+    engine = GeminiEngine(api_key=API_KEY, base_delay=1.0, max_delay=3.0)
+    assert engine._retry_delay(0, http_date(3600)) == 3.0
+
+
+async def test_http_date_retry_after_is_honoured_when_retrying(caplog: pytest.LogCaptureFixture) -> None:
     recorder = Recorder(
         httpx.Response(503, json={}, headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}),
         text_payload("Recovered"),
     )
-    result = await make_engine(recorder).generate_turn_async(bot(), USER_HELLO)
+    # base_delay is large: if the date were ignored the computed delay would be ~3s.
+    with caplog.at_level(logging.WARNING, logger="chatflow_agent.engine.gemini"):
+        result = await make_engine(recorder, base_delay=3.0).generate_turn_async(bot(), USER_HELLO)
     assert result.text == "Recovered"
     assert len(recorder.requests) == 2
+    assert "HTTP 503. Retrying in 0.00s" in caplog.text
 
 
 async def test_cancellation_propagates_as_cancelled_error() -> None:
@@ -1017,6 +1177,61 @@ async def test_runner_tool_call_round_trip() -> None:
                     "response": {"city": "Paris", "forecast": "sunny"},
                 }
             }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "gemini_ids",
+    [("fc-weather", "fc-time"), (None, "fc-time"), (None, None)],
+    ids=["gemini-ids", "mixed", "no-ids"],
+)
+async def test_runner_sends_gemini_function_call_ids_back_with_the_matching_responses(
+    gemini_ids: tuple[str | None, str | None],
+) -> None:
+    def get_weather(city: str) -> dict[str, Any]:
+        """Get the weather for a city."""
+        return {"forecast": "sunny"}
+
+    def get_time(city: str) -> str:
+        """Get the local time in a city."""
+        return "noon"
+
+    def with_id(part: dict[str, Any], call_id: str | None) -> dict[str, Any]:
+        return part if call_id is None else {**part, "id": call_id}
+
+    weather_call = {"name": "get_weather", "args": {"city": "Paris"}}
+    time_call = {"name": "get_time", "args": {"city": "Paris"}}
+    weather_id, time_id = gemini_ids
+    calls = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"functionCall": with_id(weather_call, weather_id)},
+                        {"functionCall": with_id(time_call, time_id)},
+                    ],
+                }
+            }
+        ]
+    }
+    recorder = Recorder(calls, text_payload("Sunny, noon."))
+    runner = Runner(bot(tools=[get_weather, get_time]), session_store=SessionStore(), engine=make_engine(recorder))
+
+    await runner.run_async("s1", "Weather and time in Paris?")
+
+    # Only IDs Gemini issued are sent; synthetic ones never leave the engine.
+    contents = recorder.bodies()[1]["contents"]
+    assert contents[1] == {
+        "role": "model",
+        "parts": [{"functionCall": with_id(weather_call, weather_id)}, {"functionCall": with_id(time_call, time_id)}],
+    }
+    assert contents[2] == {
+        "role": "user",
+        "parts": [
+            {"functionResponse": with_id({"name": "get_weather", "response": {"forecast": "sunny"}}, weather_id)},
+            {"functionResponse": with_id({"name": "get_time", "response": {"output": "noon"}}, time_id)},
         ],
     }
 
