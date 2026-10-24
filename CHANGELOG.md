@@ -1,5 +1,7 @@
 # Changelog / Registro de Cambios
 
+
+
 All notable changes to this project will be documented in this file.  
 *Todos los cambios notables en este proyecto serán documentados en este archivo.*
 
@@ -14,11 +16,9 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-### Security
-- **Stricter API key scoping for custom endpoints:** API keys read from environment variables are now sent only to the official endpoint of the provider they belong to. Configurations that use a custom `base_url` (proxies, gateways, other providers) must pass `api_key` explicitly; `api_key=""` sends no credential. `OpenAIEngine` and `AnthropicEngine` no longer follow HTTP redirects, even with an injected client configured to. See GHSA-mcgm-q29p-3984.
-
 ### Fixed
 - **Duplicate Agent Names Fail Closed (Issue #123):** Building a `Runner` whose handoff tree contains two distinct `Agent` instances with the same name now raises `ValueError`. `_resolve_handoff_target()` returns the peer the current agent declares (not the first registered object under that name), so same-named specialists on different branches no longer steal each other's handoffs. Late `add_handoff()` replacements update the registry atomically after validation; a replacement that would leave two distinct same-named agents reachable, collide in the replacement tree, or overwrite a `register_agent()` registration still raises without partially mutating the registry. Failed `register_agent()` trees roll back. Shared DAG instances keep working.
+- **WhatsApp Reactions And Malformed Nested Shapes (Issue #121):** `reaction` and `system` webhook events are acknowledged with no outbound reply. Meta Cloud API payloads that include `entry` never fall through to the generic extractor, so ignored events cannot be revived by top-level `from` / `text` fields. Signed payloads whose nested `entry` / `changes` / `value` / `messages` / `text` nodes have an unexpected type are skipped with a warning and HTTP 200, so Meta does not retry them as failures.
 - **SQLite Session Integrity Under Concurrent Requests (Issue #31):** Turns for the same `session_id` on a `SQLiteSessionStore` now share one lock per event loop and run one at a time, in the order they start waiting for it; previously every request got its own lock and turns ran in parallel. Each turn reloads the history, active agent and metadata committed by earlier turns after acquiring the lock. A failed or cancelled turn restores the state it started from, including messages pruned during the turn (#34). It no longer deletes or overwrites what someone else committed meanwhile (another turn's messages, or agent and metadata changed through another context): it then reverts only its own changes, in a single `BEGIN IMMEDIATE` transaction, and logs a warning. The lock registry holds locks weakly, so it does not grow with the number of sessions, and it creates separate locks per event loop, so successive `Runner.run()` calls keep working.
 - **Deleted Sessions No Longer Get Orphan Messages:** a turn that is running when its SQLite session is deleted fails with the new `SessionDeletedError` instead of storing its reply without a session (rows that later reappeared when the id was reused). A turn waiting for a deleted session starts a new, empty one; deleted content is never restored. Deleting a session erases its data but does not block its id.
 
@@ -36,6 +36,11 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **Concurrency Scope:** Serialization is not provided across store instances on the same file, across processes, or across threads running their own event loops.
 - **Nested Turns Outside the Turn's Tasks:** a tool that waits for work done by a task that was not started from the turn (for example, a worker created earlier) can still deadlock if that work runs a turn of the same session. Awaiting a task returned by `spawn_turn()` inside the turn that spawned it deadlocks as well.
 - **Reset and Delete During a Turn:** `clear_history()` and `delete()` are not coordinated with running turns beyond the rollback and `SessionDeletedError` guarantees above (tracked separately).
+
+## [0.3.4] - 2026-10-23
+
+### Security
+- **Stricter API key scoping for custom endpoints:** API keys read from environment variables are now sent only to the official endpoint of the provider they belong to. Configurations that use a custom `base_url` (proxies, gateways, other providers) must pass `api_key` explicitly; `api_key=""` sends no credential. `OpenAIEngine` and `AnthropicEngine` no longer follow HTTP redirects, even with an injected client configured to. See GHSA-mcgm-q29p-3984.
 
 ## [0.3.3] - 2026-10-19
 
@@ -97,9 +102,6 @@ If you are upgrading from v0.2.0:
 
 ## [Unreleased]
 
-### Seguridad
-- **Alcance más estricto de las API keys en endpoints personalizados:** las API keys leídas de variables de entorno ahora se envían solo al endpoint oficial del proveedor al que pertenecen. Las configuraciones con un `base_url` personalizado (proxies, gateways, otros proveedores) deben pasar `api_key` explícitamente; `api_key=""` no envía ninguna credencial. `OpenAIEngine` y `AnthropicEngine` ya no siguen redirects HTTP, aunque el cliente inyectado esté configurado para hacerlo. Ver GHSA-mcgm-q29p-3984.
-
 ### Corregido
 - **Integridad de Sesiones SQLite ante Solicitudes Concurrentes (Issue #31):** Los turnos de un mismo `session_id` en un `SQLiteSessionStore` ahora comparten un candado por event loop y se ejecutan de a uno, en el orden en que empiezan a esperarlo; antes cada solicitud obtenía su propio candado y los turnos corrían en paralelo. Cada turno vuelve a leer el historial, el agente activo y la metadata confirmados por los turnos anteriores después de adquirir el candado. Un turno fallido o cancelado restaura el estado con el que empezó, incluidos los mensajes podados durante el turno (#34). Ya no borra ni sobrescribe lo que otro confirmó mientras tanto (mensajes de otro turno, o agente y metadata cambiados desde otro contexto): en ese caso solo revierte sus propios cambios, en una única transacción `BEGIN IMMEDIATE`, y registra una advertencia. El registro de candados los mantiene con referencias débiles, por lo que no crece con la cantidad de sesiones, y crea candados separados por event loop, por lo que las llamadas sucesivas a `Runner.run()` siguen funcionando.
 - **Las Sesiones Borradas Ya No Reciben Mensajes Huérfanos:** un turno que se está ejecutando cuando se borra su sesión SQLite falla con la nueva `SessionDeletedError` en lugar de guardar su respuesta sin sesión (filas que reaparecían al reutilizar el id). Un turno que esperaba una sesión borrada inicia una sesión nueva y vacía; el contenido borrado nunca se restaura. Borrar una sesión elimina sus datos, pero no bloquea su id.
@@ -118,6 +120,11 @@ If you are upgrading from v0.2.0:
 - **Alcance de la Concurrencia:** No se serializan turnos entre instancias del store sobre el mismo archivo, entre procesos ni entre threads con su propio event loop.
 - **Turnos Anidados Fuera de las Tareas del Turno:** una tool que espera trabajo hecho por una tarea que no fue iniciada desde el turno (por ejemplo, un worker creado antes) todavía puede quedar bloqueada si ese trabajo ejecuta un turno de la misma sesión. Esperar, dentro del turno que la creó, una tarea devuelta por `spawn_turn()` también la bloquea.
 - **Reset y Delete Durante un Turno:** `clear_history()` y `delete()` no se coordinan con los turnos en curso más allá de las garantías de rollback y de `SessionDeletedError` descritas arriba (se trata por separado).
+
+## [0.3.4] - 2026-10-23
+
+### Seguridad
+- **Alcance más estricto de las API keys en endpoints personalizados:** las API keys leídas de variables de entorno ahora se envían solo al endpoint oficial del proveedor al que pertenecen. Las configuraciones con un `base_url` personalizado (proxies, gateways, otros proveedores) deben pasar `api_key` explícitamente; `api_key=""` no envía ninguna credencial. `OpenAIEngine` y `AnthropicEngine` ya no siguen redirects HTTP, aunque el cliente inyectado esté configurado para hacerlo. Ver GHSA-mcgm-q29p-3984.
 
 ## [0.3.3] - 2026-10-19
 
