@@ -4,11 +4,13 @@ import asyncio
 import contextvars
 import copy
 import logging
+import math
+import sys
 import threading
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, NamedTuple, TypeVar
 
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import BaseEngine, GeminiEngine, resolve_engine
@@ -23,6 +25,99 @@ from chatflow_agent.types import (
 )
 
 logger = logging.getLogger("chatflow_agent.runner")
+
+_T = TypeVar("_T")
+
+
+class _DispatchLimits(NamedTuple):
+    """Limits a channel sets for the next turn it dispatches (see ``_dispatch_limits``)."""
+
+    wait_deadline: float  # event loop time by which the session lock must be held
+    turn_timeout: float | None  # passed to _within(): None, or any value it accepts
+
+
+# Limits for the turn a channel is about to dispatch. They travel in the context so that
+# they reach run_async() without changing the dispatch_async(session_id, message, metadata)
+# signature that channels, subclasses and tests rely on.
+#
+# Contract (internal):
+# * The channel sets it right before awaiting dispatch_async() and resets it with the
+#   returned token in a ``finally``; it never stays set after the dispatch.
+# * The first run_async() that runs in a context holding it consumes it: it sets the
+#   variable to None before doing anything else, so the turn's own code (tools and the
+#   tasks or threads they start) never sees it, and a later run_async() in that context
+#   gets no limits.
+# * Each task has its own copy of the context. A task created while the variable is set
+#   (by a dispatch_async() override before it calls run_async(), or by wait_for() on
+#   Python 3.10) starts with the limits, and its first run_async() consumes them in that
+#   task only. Concurrent dispatches never see each other's limits.
+# * spawn_turn() clears it for the turn it starts.
+# * Values come from the channel, not from users, and are not validated by run_async():
+#   the channel validates or normalizes them.
+_dispatch_limits: contextvars.ContextVar[_DispatchLimits | None] = contextvars.ContextVar(
+    "chatflow_dispatch_limits", default=None
+)
+
+
+class _SessionWaitTimeout(asyncio.TimeoutError):
+    """The session lock was not acquired before the channel's wait deadline.
+
+    The turn did not start: nothing was written to the session.
+    """
+
+
+class _TurnTimeout(asyncio.TimeoutError):
+    """The turn exceeded its ``turn_timeout`` and was cancelled and rolled back."""
+
+
+async def _within(
+    timeout: float | None,
+    coro: Coroutine[Any, Any, _T],
+    expired: type[asyncio.TimeoutError] = asyncio.TimeoutError,
+) -> _T:
+    """Await ``coro``; after ``timeout`` seconds cancel it and raise ``expired``.
+
+    Only this limit raises ``expired``: a ``TimeoutError`` raised by ``coro`` itself
+    propagates unchanged. ``None``, ``inf`` and ``nan`` set no limit; zero or negative
+    values expire at once. No timer is ever scheduled for ``nan``: ``asyncio.timeout(nan)``
+    expires at once on 3.11+, and a NaN timer can stop the event loop (seen on 3.13).
+    """
+    if timeout is None or math.isnan(timeout) or timeout == math.inf:
+        return await coro
+    if sys.version_info >= (3, 11):
+        scope = asyncio.timeout(timeout)
+        try:
+            async with scope:
+                return await coro
+        except TimeoutError:
+            if scope.expired():
+                raise expired(f"Limit of {timeout}s exceeded.") from None
+            raise
+    # Python 3.10 has no asyncio.timeout(). Run coro in a task (it inherits the current
+    # context, and so the turn lineage) and cancel it from a timer that records that it
+    # fired: the loop may run a timer slightly before its due time, so the elapsed time
+    # cannot tell this limit apart from a TimeoutError raised by coro.
+    loop = asyncio.get_running_loop()
+    task = asyncio.ensure_future(coro)
+    fired = False
+
+    def expire() -> None:
+        nonlocal fired
+        if not task.done():
+            fired = True
+            task.cancel()
+
+    handle = loop.call_later(timeout, expire)
+    try:
+        # Cancelling this await (the caller was cancelled) cancels the task as well.
+        return await task
+    except asyncio.CancelledError:
+        if fired:
+            raise expired(f"Limit of {timeout}s exceeded.") from None
+        raise
+    finally:
+        handle.cancel()
+
 
 class _TurnToken:
     """Marks a running turn for every piece of code it starts."""
@@ -65,10 +160,30 @@ def _refuse_nested_turn(store: object, session_id: str) -> None:
 
 @asynccontextmanager
 async def _hold_session_lock(
-    store: object, session_id: str, lock: asyncio.Lock
+    store: object,
+    session_id: str,
+    lock: asyncio.Lock,
+    wait_deadline: float | None = None,
 ) -> AsyncIterator[None]:
-    """Hold the session lock and mark the turn in the context of the code it runs."""
-    async with lock:
+    """Hold the session lock and mark the turn in the context of the code it runs.
+
+    With ``wait_deadline`` (event loop time), raise ``_SessionWaitTimeout`` instead of
+    holding the lock if it is not acquired by then. A lock obtained after the deadline
+    (the loop was busy when it was handed over) is released at once: an expired turn
+    never runs.
+    """
+    if wait_deadline is None:
+        await lock.acquire()
+    else:
+        loop = asyncio.get_running_loop()
+        remaining = wait_deadline - loop.time()
+        if remaining <= 0:
+            raise _SessionWaitTimeout(f"Session '{session_id}' wait deadline already passed.")
+        await _within(remaining, lock.acquire(), _SessionWaitTimeout)
+        if loop.time() > wait_deadline:
+            lock.release()
+            raise _SessionWaitTimeout(f"Session '{session_id}' was acquired after its deadline.")
+    try:
         token = _TurnToken(store, session_id)
         reset = _turn_lineage.set(_turn_lineage.get() + (token,))
         try:
@@ -76,6 +191,8 @@ async def _hold_session_lock(
         finally:
             token.active = False
             _turn_lineage.reset(reset)
+    finally:
+        lock.release()
 
 
 class Runner:
@@ -265,6 +382,8 @@ class Runner:
         session_id: str,
         user_message: str,
         metadata: dict[str, Any] | None = None,
+        *,
+        turn_timeout: float | None = None,
     ) -> AgentResponse:
         """Process a user message through the active agent and resolve tools/handoffs.
 
@@ -274,7 +393,30 @@ class Runner:
         code started by a turn of that same session (a tool, or a task or thread it starts)
         while that turn is running raises ``ReentrantTurnError``; use ``spawn_turn()`` to
         queue a follow-up turn instead.
+
+        ``turn_timeout`` (seconds, keyword-only) limits the turn itself: it starts once this
+        call holds the session, so time spent waiting behind earlier turns of the same session
+        does not count. When it expires the turn is cancelled, the session is restored to the
+        state it had before the turn, and ``TimeoutError`` (``asyncio.TimeoutError``) is
+        raised. It must be a positive finite number; ``None`` (the default) sets no limit.
         """
+        # Consume the limits of the channel that dispatched this call first, whatever
+        # happens next, so that they never apply to the turn's code or to a later call.
+        limits = _dispatch_limits.get()
+        if limits is not None:
+            _dispatch_limits.set(None)
+        if turn_timeout is not None and not (
+            math.isfinite(turn_timeout) and turn_timeout > 0
+        ):
+            raise ValueError(
+                f"turn_timeout must be a positive finite number or None, got {turn_timeout!r}"
+            )
+        wait_deadline: float | None = None
+        if limits is not None:
+            wait_deadline = limits.wait_deadline
+            if turn_timeout is None:
+                turn_timeout = limits.turn_timeout
+
         _refuse_nested_turn(self.session_store, session_id)
         session = self.session_store.get_or_create(
             session_id=session_id,
@@ -282,181 +424,194 @@ class Runner:
             metadata=metadata,
         )
 
-        async with _hold_session_lock(self.session_store, session_id, session.lock):
+        async with _hold_session_lock(
+            self.session_store, session_id, session.lock, wait_deadline=wait_deadline
+        ):
             # Reload the state committed by turns that held the lock before this one.
-            # Outside the try: nothing has changed yet if it fails.
+            # Before the turn's checkpoint: nothing has changed yet if it fails.
             refresh = getattr(session, "refresh", None)
             if callable(refresh):
                 refresh()
-            checkpoint_history = list(session.history)
-            checkpoint_agent = session.active_agent
-            checkpoint_metadata = copy.deepcopy(session.metadata)
-            try:
-                if metadata:
-                    session.update_metadata(metadata)
+            return await _within(
+                turn_timeout, self._execute_turn(session, user_message, metadata), _TurnTimeout
+            )
 
-                # 1. Append inbound user message to history
-                session.add_message(Message(role=Role.USER, content=user_message))
+    async def _execute_turn(
+        self,
+        session: SessionContext,
+        user_message: str,
+        metadata: dict[str, Any] | None,
+    ) -> AgentResponse:
+        """Run one turn on a session whose lock is held; on failure, restore its state."""
+        checkpoint_history = list(session.history)
+        checkpoint_agent = session.active_agent
+        checkpoint_metadata = copy.deepcopy(session.metadata)
+        try:
+            if metadata:
+                session.update_metadata(metadata)
 
-                tool_calls_executed: list[str] = []
-                last_handoff: Handoff | None = None
-                handoff_counter = 0
+            # 1. Append inbound user message to history
+            session.add_message(Message(role=Role.USER, content=user_message))
 
-                # 2. Main agent execution loop
-                for _ in range(self.max_tool_iterations):
-                    current_agent = session.active_agent
-                    active_engine = resolve_engine(
-                        current_agent,
-                        default_engine=self.engine,
-                        prefer_default_engine=self._engine_provided,
+            tool_calls_executed: list[str] = []
+            last_handoff: Handoff | None = None
+            handoff_counter = 0
+
+            # 2. Main agent execution loop
+            for _ in range(self.max_tool_iterations):
+                current_agent = session.active_agent
+                active_engine = resolve_engine(
+                    current_agent,
+                    default_engine=self.engine,
+                    prefer_default_engine=self._engine_provided,
+                )
+                turn_result = await active_engine.generate_turn_async(
+                    agent=current_agent,
+                    history=session.history,
+                )
+
+                # If the model requested tool calls
+                if turn_result.has_tool_calls:
+                    # Record model's intent in history
+                    session.add_message(
+                        Message(
+                            role=Role.MODEL,
+                            content=turn_result.text,
+                            tool_calls=turn_result.tool_calls,
+                        )
                     )
-                    turn_result = await active_engine.generate_turn_async(
-                        agent=current_agent,
-                        history=session.history,
-                    )
 
-                    # If the model requested tool calls
-                    if turn_result.has_tool_calls:
-                        # Record model's intent in history
-                        session.add_message(
-                            Message(
-                                role=Role.MODEL,
-                                content=turn_result.text,
-                                tool_calls=turn_result.tool_calls,
+                    tool_results: list[ToolResult] = []
+                    available_tools = {t.name: t for t in current_agent.get_all_tools()}
+
+                    for call_index, call in enumerate(turn_result.tool_calls):
+                        tool_calls_executed.append(call.name)
+                        tool_instance = available_tools.get(call.name)
+
+                        if not tool_instance:
+                            tool_results.append(
+                                ToolResult(
+                                    tool_call_id=call.id,
+                                    name=call.name,
+                                    content=f"Error: Tool '{call.name}' not found on agent '{current_agent.name}'.",
+                                    is_error=True,
+                                )
                             )
-                        )
+                            continue
 
-                        tool_results: list[ToolResult] = []
-                        available_tools = {t.name: t for t in current_agent.get_all_tools()}
+                        # Execute tool safely
+                        try:
+                            raw_output = await tool_instance.execute_async(**call.args)
+                        except Exception as err:
+                            trace_id = str(uuid.uuid4())
+                            logger.error(
+                                f"Tool execution failed [trace_id: {trace_id}] - Tool: '{call.name}' on agent '{current_agent.name}': {err}",
+                                exc_info=True,
+                            )
+                            tool_results.append(
+                                ToolResult(
+                                    tool_call_id=call.id,
+                                    name=call.name,
+                                    content=f"Tool execution failed [trace_id: {trace_id}]. Please try a different approach or inform the user.",
+                                    is_error=True,
+                                )
+                            )
+                            continue
 
-                        for call_index, call in enumerate(turn_result.tool_calls):
-                            tool_calls_executed.append(call.name)
-                            tool_instance = available_tools.get(call.name)
+                        # Check if tool execution resulted in a Handoff
+                        if isinstance(raw_output, Handoff):
+                            target_name = raw_output.target_agent_name
+                            target_agent = self._resolve_handoff_target(
+                                current_agent, target_name
+                            )
 
-                            if not tool_instance:
+                            handoff_counter += 1
+
+                            if handoff_counter > self.max_handoffs_per_turn:
                                 tool_results.append(
                                     ToolResult(
                                         tool_call_id=call.id,
                                         name=call.name,
-                                        content=f"Error: Tool '{call.name}' not found on agent '{current_agent.name}'.",
+                                        content="Maximum agent transfers exceeded for a single turn.",
                                         is_error=True,
                                     )
                                 )
-                                continue
-
-                            # Execute tool safely
-                            try:
-                                raw_output = await tool_instance.execute_async(**call.args)
-                            except Exception as err:
-                                trace_id = str(uuid.uuid4())
-                                logger.error(
-                                    f"Tool execution failed [trace_id: {trace_id}] - Tool: '{call.name}' on agent '{current_agent.name}': {err}",
-                                    exc_info=True,
-                                )
-                                tool_results.append(
+                                # Preserve call/result parity without executing the skipped tools.
+                                tool_results.extend(
                                     ToolResult(
-                                        tool_call_id=call.id,
-                                        name=call.name,
-                                        content=f"Tool execution failed [trace_id: {trace_id}]. Please try a different approach or inform the user.",
+                                        tool_call_id=skipped_call.id,
+                                        name=skipped_call.name,
+                                        content="Tool skipped because the maximum agent transfers were exceeded for this turn.",
                                         is_error=True,
                                     )
+                                    for skipped_call in turn_result.tool_calls[call_index + 1 :]
                                 )
-                                continue
+                                break
 
-                            # Check if tool execution resulted in a Handoff
-                            if isinstance(raw_output, Handoff):
-                                target_name = raw_output.target_agent_name
-                                target_agent = self._resolve_handoff_target(
-                                    current_agent, target_name
+                            session.set_active_agent(target_agent, raw_output.context_updates)
+                            last_handoff = raw_output
+                            tool_results.append(
+                                ToolResult(
+                                    tool_call_id=call.id,
+                                    name=call.name,
+                                    content={
+                                        "status": "HANDOFF_SUCCESS",
+                                        "transferred_to": target_agent.name,
+                                        "reason": raw_output.reason or "Specialist routing",
+                                    },
                                 )
-
-                                handoff_counter += 1
-
-                                if handoff_counter > self.max_handoffs_per_turn:
-                                    tool_results.append(
-                                        ToolResult(
-                                            tool_call_id=call.id,
-                                            name=call.name,
-                                            content="Maximum agent transfers exceeded for a single turn.",
-                                            is_error=True,
-                                        )
-                                    )
-                                    # Preserve call/result parity without executing the skipped tools.
-                                    tool_results.extend(
-                                        ToolResult(
-                                            tool_call_id=skipped_call.id,
-                                            name=skipped_call.name,
-                                            content="Tool skipped because the maximum agent transfers were exceeded for this turn.",
-                                            is_error=True,
-                                        )
-                                        for skipped_call in turn_result.tool_calls[call_index + 1 :]
-                                    )
-                                    break
-
-                                session.set_active_agent(target_agent, raw_output.context_updates)
-                                last_handoff = raw_output
-                                tool_results.append(
-                                    ToolResult(
-                                        tool_call_id=call.id,
-                                        name=call.name,
-                                        content={
-                                            "status": "HANDOFF_SUCCESS",
-                                            "transferred_to": target_agent.name,
-                                            "reason": raw_output.reason or "Specialist routing",
-                                        },
-                                    )
+                            )
+                        else:
+                            tool_results.append(
+                                ToolResult(
+                                    tool_call_id=call.id,
+                                    name=call.name,
+                                    content=raw_output,
                                 )
-                            else:
-                                tool_results.append(
-                                    ToolResult(
-                                        tool_call_id=call.id,
-                                        name=call.name,
-                                        content=raw_output,
-                                    )
-                                )
+                            )
 
-                        # Append tool results to conversation history
-                        session.add_message(Message(role=Role.TOOL, tool_results=tool_results))
-                        # Continue loop: active agent evaluates the tool results
+                    # Append tool results to conversation history
+                    session.add_message(Message(role=Role.TOOL, tool_results=tool_results))
+                    # Continue loop: active agent evaluates the tool results
 
-                    else:
-                        # No more tool calls: final text response reached
-                        final_text = turn_result.text or ""
-                        session.add_message(Message(role=Role.MODEL, content=final_text))
+                else:
+                    # No more tool calls: final text response reached
+                    final_text = turn_result.text or ""
+                    session.add_message(Message(role=Role.MODEL, content=final_text))
 
-                        return AgentResponse(
-                            content=final_text,
-                            active_agent_name=session.active_agent.name,
-                            tool_calls_executed=tool_calls_executed,
-                            handoff=last_handoff,
-                        )
+                    return AgentResponse(
+                        content=final_text,
+                        active_agent_name=session.active_agent.name,
+                        tool_calls_executed=tool_calls_executed,
+                        handoff=last_handoff,
+                    )
 
-                # Fallback if max tool iterations exceeded
-                fallback_text = (
-                    f"Execution iteration limit reached by agent '{session.active_agent.name}'."
-                )
-                session.add_message(Message(role=Role.MODEL, content=fallback_text))
-                return AgentResponse(
-                    content=fallback_text,
-                    active_agent_name=session.active_agent.name,
-                    tool_calls_executed=tool_calls_executed,
-                    handoff=last_handoff,
-                )
+            # Fallback if max tool iterations exceeded
+            fallback_text = (
+                f"Execution iteration limit reached by agent '{session.active_agent.name}'."
+            )
+            session.add_message(Message(role=Role.MODEL, content=fallback_text))
+            return AgentResponse(
+                content=fallback_text,
+                active_agent_name=session.active_agent.name,
+                tool_calls_executed=tool_calls_executed,
+                handoff=last_handoff,
+            )
 
-            except asyncio.CancelledError:
-                session.restore_history(
-                    checkpoint_history,
-                    active_agent=checkpoint_agent,
-                    metadata=checkpoint_metadata,
-                )
-                raise
-            except Exception:
-                session.restore_history(
-                    checkpoint_history,
-                    active_agent=checkpoint_agent,
-                    metadata=checkpoint_metadata,
-                )
-                raise
+        except asyncio.CancelledError:
+            session.restore_history(
+                checkpoint_history,
+                active_agent=checkpoint_agent,
+                metadata=checkpoint_metadata,
+            )
+            raise
+        except Exception:
+            session.restore_history(
+                checkpoint_history,
+                active_agent=checkpoint_agent,
+                metadata=checkpoint_metadata,
+            )
+            raise
 
     def spawn_turn(
         self,
@@ -477,7 +632,8 @@ class Runner:
         """
         context = contextvars.copy_context()
         context.run(_turn_lineage.set, ())
-        coro = self.run_async(session_id, user_message, metadata=metadata)
+        context.run(_dispatch_limits.set, None)
+        coro =self.run_async(session_id, user_message, metadata=metadata)
         task: asyncio.Task[AgentResponse] = context.run(asyncio.ensure_future, coro)
         self._spawned_turns.add(task)
         task.add_done_callback(self._spawned_turns.discard)
