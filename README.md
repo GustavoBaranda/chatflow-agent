@@ -20,7 +20,7 @@ pip install chatflow-agent
 
 ## Key Pillars (Why chatflow-agent?)
 
-* **Ultra-Lightweight Core:** Only 3 runtime dependencies (`google-genai`, `pydantic`, `httpx`). A tiny ~72 KB package footprint that installs in seconds on Docker, serverless, and cloud VPS environments.
+* **Ultra-Lightweight Core:** Only 2 runtime dependencies (`pydantic`, `httpx`). A tiny ~72 KB package footprint that installs in seconds on Docker, serverless, and cloud VPS environments.
 
 * **Omnichannel Native:** Production-ready connectors for **WhatsApp (Official Meta Cloud API)**, **Telegram**, **Webhooks (FastAPI)**, and interactive **CLI**.
 

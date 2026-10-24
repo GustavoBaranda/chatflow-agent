@@ -27,7 +27,7 @@ graph TD
 
     subgraph Engines ["LLM Providers (chatflow_agent.core.engines)"]
         Factory[resolve_engine]
-        Gemini[GeminiEngine<br/>google-genai]
+        Gemini[GeminiEngine<br/>Gemini REST API]
         OpenAI[OpenAIEngine<br/>OpenAI / Grok / Ollama]
         Anthropic[AnthropicEngine<br/>Claude Messages API]
     end
@@ -76,7 +76,7 @@ The execution coordinator. It:
 
 #### `Engines` (`src/chatflow_agent/core/engines/`)
 Abstracted behind `BaseEngine`:
-- **`GeminiEngine`**: Uses the official `google-genai` SDK with retry/backoff for transient 429/5xx errors.
+- **`GeminiEngine`**: Asynchronous client via `httpx` calling the Gemini REST API (`generateContent`), with retry/backoff for 429, 500, 502, 503 and 504 responses and for connection failures.
 - **`OpenAIEngine`**: Asynchronous HTTP client via `httpx` supporting OpenAI, xAI Grok, DeepSeek, Groq, and local Ollama/vLLM endpoints adhering to the `/chat/completions` standard.
 - **`AnthropicEngine`**: Asynchronous client via `httpx` communicating with Anthropic's Messages API (`/v1/messages`).
 - **`resolve_engine()`** (`factory.py`): Determines which engine executes a turn based on agent overrides (`agent.engine`), provider flags (`agent.provider`), base URLs, or model prefix heuristics.

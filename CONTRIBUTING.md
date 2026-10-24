@@ -71,7 +71,7 @@ pip install -e ".[all,dev]"
 ```
 
 This installs:
-- Core dependencies: `google-genai`, `pydantic`, `httpx`
+- Core dependencies: `pydantic`, `httpx`
 - Channel connectors: `fastapi`, `uvicorn`, `python-telegram-bot`
 - Developer & QA tools: `pytest`, `pytest-asyncio`, `ruff`, `mypy`
 
