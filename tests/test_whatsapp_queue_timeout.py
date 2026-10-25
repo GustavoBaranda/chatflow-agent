@@ -190,10 +190,20 @@ async def test_queue_timeout_answers_with_fallback_and_never_runs_the_turn(
 async def test_turn_timeout_is_logged_separately_and_rolls_back(
     any_store: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    channel, runner, engine, sent = build(any_store, queue=5.0, turn=0.1)
+    # 1.0 s covers the turn's disk writes before its engine call (file store, slow CI disks):
+    # the limit must expire while the engine runs.
+    channel, runner, engine, sent = build(any_store, queue=5.0, turn=1.0)
     engine.gates["stuck"] = asyncio.Event()  # never released
     with caplog.at_level(logging.ERROR, logger="chatflow_agent.whatsapp"):
-        await bounded(process(channel, "w1", "stuck"))
+        task = process(channel, "w1", "stuck")
+        try:
+            await asyncio.wait_for(engine.started_event("stuck").wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            task.cancel()
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=SAFETY)
+            pytest.fail("the turn limit expired before the engine started")
+        await bounded(task)
+    assert task.done()  # the timed-out turn has finished, rollback included
     assert sent == [(PHONE, FALLBACK)]
     assert "Turn timed out" in caplog.text
     assert "llm_timeout_seconds" in caplog.text
@@ -203,6 +213,9 @@ async def test_turn_timeout_is_logged_separately_and_rolls_back(
     assert history(any_store) == []
     assert not any_store.get(PHONE).lock.locked()
 
+    # The follow-up turn must succeed and does real disk writes with a file store (slow on
+    # CI runners): give it its own realistic limit, independent of the one "stuck" exceeded.
+    channel.llm_timeout_seconds = 5.0
     await bounded(process(channel, "w2", "next"))
     assert sent[-1] == (PHONE, "re:next")
 

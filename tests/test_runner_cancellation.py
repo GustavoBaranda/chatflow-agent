@@ -163,15 +163,19 @@ async def test_timeout_cancellation_restores_session_state(
 
     await runner.run_async("timeout-session", "valid turn", metadata={"source": "original"})
     engine.block = True
-    task = asyncio.create_task(
-        asyncio.wait_for(
-            runner.run_async("timeout-session", "timed-out turn"),
-            timeout=0.1,
-        )
-    )
-    await engine.entered.wait()
+    task = asyncio.create_task(runner.run_async("timeout-session", "timed-out turn"))
+    # Start the timeout only once the turn runs its engine call: with a file store its disk
+    # writes come first, and a timeout firing during them would never reach the engine.
+    try:
+        await asyncio.wait_for(engine.entered.wait(), timeout=5.0)
+    except asyncio.TimeoutError:
+        task.cancel()
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=15.0)
+        pytest.fail("the turn never reached its engine call")
     with pytest.raises(asyncio.TimeoutError):
-        await task
+        await asyncio.wait_for(task, timeout=0.1)
+    # wait_for returns only after the cancelled turn has finished (rolled back).
+    assert task.cancelled()
 
     restored = store.get("timeout-session")
     assert restored is not None
