@@ -1,5 +1,7 @@
 """Tests for BaseChannel and CLIChannel."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from chatflow_agent.channels.base import BaseChannel, ChannelError
@@ -145,6 +147,151 @@ def test_cli_reset_with_sqlite_session_clears_persisted_history(
 
 
 def test_cli_reset_only_matches_exact_command(monkeypatch, capsys) -> None:
+    """Messages merely containing 'reset' are still dispatched to the agent."""
+    agent = Agent(name="CLI Assistant", instructions="Assist user via CLI.")
+    runner = Runner(starting_agent=agent, engine=MockEngine("Command processed."))
+
+    cli = CLIChannel(session_id="cli_user")
+    cli.attach(runner)
+
+    _drive_cli_loop(cli, ["please reset my password", "exit"], monkeypatch)
+
+    out = capsys.readouterr().out
+    assert "Conversation memory has been reset." not in out
+    assert "[CLI Assistant]: Command processed." in out
+
+
+@pytest.mark.parametrize("exit_command", ["exit", "quit", "salir"])
+def test_cli_run_exits_on_exit_commands(
+    monkeypatch, capsys, exit_command
+) -> None:
+    """The CLI loop exits cleanly for every supported exit command."""
+    agent = Agent(name="CLI Assistant", instructions="Assist user via CLI.")
+    runner = Runner(starting_agent=agent, engine=MockEngine("Welcome!"))
+
+    cli = CLIChannel()
+    cli.attach(runner)
+
+    _drive_cli_loop(cli, [exit_command], monkeypatch)
+
+    assert "Goodbye!" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("exception", [EOFError, KeyboardInterrupt])
+def test_cli_run_exits_on_input_exception(
+    monkeypatch, capsys, exception
+) -> None:
+    """The CLI loop exits cleanly when terminal input is interrupted."""
+
+    agent = Agent(name="CLI Assistant", instructions="Assist user via CLI.")
+    runner = Runner(starting_agent=agent, engine=MockEngine("Welcome!"))
+
+    cli = CLIChannel()
+    cli.attach(runner)
+
+    def interrupted_input(prompt: str = "") -> str:
+        raise exception
+
+    monkeypatch.setattr("builtins.input", interrupted_input)
+
+    cli.run()
+
+    assert "Session ended by user." in capsys.readouterr().out
+
+
+def test_cli_run_skips_empty_input_and_dispatches_valid_message(
+    monkeypatch, capsys
+) -> None:
+    """Empty inputs are ignored, and a valid message is dispatched."""
+    agent = Agent(name="CLI Assistant", instructions="Assist user via CLI.")
+    runner = Runner(starting_agent=agent, engine=MockEngine("Welcome!"))
+
+    cli = CLIChannel()
+    cli.attach(runner)
+    dispatched_messages = []
+
+    def fake_dispatch(session_id: str, message: str):
+        dispatched_messages.append(message)
+        return SimpleNamespace(
+            handoff=None,
+            active_agent_name="CLI Assistant",
+            content="Message processed.",
+        )
+
+    monkeypatch.setattr(cli, "dispatch", fake_dispatch)
+
+    _drive_cli_loop(cli, ["", "   ", "Hello", "exit"], monkeypatch)
+
+    assert dispatched_messages == ["Hello"]
+    assert "[CLI Assistant]: Message processed." in capsys.readouterr().out
+
+
+def test_cli_run_prints_handoff_target_and_reason(
+    monkeypatch, capsys
+) -> None:
+    """A handoff response displays the target agent and transfer reason."""
+    agent = Agent(name="CLI Assistant", instructions="Assist user via CLI.")
+    runner = Runner(starting_agent=agent, engine=MockEngine("Welcome!"))
+
+    cli = CLIChannel()
+    cli.attach(runner)
+
+    def fake_dispatch(session_id: str, message: str):
+        return SimpleNamespace(
+            handoff=SimpleNamespace(
+                target_agent_name="ResearchAgent",
+                reason="Research is required.",
+            ),
+            active_agent_name="ResearchAgent",
+            content="Research completed.",
+        )
+
+    monkeypatch.setattr(cli, "dispatch", fake_dispatch)
+
+    _drive_cli_loop(cli, ["Research this", "exit"], monkeypatch)
+
+    out = capsys.readouterr().out
+    assert "[Transferred to ResearchAgent]" in out
+    assert "Reason: Research is required." in out
+
+
+def test_cli_run_reports_dispatch_error_and_continues(
+    monkeypatch, capsys
+) -> None:
+    """A dispatch error is printed to stderr, and the loop continues."""
+    agent = Agent(name="CLI Assistant", instructions="Assist user via CLI.")
+    runner = Runner(starting_agent=agent, engine=MockEngine("Welcome!"))
+
+    cli = CLIChannel()
+    cli.attach(runner)
+    dispatched_messages = []
+
+    def fake_dispatch(session_id: str, message: str):
+        dispatched_messages.append(message)
+
+        if message == "first message":
+            raise RuntimeError("Test dispatch failure")
+
+        return SimpleNamespace(
+            handoff=None,
+            active_agent_name="CLI Assistant",
+            content="Second message processed.",
+        )
+
+    monkeypatch.setattr(cli, "dispatch", fake_dispatch)
+
+    _drive_cli_loop(
+        cli,
+        ["first message", "second message", "exit"],
+        monkeypatch,
+    )
+
+    captured = capsys.readouterr()
+
+    assert "Error during processing: Test dispatch failure" in captured.err
+    assert dispatched_messages == ["first message", "second message"]
+    assert "[CLI Assistant]: Second message processed." in captured.out
+
     """Messages merely containing 'reset' are still dispatched to the agent."""
     agent = Agent(name="CLI Assistant", instructions="Assist user via CLI.")
     runner = Runner(starting_agent=agent, engine=MockEngine("Command processed."))
