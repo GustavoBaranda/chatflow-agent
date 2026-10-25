@@ -832,6 +832,13 @@ class SQLiteSessionStore(BaseSessionStore):
         failed turn still reverts only its own changes, but turns may interleave and
         read stale history.
 
+        With a database file, the calls ``Runner`` and the WhatsApp and Telegram channels
+        make from async code run in this store's own worker threads (4, created on first
+        use, shut down by ``close()``), so a slow disk or a database locked by another writer
+        does not block the event loop. A call that has started cannot be interrupted: a
+        cancelled turn waits for it before rolling back. ``:memory:`` stores and subclasses
+        run their calls on the event loop.
+
         ``delete()`` and ``clear()`` do not wait for running turns. A turn that is running
         when its session is deleted fails with ``SessionDeletedError`` the next time it
         stores a message, and its rollback leaves no rows behind. A turn that was waiting
