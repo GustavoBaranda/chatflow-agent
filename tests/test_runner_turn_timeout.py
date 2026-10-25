@@ -148,8 +148,10 @@ async def test_waiting_for_the_session_does_not_count_toward_turn_timeout(any_st
     holder = runner.spawn_turn("s", "hold")
     await bounded(engine.started_event("hold").wait())
 
-    queued = asyncio.create_task(runner.run_async("s", "queued", turn_timeout=0.1))
-    await asyncio.sleep(0.3)  # queued has waited at least 3x its turn limit
+    # The turn limit must cover the queued turn's own work, which with a file store
+    # includes real disk writes (slow on CI runners); the wait below still exceeds it.
+    queued = asyncio.create_task(runner.run_async("s", "queued", turn_timeout=1.0))
+    await asyncio.sleep(1.2)  # queued has waited longer than its turn limit
     assert not queued.done()
     assert "queued" not in engine.calls
 

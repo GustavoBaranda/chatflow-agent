@@ -140,13 +140,15 @@ def test_queue_timeout_must_be_positive_and_finite(value: float) -> None:
 @pytest.mark.asyncio
 async def test_waiting_behind_a_turn_does_not_consume_llm_timeout(any_store: Any) -> None:
     """Audit case 1a: a message that needs ~0 s used to time out while queued."""
-    channel, runner, engine, sent = build(any_store, queue=5.0, turn=0.1)
+    # The turn limit must cover the queued turn's own work, which with a file store
+    # includes real disk writes (slow on CI runners); the wait below still exceeds it.
+    channel, runner, engine, sent = build(any_store, queue=5.0, turn=1.0)
     engine.gates["hold"] = asyncio.Event()
     holder = runner.spawn_turn(PHONE, "hold")  # a turn of the same session, not bounded
     await bounded(engine.started_event("hold").wait())
 
     task = process(channel, "w2", "queued")
-    await asyncio.sleep(0.3)  # queued has waited at least 3x llm_timeout_seconds
+    await asyncio.sleep(1.2)  # queued has waited longer than llm_timeout_seconds
     assert not task.done()
     engine.gates["hold"].set()
     await bounded(asyncio.gather(holder, task))
