@@ -2,10 +2,12 @@
 
 import asyncio
 import contextlib
+import functools
 import logging
 from typing import Any
 
 from chatflow_agent.channels.base import BaseChannel, split_message
+from chatflow_agent.core.memory import _run_blocking
 from chatflow_agent.exceptions import DependencyError
 from chatflow_agent.types import AgentResponse
 
@@ -95,9 +97,13 @@ class TelegramChannel(BaseChannel):
 
         chat_id = str(update.effective_chat.id)
         if self.runner:
-            session = self.runner.get_session(chat_id)
+            # With a file-backed SQLiteSessionStore these run in worker threads, so a slow
+            # or locked database does not stop the bot's event loop.
+            runner = self.runner
+            store = runner.session_store
+            session = await _run_blocking(store, functools.partial(runner.get_session, chat_id))
             if session:
-                session.clear_history()
+                await _run_blocking(store, session.clear_history)
         await update.message.reply_text("Conversation memory has been reset.")
 
     async def _handle_message(self, update: Any, context: Any) -> None:
