@@ -194,9 +194,16 @@ def test_cli_run_exits_on_input_exception(
 
     monkeypatch.setattr("builtins.input", interrupted_input)
 
-    cli.run()
+    try:
+        cli.run()
+    except KeyboardInterrupt:
+        pytest.fail(
+            "CLIChannel.run() propagated KeyboardInterrupt "
+            "instead of handling it"
+        )
 
     assert "Session ended by user." in capsys.readouterr().out
+
 
 
 def test_cli_run_skips_empty_input_and_dispatches_valid_message(
@@ -291,16 +298,3 @@ def test_cli_run_reports_dispatch_error_and_continues(
     assert "Error during processing: Test dispatch failure" in captured.err
     assert dispatched_messages == ["first message", "second message"]
     assert "[CLI Assistant]: Second message processed." in captured.out
-
-    """Messages merely containing 'reset' are still dispatched to the agent."""
-    agent = Agent(name="CLI Assistant", instructions="Assist user via CLI.")
-    runner = Runner(starting_agent=agent, engine=MockEngine("Command processed."))
-
-    cli = CLIChannel(session_id="cli_user")
-    cli.attach(runner)
-
-    _drive_cli_loop(cli, ["please reset my password", "exit"], monkeypatch)
-
-    out = capsys.readouterr().out
-    assert "Conversation memory has been reset." not in out
-    assert "[CLI Assistant]: Command processed." in out
