@@ -1,6 +1,7 @@
 """Session memory management and context tracking for multi-agent conversations."""
 
 import asyncio
+import contextvars
 import copy
 import json
 import logging
@@ -10,10 +11,11 @@ import uuid
 import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, TypeVar, cast
 
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.exceptions import SessionDeletedError
@@ -24,6 +26,13 @@ logger = logging.getLogger("chatflow_agent.memory")
 # Canonical Single Source of Truth for message deduplication TTL
 DEFAULT_DEDUP_TTL_HOURS: int = 192  # 8 days (exceeds Meta's 7-day webhook retry window)
 DEFAULT_DEDUP_TTL_SECONDS: float = float(DEFAULT_DEDUP_TTL_HOURS * 3600)
+
+# Worker threads per file-backed SQLiteSessionStore for calls made from async code.
+# Writes to one SQLite file are serialized anyway; a small private pool keeps a stalled
+# database from filling the default executor that sync tools and asyncio.to_thread use.
+_BLOCKING_IO_WORKERS = 4
+
+_T = TypeVar("_T")
 
 
 class SessionContext:
@@ -845,6 +854,10 @@ class SQLiteSessionStore(BaseSessionStore):
         self._agent_resolver: Callable[[str], Agent | None] | None = None
         self._session_locks = _SessionLockRegistry()
         self._closed = False
+        # Worker threads for the blocking SQLite calls made from async code (see
+        # _run_blocking); created on first use, shut down by close().
+        self._executor: ThreadPoolExecutor | None = None
+        self._executor_guard = threading.Lock()
         self._db_lock = threading.RLock()
         self._keeper_conn: sqlite3.Connection | None = None
         # Disk paths use the user path directly. Pure :memory: DBs are connection-private,
@@ -885,11 +898,38 @@ class SQLiteSessionStore(BaseSessionStore):
             with _get_sqlite_connection(self._conn_path) as conn:
                 yield conn
 
+    def _session_lock(self, session_id: str) -> asyncio.Lock:
+        """The lock every context of ``session_id`` uses on the running event loop.
+
+        Lets ``Runner`` wait for the session before loading it, so that turns whose
+        loading runs in worker threads still start waiting in the order they arrive.
+        """
+        return self._session_locks.get(asyncio.get_running_loop(), session_id)
+
+    def _blocking_executor(self) -> ThreadPoolExecutor | None:
+        """Executor for blocking calls made from async code; None once the store is closed."""
+        with self._executor_guard:
+            if self._closed:
+                return None
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(
+                    max_workers=_BLOCKING_IO_WORKERS, thread_name_prefix="chatflow-sqlite"
+                )
+            return self._executor
+
     def close(self) -> None:
-        """Release keeper connections and mark the store closed. Idempotent."""
+        """Release keeper connections and mark the store closed. Idempotent.
+
+        Calls already running in worker threads finish on their own; close() does not
+        wait for them.
+        """
         if self._closed:
             return
-        self._closed = True
+        with self._executor_guard:
+            self._closed = True
+            executor, self._executor = self._executor, None
+        if executor is not None:
+            executor.shutdown(wait=False)
         if self._keeper_conn is not None:
             with self._db_lock:
                 if self._keeper_conn is not None:
@@ -1098,3 +1138,63 @@ class SQLiteSessionStore(BaseSessionStore):
         with self._connection() as conn:
             conn.execute("DELETE FROM chatflow_messages")
             conn.execute("DELETE FROM chatflow_sessions")
+
+
+def _offloads_blocking_io(store: object) -> bool:
+    """Whether calls on ``store`` run in worker threads instead of the event loop.
+
+    Only a file-backed ``SQLiteSessionStore`` itself: ``:memory:`` stores (no disk, no
+    other writers), subclasses, ``SessionStore`` and custom stores keep running on the
+    event loop exactly as before, so their code never has to be thread-safe.
+    """
+    return type(store) is SQLiteSessionStore and not store._in_memory
+
+
+async def _run_blocking(store: object, call: Callable[[], _T], *, must_run: bool = False) -> _T:
+    """Run a blocking session-store ``call`` without blocking the event loop.
+
+    For a file-backed ``SQLiteSessionStore`` the call runs in the store's worker threads,
+    with a copy of the current context; for any other store it runs here, as before.
+
+    A call that has started cannot be stopped. If the awaiting task is cancelled while
+    the call runs, this waits until the call has finished (its effects are then final
+    and known to the caller's rollback journal) and only then re-raises the
+    cancellation, so a rollback or the release of the session lock never overlaps it.
+    A call that has not started yet is withdrawn and never runs, unless ``must_run``
+    (rollbacks): such a call is always waited for, and if it fails its error is raised
+    instead of the cancellation, so a failed rollback is never reported as done.
+
+    After ``close()``, calls run here, as before; a store-level call then raises the
+    usual "closed" error.
+    """
+    if not _offloads_blocking_io(store):
+        return call()
+    executor = cast(SQLiteSessionStore, store)._blocking_executor()
+    if executor is None:
+        return call()
+    context = contextvars.copy_context()
+    try:
+        job = executor.submit(context.run, call)
+    except RuntimeError:  # close() shut the executor down meanwhile
+        return call()
+    done = asyncio.wrap_future(job)
+    try:
+        return await asyncio.shield(done)
+    except asyncio.CancelledError as cancelled:
+        if not must_run and job.cancel():
+            raise  # withdrawn before it started: it will never run
+        while not done.done():
+            try:
+                await asyncio.shield(done)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:
+                break
+        error = None if done.cancelled() else done.exception()
+        if must_run and error is not None:
+            # A failed rollback must not be hidden behind the cancellation; the error keeps
+            # its own traceback, and the cancellation it interrupted is chained as its cause.
+            raise error from cancelled
+        # Otherwise the call's effects are final and the caller's rollback journal records
+        # them; its error, if any, is superseded by the cancellation.
+        raise
