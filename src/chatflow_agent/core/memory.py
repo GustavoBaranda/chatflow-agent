@@ -931,30 +931,30 @@ class SQLiteSessionStore(BaseSessionStore):
         """Atomically record message_id if new; return False if duplicate within TTL.
 
         Purges expired records older than dedup_ttl_hours.
+
+        The check and the write are one statement, so two concurrent callers (threads,
+        or store instances on the same file) never both get True for the same id.
         """
         self._ensure_open()
+        cutoff = f"-{self.dedup_ttl_hours} hours"
         with self._connection() as conn:
-            row = conn.execute(
+            # Inserts a new id, or renews one whose record expired; leaves a recorded id
+            # within the TTL untouched (0 rows changed).
+            cursor = conn.execute(
                 """
-                SELECT message_id FROM chatflow_processed_messages
-                WHERE message_id = ?
-                  AND processed_at >= datetime('now', ?)
+                INSERT INTO chatflow_processed_messages (message_id, processed_at)
+                VALUES (?, CURRENT_TIMESTAMP)
+                ON CONFLICT(message_id) DO UPDATE SET processed_at = CURRENT_TIMESTAMP
+                WHERE processed_at < datetime('now', ?)
                 """,
-                (message_id, f"-{self.dedup_ttl_hours} hours"),
-            ).fetchone()
-            if row is not None:
+                (message_id, cutoff),
+            )
+            if cursor.rowcount != 1:
                 return False
 
             conn.execute(
                 "DELETE FROM chatflow_processed_messages WHERE processed_at < datetime('now', ?)",
-                (f"-{self.dedup_ttl_hours} hours",),
-            )
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO chatflow_processed_messages (message_id, processed_at)
-                VALUES (?, CURRENT_TIMESTAMP)
-                """,
-                (message_id,),
+                (cutoff,),
             )
             return True
 
