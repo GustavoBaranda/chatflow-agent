@@ -1,6 +1,7 @@
 """WhatsApp channel adapter using FastAPI and Meta Cloud API webhooks."""
 
 import asyncio
+import functools
 import hashlib
 import hmac
 import json
@@ -12,7 +13,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
 from chatflow_agent.channels.base import BaseChannel, split_message
-from chatflow_agent.core.memory import DEFAULT_DEDUP_TTL_HOURS
+from chatflow_agent.core.memory import DEFAULT_DEDUP_TTL_HOURS, _run_blocking
 from chatflow_agent.core.runner import (
     _dispatch_limits,
     _DispatchLimits,
@@ -319,8 +320,13 @@ class WhatsAppChannel(BaseChannel):
                 # BUS-01/ARCH-01: Record wamid atomically BEFORE enqueuing background task.
                 # Semantics: at-most-once. If process crashes during BG execution the turn
                 # is lost and Meta's retry (up to 7 days) will be discarded. OK with 1 worker.
+                # The ACK still waits for this write; with a file-backed SQLiteSessionStore it
+                # runs in a worker thread, so other requests and sessions keep going meanwhile.
                 if runner and hasattr(runner, "session_store") and runner.session_store:
-                    is_new = runner.session_store.record_processed_message(wamid)
+                    store = runner.session_store
+                    is_new = await _run_blocking(
+                        store, functools.partial(store.record_processed_message, wamid)
+                    )
                     if not is_new:
                         logger.info(f"Skipping duplicate wamid: {wamid}")
                         continue
