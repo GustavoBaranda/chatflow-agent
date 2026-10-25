@@ -266,9 +266,14 @@ async def test_queue_limit_does_not_reach_turns_started_by_tools(any_store: Any)
     """A tool of a WhatsApp turn that awaits a turn of another, busy session waits for it;
     the WhatsApp message's queue limit applies to its own turn only."""
     holder: dict[str, Runner] = {}
+    tool_started = asyncio.Event()
+    limits_seen_by_tool: list[Any] = []
+    queue_limit = 0.3
 
     async def ask_other() -> str:
         """Run a turn for another session."""
+        limits_seen_by_tool.append(_dispatch_limits.get())
+        tool_started.set()
         response = await holder["runner"].run_async("other", "sub")
         return response.content
 
@@ -291,16 +296,56 @@ async def test_queue_limit_does_not_reach_turns_started_by_tools(any_store: Any)
             return EngineTurnResult(text=f"re:{last.content}")
 
     engine = Engine()
-    channel, runner, _, sent = build(any_store, queue=0.3, turn=5.0, engine=engine, tools=[ask_other])
+    channel, runner, _, sent = build(
+        any_store, queue=queue_limit, turn=5.0, engine=engine, tools=[ask_other]
+    )
     holder["runner"] = runner
+    # Keep session creation outside the deliberately short channel deadline. This test is
+    # about whether that deadline reaches a tool, not about SQLite cold-start latency.
+    any_store.get_or_create(PHONE, runner.starting_agent)
     other = runner.spawn_turn("other", "hold-other")
     await bounded(engine.other_started.wait())
 
     task = process(channel, "w1", "outer")
-    await asyncio.sleep(0.5)  # the tool has waited for "other" longer than the queue limit
+    await bounded(tool_started.wait())  # the outer turn holds PHONE and has entered its tool
+    assert limits_seen_by_tool == [None]
+    # The nested turn is waiting for "other". It must remain active beyond the channel's
+    # queue limit; shielding keeps this observation from cancelling it.
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(task), timeout=queue_limit + 0.1)
+    assert not task.done()
     engine.gate.set()
     await bounded(asyncio.gather(other, task))
     assert sent == [(PHONE, "tool said re:sub")]
+    assert all(text != FALLBACK for _, text in sent)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_limits_are_consumed_before_a_tool_runs() -> None:
+    """A tool deterministically observes no limits from the channel that started its turn."""
+    limits_seen_by_tool: list[Any] = []
+
+    async def inspect_limits() -> str:
+        limits_seen_by_tool.append(_dispatch_limits.get())
+        return "isolated"
+
+    class Engine(BaseEngine):
+        async def generate_turn_async(
+            self, agent: Agent, history: list[Message]
+        ) -> EngineTurnResult:
+            if history[-1].role == Role.USER:
+                return EngineTurnResult(
+                    tool_calls=[ToolCall(id="c1", name="inspect_limits", args={})]
+                )
+            return EngineTurnResult(text="done")
+
+    channel, _, _, sent = build(
+        SessionStore(), queue=5.0, turn=5.0, engine=Engine(), tools=[inspect_limits]
+    )
+    await bounded(process(channel, "w1", "outer"))
+
+    assert limits_seen_by_tool == [None]
+    assert sent == [(PHONE, "done")]
 
 
 @pytest.mark.asyncio
