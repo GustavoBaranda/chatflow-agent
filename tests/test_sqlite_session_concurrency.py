@@ -498,8 +498,15 @@ async def test_delete_and_clear_keep_the_lock_of_a_running_turn(tmp_path: Path) 
     assert engine.max_active == 1
 
     engine.gates["A"].set()
-    await asyncio.gather(turn_a, turn_b)
+    # Documented contract ("Deleting a session"): the running turn fails with
+    # SessionDeletedError and leaves nothing behind; the queued turn waits for it and then
+    # starts a new, empty session. (This used to pass only when the queued turn happened to
+    # recreate the session before the running one stored its reply.)
+    with pytest.raises(SessionDeletedError):
+        await turn_a
+    await turn_b
     assert engine.max_active == 1
+    assert contents(store) == ["B", "re:B"]
 
 
 @pytest.mark.asyncio
@@ -630,12 +637,19 @@ async def test_reentrant_turn_for_the_same_session_raises(store_kind: str, tmp_p
 async def test_turn_started_from_another_task_waits_instead_of_raising(
     store: SQLiteSessionStore,
 ) -> None:
-    """Only the task holding the lock is refused; a separate task simply queues."""
+    """An independent task started by a tool queues behind the running turn.
+
+    Contract (#120): an independent follow-up turn is started with ``spawn_turn()``; it waits
+    for the running turn and then runs. A task created with ``create_task()`` inherits the
+    turn and is refused with ``ReentrantTurnError`` while that turn runs (see
+    ``test_task_started_inside_a_running_turn_is_refused_by_contract``). The create_task()
+    form used to pass here only because the fake engine never yielded to the event loop.
+    """
     background: list[asyncio.Task[Any]] = []
 
     async def follow_up() -> str:
         """Schedule a follow-up turn for the same session."""
-        background.append(asyncio.create_task(holder["runner"].run_async("s", "follow-up")))
+        background.append(holder["runner"].spawn_turn("s", "follow-up"))
         return "scheduled"
 
     class ToolEngine(BaseEngine):

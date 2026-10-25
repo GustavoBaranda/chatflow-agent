@@ -12,12 +12,19 @@ import uuid
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from types import TracebackType
-from typing import Any, NamedTuple, TypeVar
+from typing import Any, NamedTuple, TypeVar, cast
 
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import BaseEngine, GeminiEngine, resolve_engine
 from chatflow_agent.core.engines.gemini import _ClientPool, _lent_pool
-from chatflow_agent.core.memory import BaseSessionStore, SessionContext, SessionStore
+from chatflow_agent.core.memory import (
+    BaseSessionStore,
+    SessionContext,
+    SessionStore,
+    SQLiteSessionStore,
+    _offloads_blocking_io,
+    _run_blocking,
+)
 from chatflow_agent.exceptions import AgentHandoffError, ReentrantTurnError
 from chatflow_agent.types import (
     AgentResponse,
@@ -515,20 +522,39 @@ class Runner:
                 turn_timeout = limits.turn_timeout
 
         _refuse_nested_turn(self.session_store, session_id)
-        session = self.session_store.get_or_create(
-            session_id=session_id,
-            default_agent=self.starting_agent,
-            metadata=metadata,
-        )
+        # Store calls go through _run_blocking(): for a file-backed SQLiteSessionStore they
+        # run in worker threads so a slow disk or a locked database does not stop the
+        # event loop; for other stores they run here, as before.
+        store = self.session_store
+        session: SessionContext | None = None
+        if _offloads_blocking_io(store):
+            # Loading the session runs in a worker thread, and threads finish in any order:
+            # wait for the session first, so turns keep waiting in the order they arrive.
+            lock = cast(SQLiteSessionStore, store)._session_lock(session_id)
+        else:
+            session = store.get_or_create(
+                session_id=session_id,
+                default_agent=self.starting_agent,
+                metadata=metadata,
+            )
+            lock = session.lock
 
-        async with _hold_session_lock(
-            self.session_store, session_id, session.lock, wait_deadline=wait_deadline
-        ):
+        async with _hold_session_lock(store, session_id, lock, wait_deadline=wait_deadline):
+            if session is None:
+                session = await _run_blocking(
+                    store,
+                    functools.partial(
+                        store.get_or_create,
+                        session_id=session_id,
+                        default_agent=self.starting_agent,
+                        metadata=metadata,
+                    ),
+                )
             # Reload the state committed by turns that held the lock before this one.
             # Before the turn's checkpoint: nothing has changed yet if it fails.
             refresh = getattr(session, "refresh", None)
             if callable(refresh):
-                refresh()
+                await _run_blocking(store, refresh)
             return await _within(
                 turn_timeout, self._execute_turn(session, user_message, metadata), _TurnTimeout
             )
@@ -539,16 +565,24 @@ class Runner:
         user_message: str,
         metadata: dict[str, Any] | None,
     ) -> AgentResponse:
-        """Run one turn on a session whose lock is held; on failure, restore its state."""
+        """Run one turn on a session whose lock is held; on failure, restore its state.
+
+        Every store call is awaited before the next step and before the rollback, so the
+        rollback never overlaps a write still running in a worker thread.
+        """
+        store = self.session_store
         checkpoint_history = list(session.history)
         checkpoint_agent = session.active_agent
         checkpoint_metadata = copy.deepcopy(session.metadata)
         try:
             if metadata:
-                session.update_metadata(metadata)
+                await _run_blocking(store, functools.partial(session.update_metadata, metadata))
 
             # 1. Append inbound user message to history
-            session.add_message(Message(role=Role.USER, content=user_message))
+            await _run_blocking(
+                store,
+                functools.partial(session.add_message, Message(role=Role.USER, content=user_message)),
+            )
 
             tool_calls_executed: list[str] = []
             last_handoff: Handoff | None = None
@@ -575,12 +609,16 @@ class Runner:
                 # If the model requested tool calls
                 if turn_result.has_tool_calls:
                     # Record model's intent in history
-                    session.add_message(
-                        Message(
-                            role=Role.MODEL,
-                            content=turn_result.text,
-                            tool_calls=turn_result.tool_calls,
-                        )
+                    await _run_blocking(
+                        store,
+                        functools.partial(
+                            session.add_message,
+                            Message(
+                                role=Role.MODEL,
+                                content=turn_result.text,
+                                tool_calls=turn_result.tool_calls,
+                            ),
+                        ),
                     )
 
                     tool_results: list[ToolResult] = []
@@ -650,7 +688,14 @@ class Runner:
                                 )
                                 break
 
-                            session.set_active_agent(target_agent, raw_output.context_updates)
+                            await _run_blocking(
+                                store,
+                                functools.partial(
+                                    session.set_active_agent,
+                                    target_agent,
+                                    raw_output.context_updates,
+                                ),
+                            )
                             last_handoff = raw_output
                             tool_results.append(
                                 ToolResult(
@@ -673,13 +718,23 @@ class Runner:
                             )
 
                     # Append tool results to conversation history
-                    session.add_message(Message(role=Role.TOOL, tool_results=tool_results))
+                    await _run_blocking(
+                        store,
+                        functools.partial(
+                            session.add_message, Message(role=Role.TOOL, tool_results=tool_results)
+                        ),
+                    )
                     # Continue loop: active agent evaluates the tool results
 
                 else:
                     # No more tool calls: final text response reached
                     final_text = turn_result.text or ""
-                    session.add_message(Message(role=Role.MODEL, content=final_text))
+                    await _run_blocking(
+                        store,
+                        functools.partial(
+                            session.add_message, Message(role=Role.MODEL, content=final_text)
+                        ),
+                    )
 
                     return AgentResponse(
                         content=final_text,
@@ -692,7 +747,12 @@ class Runner:
             fallback_text = (
                 f"Execution iteration limit reached by agent '{session.active_agent.name}'."
             )
-            session.add_message(Message(role=Role.MODEL, content=fallback_text))
+            await _run_blocking(
+                store,
+                functools.partial(
+                    session.add_message, Message(role=Role.MODEL, content=fallback_text)
+                ),
+            )
             return AgentResponse(
                 content=fallback_text,
                 active_agent_name=session.active_agent.name,
@@ -701,17 +761,39 @@ class Runner:
             )
 
         except asyncio.CancelledError:
-            session.restore_history(
-                checkpoint_history,
-                active_agent=checkpoint_agent,
-                metadata=checkpoint_metadata,
-            )
+            await self._roll_back(session, checkpoint_history, checkpoint_agent, checkpoint_metadata)
             raise
         except Exception:
-            session.restore_history(
-                checkpoint_history,
-                active_agent=checkpoint_agent,
-                metadata=checkpoint_metadata,
+            await self._roll_back(session, checkpoint_history, checkpoint_agent, checkpoint_metadata)
+            raise
+
+    async def _roll_back(
+        self,
+        session: SessionContext,
+        history: list[Message],
+        active_agent: Agent,
+        metadata: dict[str, Any],
+    ) -> None:
+        """Restore the session to the turn's checkpoint; log and raise if that fails.
+
+        The restore always runs to completion, even if the task is cancelled meanwhile.
+        If it fails, its error is raised (instead of the turn's error or cancellation), so
+        the turn is never reported as rolled back when it was not.
+        """
+        try:
+            await _run_blocking(
+                self.session_store,
+                functools.partial(
+                    session.restore_history, history, active_agent=active_agent, metadata=metadata
+                ),
+                must_run=True,
+            )
+        except Exception:
+            logger.error(
+                "Rolling back the failed turn of session %r failed: its stored state may "
+                "still contain changes made by that turn.",
+                session.session_id,
+                exc_info=True,
             )
             raise
 
