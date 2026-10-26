@@ -7,7 +7,7 @@
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Checked with mypy](https://img.shields.io/badge/mypy-checked-blue.svg)](https://mypy-lang.org/)
 
-🌐 **Idioma:** [English](README.md) | **Español** · [Arquitectura](docs/ARCHITECTURE.md) · [Changelog](CHANGELOG.md) · [Contribuciones](#contribuciones) · [Paquete en PyPI](https://pypi.org/project/chatflow-agent/) · [Reportar Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
+🌐 **Idioma:** [English](README.md) | **Español** · [Arquitectura](docs/es/ARCHITECTURE.md) · [Changelog](CHANGELOG.md) · [Contribuciones](#contribuciones) · [Paquete en PyPI](https://pypi.org/project/chatflow-agent/) · [Reportar Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
 
 > **Construye equipos de agentes autónomos para WhatsApp, Telegram, Webhooks y CLI en Python con un núcleo ligero y agnóstico al proveedor.**
 
@@ -889,7 +889,7 @@ En el directorio [`examples/`](examples/) encontrarás scripts de referencia lis
 
 ## Documentación técnica
 
-* **[Guía de Arquitectura](docs/ARCHITECTURE.md):** Explicación detallada del bucle de ejecución interno, esquemas de mensajes, adaptadores de motores y persistencia de sesiones.
+* **[Guía de Arquitectura](docs/es/ARCHITECTURE.md):** Explicación detallada del bucle de ejecución interno, esquemas de mensajes, adaptadores de motores y persistencia de sesiones.
 * **[Changelog](CHANGELOG.md):** Historial de versiones, nuevas funcionalidades, avisos de seguridad y cambios incompatibles (breaking changes).
 * **[Política de Seguridad](SECURITY.md):** Versiones soportadas e instrucciones para reportar vulnerabilidades.
 * **[Código de Conducta](CODE_OF_CONDUCT.md):** Estándares de convivencia de la comunidad.
