@@ -889,6 +889,7 @@ Ready-to-run reference scripts are available in the [`examples/`](examples/) dir
 ## Technical Documentation
 
 * **[Architecture Guide](docs/ARCHITECTURE.md):** Deep dive into the internal execution loop, message schemas, engine adapters, and session persistence.
+* **[Migration Guide (0.3.4 → 0.4.0)](docs/MIGRATION_0.4.md):** Upgrade instructions, breaking changes, and new features in `0.4.0`.
 * **[Changelog](CHANGELOG.md):** Release history, new features, security advisories, and breaking changes.
 * **[Security Policy](SECURITY.md):** Supported versions and vulnerability reporting instructions.
 * **[Code of Conduct](CODE_OF_CONDUCT.md):** Community standards and expectations.
