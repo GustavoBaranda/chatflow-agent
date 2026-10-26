@@ -72,8 +72,8 @@ pip install -e ".[all,dev]"
 
 This installs:
 - Core dependencies: `pydantic`, `httpx`
-- Channel connectors: `fastapi`, `uvicorn`, `python-telegram-bot`
-- Developer & QA tools: `pytest`, `pytest-asyncio`, `ruff`, `mypy`
+- Channel connectors (`telegram`, `whatsapp`, `webhook`): `fastapi`, `uvicorn`, `python-telegram-bot`
+- Developer & QA tools (`dev`): `pytest`, `pytest-asyncio`, `ruff`, `mypy`
 
 #### 4. Verify Your Setup by Running Tests
 
@@ -83,7 +83,7 @@ Run the test suite to confirm that your environment is properly configured:
 pytest
 ```
 
-All 120+ unit and integration tests should pass cleanly.
+All unit and integration tests (1,200+ across the suite) should pass cleanly.
 
 ---
 
@@ -164,7 +164,7 @@ pytest -k "test_runner_with_tool" -v
 #### Backward Compatibility
 
 `chatflow-agent` is designed to be lightweight and easy to integrate:
-- Do not introduce breaking changes to the public API (`Agent`, `Runner`, `BaseChannel`, `SessionStore`, `SQLiteSessionStore`, `Tool`, `tool`) unless explicitly agreed upon in a GitHub Issue.
+- Do not introduce breaking changes to the public API exported in `src/chatflow_agent/__init__.py` (such as `Agent`, `Runner`, `Tool`, `tool`, engines, session stores/contexts, channels, domain types, and exceptions) unless explicitly agreed upon in a GitHub Issue.
 - Avoid introducing heavy third-party dependencies into the core package (`dependencies` in `pyproject.toml`). If a feature requires extra libraries, make it an optional dependency under `[project.optional-dependencies]`.
 
 ---
@@ -203,7 +203,7 @@ If you find a bug:
 
 1. Open a new issue using the **Feature Request** template.
 2. Describe the problem, the proposed solution, and realistic use cases.
-3. Discuss the architectural fit before submitting a large pull request to avoid rework.
+3. Review the [Architecture Overview](docs/ARCHITECTURE.md) and discuss the architectural fit before submitting a large pull request to avoid rework.
 
 #### Finding Good First Issues
 
@@ -281,9 +281,9 @@ pip install -e ".[all,dev]"
 ```
 
 Esto instala:
-- Dependencias del núcleo: `google-genai`, `pydantic`, `httpx`
-- Conectores de canales: `fastapi`, `uvicorn`, `python-telegram-bot`
-- Herramientas de desarrollo y testing: `pytest`, `pytest-asyncio`, `ruff`, `mypy`
+- Dependencias del núcleo: `pydantic`, `httpx`
+- Conectores de canales (`telegram`, `whatsapp`, `webhook`): `fastapi`, `uvicorn`, `python-telegram-bot`
+- Herramientas de desarrollo y testing (`dev`): `pytest`, `pytest-asyncio`, `ruff`, `mypy`
 
 #### 4. Verificar la Instalación Ejecutando las Pruebas
 
@@ -293,7 +293,7 @@ Ejecuta la suite de pruebas para confirmar que tu entorno está correctamente co
 pytest
 ```
 
-Más de 120 pruebas unitarias e integrales deben pasar exitosamente.
+Todas las pruebas unitarias e integrales (más de 1.200 en la suite) deben pasar exitosamente.
 
 ---
 
@@ -374,7 +374,7 @@ pytest -k "test_runner_with_tool" -v
 #### Compatibilidad Hacia Atrás
 
 `chatflow-agent` está diseñado para ser liviano y fácil de integrar:
-- No introduzcas cambios que rompan la API pública (`Agent`, `Runner`, `BaseChannel`, `SessionStore`, `SQLiteSessionStore`, `Tool`, `tool`) salvo acuerdo previo en un Issue de GitHub.
+- No introduzcas cambios que rompan la API pública exportada en `src/chatflow_agent/__init__.py` (como `Agent`, `Runner`, `Tool`, `tool`, motores, tiendas/contextos de sesión, canales, tipos de dominio y excepciones) salvo acuerdo previo en un Issue de GitHub.
 - Evita introducir dependencias pesadas de terceros en el paquete base (`dependencies` en `pyproject.toml`). Si una funcionalidad requiere librerías adicionales, declárala como dependencia opcional en `[project.optional-dependencies]`.
 
 ---
@@ -413,7 +413,7 @@ Si encuentras un error:
 
 1. Abre un nuevo issue usando la plantilla de **Feature Request**.
 2. Describe el problema, la solución propuesta y casos de uso del mundo real.
-3. Debate el encaje arquitectónico antes de enviar un PR de gran tamaño para evitar retrabajos.
+3. Consulta la [Descripción de Arquitectura](docs/es/ARCHITECTURE.md) y debate el encaje arquitectónico antes de enviar un PR de gran tamaño para evitar retrabajos.
 
 #### Cómo Elegir un Issue para Comenzar
 

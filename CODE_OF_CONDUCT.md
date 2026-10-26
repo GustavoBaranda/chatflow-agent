@@ -215,3 +215,8 @@ Los líderes de la comunidad seguirán estas Guías de Impacto Comunitario para 
 
 Este Código de Conducta es una adaptación del [Contributor Covenant][homepage], versión 2.1, disponible en
 [https://www.contributor-covenant.org/es/version/2/1/code_of_conduct.html][v2.1_es].
+
+Las Guías de Impacto Comunitario están inspiradas en la
+[escalera de aplicación del código de conducta de Mozilla][mozilla-coc].
+
+[v2.1_es]: https://www.contributor-covenant.org/es/version/2/1/code_of_conduct.html
