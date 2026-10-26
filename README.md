@@ -381,16 +381,27 @@ load_dotenv()
 
 ### Provider Reference Table
 
-| Provider | Engine Class | Environment Variable(s) | `Agent` Configuration | Model Prefix Auto-Detection | Extra Required |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Google Gemini** | `GeminiEngine` | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`); optional `GOOGLE_GEMINI_BASE_URL` | `model="gemini-2.5-flash"` | `gemini-*` (or default fallback) | *Built-in (`httpx`)* |
-| **OpenAI** | `OpenAIEngine` | `OPENAI_API_KEY` | `provider="openai"`, `model="gpt-4o-mini"` | `gpt-*`, `o1*`, `o3*`, `chatgpt-*` | *Built-in (`httpx`)* |
-| **Anthropic Claude** | `AnthropicEngine` | `ANTHROPIC_API_KEY` | `provider="anthropic"`, `model="claude-3-5-sonnet-latest"` | `claude-*` | *Built-in (`httpx`)* |
-| **xAI Grok** | `OpenAIEngine` | `XAI_API_KEY` | `provider="grok"`, `model="grok-2-latest"` | `grok*` | *Built-in (`httpx`)* |
-| **DeepSeek** | `OpenAIEngine` | `DEEPSEEK_API_KEY` | `provider="deepseek"`, `model="deepseek-chat"` | `deepseek-*` | *Built-in (`httpx`)* |
-| **Groq** | `OpenAIEngine` | `GROQ_API_KEY` | `provider="groq"`, `model="llama-3.3-70b-versatile"` | Explicit `provider="groq"` | *Built-in (`httpx`)* |
-| **Ollama (Local: Gemma, Llama, Mistral, Qwen, Phi)** | `OpenAIEngine` | *None required* (optional `OLLAMA_API_KEY`) | `provider="ollama"`, `model="gemma2:9b"` | `gemma*`, `llama*`, `mistral*`, `qwen*`, `phi*` | *Built-in (`httpx`)* |
-| **vLLM / Local OpenAI-Compatible Server** | `OpenAIEngine` | *None required* on `localhost` | `base_url="http://localhost:8000/v1"`, `model="..."` | Routed via `base_url` | *Built-in (`httpx`)* |
+| Provider | Engine | Environment Variable | `Agent` Configuration |
+| :--- | :--- | :--- | :--- |
+| **Google Gemini** | `GeminiEngine` | `GEMINI_API_KEY` | `model="gemini-2.5-flash"` |
+| **OpenAI** | `OpenAIEngine` | `OPENAI_API_KEY` | `provider="openai"`, `model="gpt-4o-mini"` |
+| **Anthropic Claude** | `AnthropicEngine` | `ANTHROPIC_API_KEY` | `provider="anthropic"`, `model="claude-3-5-sonnet-latest"` |
+| **xAI Grok** | `OpenAIEngine` | `XAI_API_KEY` | `provider="grok"`, `model="grok-2-latest"` |
+| **DeepSeek** | `OpenAIEngine` | `DEEPSEEK_API_KEY` | `provider="deepseek"`, `model="deepseek-chat"` |
+| **Groq** | `OpenAIEngine` | `GROQ_API_KEY` | `provider="groq"`, `model="llama-3.3-70b-versatile"` |
+| **Ollama (Local)** | `OpenAIEngine` | *None required* | `provider="ollama"`, `model="gemma2:9b"` |
+| **vLLM / Local Server** | `OpenAIEngine` | *None on `localhost`* | `base_url="http://localhost:8000/v1"`, `model="..."` |
+
+* **Built-in HTTPX Engines:** All engines (`GeminiEngine`, `OpenAIEngine`, and `AnthropicEngine`) are included out of the box with `pip install chatflow-agent`—no extra provider SDKs required.
+* **Additional Environment Variables:** `GeminiEngine` also accepts `GOOGLE_API_KEY` as a fallback and `GOOGLE_GEMINI_BASE_URL` for custom endpoints. `Ollama` optionally reads `OLLAMA_API_KEY`, and any `OpenAIEngine` preset honors `<PROVIDER>_BASE_URL` (e.g., `OPENAI_BASE_URL`, `OLLAMA_BASE_URL`).
+* **Model Prefix Auto-Detection:** When `provider` is omitted on `Agent`, `resolve_engine()` automatically selects the engine from `agent.model`:
+  * **Google Gemini (`GeminiEngine`):** `gemini-*` (or default fallback)
+  * **OpenAI (`OpenAIEngine`):** `gpt-*`, `o1*`, `o3*`, `chatgpt-*`
+  * **Anthropic Claude (`AnthropicEngine`):** `claude-*`
+  * **xAI Grok (`OpenAIEngine`):** `grok*`
+  * **DeepSeek (`OpenAIEngine`):** `deepseek-*`
+  * **Ollama Local (`OpenAIEngine`):** `gemma*`, `llama*`, `mistral*`, `qwen*`, `phi*`
+  * **Groq & vLLM / Local Servers (`OpenAIEngine`):** Selected explicitly via `provider="groq"` or `base_url="http://localhost:8000/v1"`.
 
 ### Engine Resolution Precedence (`resolve_engine`)
 
@@ -562,9 +573,9 @@ if __name__ == "__main__":
 
 | Parameter / Exception | Default / Base | Description |
 | :--- | :--- | :--- |
-| `Runner(max_tool_iterations=...)` | `10` | Maximum tool-execution loops allowed in a single turn. |
-| `Runner(max_handoffs_per_turn=...)` | `5` | Maximum agent-to-agent transfers allowed within a single turn; when exceeded, records an error `ToolResult` (`is_error=True`) and skips remaining tool calls in that batch. |
-| `runner.run_async(..., turn_timeout=...)` | `None` | Optional per-turn execution limit in seconds (starts after acquiring the session lock). |
+| `max_tool_iterations` (`Runner`) | `10` | Maximum tool-execution loops allowed in a single turn. |
+| `max_handoffs_per_turn` (`Runner`) | `5` | Maximum agent-to-agent transfers allowed within a single turn; when exceeded, records an error `ToolResult` (`is_error=True`) and skips remaining tool calls in that batch. |
+| `turn_timeout` (`run_async`) | `None` | Optional per-turn execution limit in seconds (starts after acquiring the session lock). |
 | `ChatFlowError` | `Exception` | Base class for all custom exceptions in `chatflow_agent`. |
 | `ProviderError` | `ChatFlowError` | Raised on LLM API errors, blocked responses, or malformed payloads (error excerpts capped at 1,000 chars). |
 | `ToolSchemaError` | `ChatFlowError`, `TypeError` | Raised at tool definition time when a union member cannot be mapped to a JSON schema type. |
