@@ -23,6 +23,7 @@ from chatflow_agent.exceptions import (
     ReentrantTurnError,
     SessionDeletedError,
     ToolExecutionError,
+    ToolSchemaError,
 )
 from chatflow_agent.types import (
     AgentResponse,
@@ -67,6 +68,7 @@ __all__ = [
     "ChatFlowError",
     "DependencyError",
     "ToolExecutionError",
+    "ToolSchemaError",
     "AgentHandoffError",
     "ProviderError",
     "ReentrantTurnError",

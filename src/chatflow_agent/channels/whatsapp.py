@@ -257,9 +257,7 @@ class WhatsAppChannel(BaseChannel):
                     detail="Invalid Content-Length header",
                 ) from err
 
-            status_413 = getattr(
-                status, "HTTP_413_CONTENT_TOO_LARGE", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
-            )
+            status_413 = getattr(status, "HTTP_413_CONTENT_TOO_LARGE", 413)
 
             if content_length < 0 or content_length > self.max_body_size:
                 raise HTTPException(

@@ -697,3 +697,22 @@ def test_non_union_unknown_types_keep_string_fallback() -> None:
 
     prop = Tool(f).parameters_schema["properties"]["v"]
     assert prop["type"] == "STRING"
+
+
+def test_tool_schema_error_is_exported_in_public_api() -> None:
+    """ToolSchemaError is importable from top-level chatflow_agent and listed in __all__."""
+    import chatflow_agent
+    from chatflow_agent import ChatFlowError
+    from chatflow_agent import ToolSchemaError as PublicToolSchemaError
+
+    assert "ToolSchemaError" in chatflow_agent.__all__
+    assert PublicToolSchemaError is ToolSchemaError
+    assert issubclass(PublicToolSchemaError, ChatFlowError)
+
+    class Unsupported:
+        pass
+
+    def bad_tool(value: int | Unsupported) -> None: ...
+
+    with pytest.raises(PublicToolSchemaError):
+        Tool(bad_tool)
