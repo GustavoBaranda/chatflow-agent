@@ -59,7 +59,8 @@ triage_agent = Agent(
 async def main() -> None:
     runner = Runner(starting_agent=triage_agent)
     print("Multi-Provider Swarm Initialized!")
-    print(f"Known Agents: {list(runner._agents_registry.keys())}")
+    direct_handoffs = [a.name for a in runner.starting_agent.handoffs]
+    print(f"Starting Agent: {runner.starting_agent.name} | Direct Handoffs: {direct_handoffs}")
     print("Ready to route between Gemini, Gemma (Ollama), Grok, and Claude.")
 
 if __name__ == "__main__":
