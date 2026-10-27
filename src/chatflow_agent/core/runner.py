@@ -14,6 +14,11 @@ from contextlib import asynccontextmanager
 from types import TracebackType
 from typing import Any, NamedTuple, TypeVar, cast
 
+from chatflow_agent.core._sync_work import (
+    _is_running_sync_work,
+    _track_sync_work,
+    _wait_for_sync_work,
+)
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import BaseEngine, GeminiEngine, resolve_engine
 from chatflow_agent.core.engines.gemini import _ClientPool, _lent_pool
@@ -155,7 +160,7 @@ def _refuse_nested_turn(store: object, session_id: str) -> None:
     waiting for the session lock would never end. The check covers the turn's own task and
     every task or thread it starts, in any asyncio pattern.
     """
-    if any(
+    if _is_running_sync_work(store, session_id) or any(
         token.active and token.store is store and token.session_id == session_id
         for token in _turn_lineage.get()
     ):
@@ -540,6 +545,29 @@ class Runner:
             lock = session.lock
 
         async with _hold_session_lock(store, session_id, lock, wait_deadline=wait_deadline):
+            # A timed-out sync tool keeps running in its worker thread. Treat that work as
+            # part of the queue for this session: do not begin another turn until it really
+            # finishes, and charge the wait to the channel's original queue deadline.
+            if wait_deadline is None:
+                await _wait_for_sync_work(store, session_id)
+            else:
+                loop = asyncio.get_running_loop()
+                remaining = wait_deadline - loop.time()
+                if remaining <= 0:
+                    raise _SessionWaitTimeout(
+                        f"Session '{session_id}' wait deadline passed before residual "
+                        "synchronous work finished."
+                    )
+                await _within(
+                    remaining,
+                    _wait_for_sync_work(store, session_id),
+                    _SessionWaitTimeout,
+                )
+                if loop.time() > wait_deadline:
+                    raise _SessionWaitTimeout(
+                        f"Session '{session_id}' residual synchronous work finished after "
+                        "the wait deadline."
+                    )
             if session is None:
                 session = await _run_blocking(
                     store,
@@ -555,9 +583,10 @@ class Runner:
             refresh = getattr(session, "refresh", None)
             if callable(refresh):
                 await _run_blocking(store, refresh)
-            return await _within(
-                turn_timeout, self._execute_turn(session, user_message, metadata), _TurnTimeout
-            )
+            with _track_sync_work(store, session_id):
+                return await _within(
+                    turn_timeout, self._execute_turn(session, user_message, metadata), _TurnTimeout
+                )
 
     async def _execute_turn(
         self,

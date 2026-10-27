@@ -14,6 +14,7 @@ from typing import (
     get_origin,
 )
 
+from chatflow_agent.core._sync_work import _run_sync_tool
 from chatflow_agent.exceptions import ToolExecutionError, ToolSchemaError
 
 logger = logging.getLogger("chatflow_agent.tools")
@@ -403,8 +404,9 @@ class Tool:
         try:
             if self.is_async:
                 return await self.func(**kwargs)
-            # Run sync function in an executor thread to avoid blocking event loop
-            return await asyncio.to_thread(self.func, **kwargs)
+            # Run sync function in an executor thread to avoid blocking event loop. Inside
+            # a Runner turn its real lifetime is tracked even if this await is cancelled.
+            return await _run_sync_tool(self.func, kwargs)
         except Exception as err:
             raise ToolExecutionError(tool_name=self.name, original_error=err) from err
 
