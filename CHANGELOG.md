@@ -14,7 +14,7 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## English
 
-## [0.4.0rc1] - Unreleased
+## [0.4.0rc1] - 2026-10-27
 
 > **Upgrading from 0.3.4?** Most applications need no code changes. Read the **[Migration Guide](docs/MIGRATION_0.4.md)** ([Español](docs/es/MIGRATION_0.4.md)) to check whether any of the three breaking changes below affects you.
 
@@ -170,7 +170,7 @@ If you are upgrading from v0.2.0:
 
 ## Español
 
-## [0.4.0rc1] - Unreleased
+## [0.4.0rc1] - 2026-10-27
 
 > **¿Actualizando desde 0.3.4?** La mayoría de las aplicaciones no requieren cambios de código. Consulta la **[Guía de Migración](docs/es/MIGRATION_0.4.md)** ([English](docs/MIGRATION_0.4.md)) para comprobar si alguno de los tres cambios incompatibles a continuación te afecta.
 
