@@ -45,6 +45,7 @@ class GateEngine(BaseEngine):
     def __init__(self) -> None:
         self.gates: dict[str, asyncio.Event] = {}
         self.started: dict[str, asyncio.Event] = {}
+        self.delays: dict[str, float] = {}
         self.calls: list[str] = []
         self.cancelled: list[str] = []
         self.active = 0
@@ -63,6 +64,8 @@ class GateEngine(BaseEngine):
             gate = self.gates.get(text)
             if gate is not None:
                 await gate.wait()
+            if text in self.delays:
+                await asyncio.sleep(self.delays[text])
             return EngineTurnResult(text=f"re:{text}")
         except asyncio.CancelledError:
             self.cancelled.append(text)
@@ -230,6 +233,8 @@ async def test_burst_longer_than_llm_timeout_is_fully_answered_in_order(any_stor
     out while queued (audit case 2)."""
     # Queue wait (1.2 s) exceeds the initial turn limit (1.0 s). After that proof, the
     # turn budget is raised before release so SQLite-on-disk work is not part of it (#150).
+    # The assignment reaches turns already queued because each one carries a
+    # TurnTimeoutSeam, and the runner reads it only when that turn's timer starts.
     channel, runner, engine, sent = build(any_store, queue=30.0, turn=1.0)
     engine.gates["hold"] = asyncio.Event()
     holder = runner.spawn_turn(PHONE, "hold")
@@ -240,9 +245,10 @@ async def test_burst_longer_than_llm_timeout_is_fully_answered_in_order(any_stor
     tasks = [process(channel, f"w{i}", text) for i, text in enumerate(texts)]
 
     await asyncio.sleep(1.2)  # every message has now waited longer than llm_timeout_seconds
-    # Queue wait already exceeded the original turn budget. Give each active turn a
-    # generous limit so SQLite persistence on slow runners is not part of the assertion
-    # (issue #150). Production timeouts are unchanged.
+    # Queue wait already exceeded the original turn budget. Assigning llm_timeout_seconds
+    # writes 5.0 into each pending TurnTimeoutSeam. The runner reads that seam after the
+    # session lock, so SQLite persistence on slow runners is not part of the assertion
+    # (issue #150, #152 review). Production timeouts are unchanged.
     channel.llm_timeout_seconds = 5.0
     engine.gates["hold"].set()
     await bounded(holder)
@@ -259,6 +265,38 @@ async def test_burst_longer_than_llm_timeout_is_fully_answered_in_order(any_stor
     for text in texts:
         expected += [text, f"re:{text}"]
     assert history(any_store) == expected
+
+
+@pytest.mark.asyncio
+async def test_burst_queue_wait_proof_then_slow_turns_use_raised_timeout() -> None:
+    """#152 review regression: a simulated 1.1s turn under the original 1.0s budget.
+
+    Three messages wait 1.2s behind a held turn, longer than the 1.0s limit they were
+    queued with. Raising llm_timeout_seconds to 5.0 has to cover 1.1s of engine work on
+    each turn that is still waiting. Every reply is ``re:<text>``, in order, and none
+    is the fallback.
+    """
+    channel, runner, engine, sent = build(SessionStore(), queue=30.0, turn=1.0)
+    engine.gates["hold"] = asyncio.Event()
+    holder = runner.spawn_turn(PHONE, "hold")
+    await bounded(engine.started_event("hold").wait())
+    texts = ["a", "b", "c"]
+    for text in texts:
+        engine.gates[text] = asyncio.Event()
+        engine.delays[text] = 1.1
+    tasks = [process(channel, f"w{i}", text) for i, text in enumerate(texts)]
+
+    await asyncio.sleep(1.2)
+    channel.llm_timeout_seconds = 5.0
+    engine.gates["hold"].set()
+    await bounded(holder)
+    for text in texts:
+        await bounded(engine.started_event(text).wait())
+        engine.gates[text].set()
+    await bounded(asyncio.gather(*tasks))
+
+    assert engine.calls == ["hold"] + texts
+    assert sent == [(PHONE, f"re:{text}") for text in texts]
 
 
 @pytest.mark.asyncio

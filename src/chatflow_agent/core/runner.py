@@ -44,11 +44,32 @@ logger = logging.getLogger("chatflow_agent.runner")
 _T = TypeVar("_T")
 
 
+class TurnTimeoutSeam:
+    """Mutable turn timeout. Runner reads ``seconds`` when the turn timer starts (after the session lock)."""
+
+    __slots__ = ("seconds",)
+
+    seconds: float | None
+
+    def __init__(self, seconds: float | None) -> None:
+        self.seconds = seconds
+
+
+def _resolve_turn_timeout(value: float | None | TurnTimeoutSeam) -> float | None:
+    if isinstance(value, TurnTimeoutSeam):
+        return value.seconds
+    return value
+
+
 class _DispatchLimits(NamedTuple):
-    """Limits a channel sets for the next turn it dispatches (see ``_dispatch_limits``)."""
+    """Limits a channel sets for the next turn it dispatches (see ``_dispatch_limits``).
+
+    ``turn_timeout`` may be ``float | None | TurnTimeoutSeam``. A seam stays mutable
+    until the turn timer starts.
+    """
 
     wait_deadline: float  # event loop time by which the session lock must be held
-    turn_timeout: float | None  # passed to _within(): None, or any value it accepts
+    turn_timeout: float | None | TurnTimeoutSeam
 
 
 # Limits for the turn a channel is about to dispatch. They travel in the context so that
@@ -68,7 +89,8 @@ class _DispatchLimits(NamedTuple):
 #   task only. Concurrent dispatches never see each other's limits.
 # * spawn_turn() clears it for the turn it starts.
 # * Values come from the channel, not from users, and are not validated by run_async():
-#   the channel validates or normalizes them.
+#   the channel validates or normalizes them. A TurnTimeoutSeam is read after the
+#   session lock is held, so its seconds can still change while the turn waits.
 _dispatch_limits: contextvars.ContextVar[_DispatchLimits | None] = contextvars.ContextVar(
     "chatflow_dispatch_limits", default=None
 )
@@ -521,10 +543,13 @@ class Runner:
                 f"turn_timeout must be a positive finite number or None, got {turn_timeout!r}"
             )
         wait_deadline: float | None = None
+        # A TurnTimeoutSeam must stay intact through the session-lock wait. The explicit
+        # keyword stays a float and is validated above. Seams arrive only through limits.
+        pending_timeout: float | None | TurnTimeoutSeam = turn_timeout
         if limits is not None:
             wait_deadline = limits.wait_deadline
             if turn_timeout is None:
-                turn_timeout = limits.turn_timeout
+                pending_timeout = limits.turn_timeout
 
         _refuse_nested_turn(self.session_store, session_id)
         # Store calls go through _run_blocking(): for a file-backed SQLiteSessionStore they
@@ -584,6 +609,7 @@ class Runner:
             if callable(refresh):
                 await _run_blocking(store, refresh)
             with _track_sync_work(store, session_id):
+                turn_timeout = _resolve_turn_timeout(pending_timeout)
                 return await _within(
                     turn_timeout, self._execute_turn(session, user_message, metadata), _TurnTimeout
                 )
