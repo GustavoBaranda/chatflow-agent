@@ -120,18 +120,21 @@ def test_all_dedup_state_accesses_share_one_lock() -> None:
     assert lock.acquisitions == 5
 
 
-def test_purge_and_capacity_enforcement_run_under_the_dedup_lock() -> None:
-    now = time.monotonic()
+def test_purge_and_capacity_enforcement_run_under_the_dedup_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = 10_000.0
+    monkeypatch.setattr(time, "monotonic", lambda: now)
     store = _GuardedPurgeStore(dedup_ttl_hours=1)
     lock = _instrument(store, {"fresh": now, "stale": now - 7200})
-    object.__setattr__(store, "_last_purge", 0.0)
+    object.__setattr__(store, "_last_purge", now - store._DEDUP_PURGE_INTERVAL)
 
     assert store.record_processed_message("after-purge") is True
     assert "stale" not in store._processed_ids
 
     store._DEDUP_MAX_ENTRIES = 2
     store._processed_ids = _GuardedDict(lock, {"oldest": now - 2, "newer": now - 1})
-    object.__setattr__(store, "_last_purge", time.monotonic())
+    object.__setattr__(store, "_last_purge", now)
 
     assert store.record_processed_message("at-capacity") is True
     with lock:
