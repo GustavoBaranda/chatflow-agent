@@ -1,11 +1,11 @@
 🌐 Idioma: [English](../MIGRATION_0.4.md) | **Español**
 
-# Guía de Migración: `v0.3.4` → `0.4.0rc1`
+# Guía de Migración: `v0.3.4` → `0.4.0`
 
-Esta guía describe todo lo que necesitas saber al actualizar **`chatflow-agent`** desde **`v0.3.4`** hacia **`0.4.0rc1`** (y la serie `0.4.0`).
+Esta guía describe todo lo que necesitas saber al actualizar **`chatflow-agent`** desde **`v0.3.4`** hacia **`0.4.0`**.
 
 * **[1. ¿Quiénes deben realizar cambios?](#1-quiénes-deben-realizar-cambios)**
-* **[2. Cambios incompatibles confirmados (`v0.3.4` → `0.4.0rc1`)](#2-cambios-incompatibles-confirmados-v034--040rc1)**
+* **[2. Cambios incompatibles confirmados (`v0.3.4` → `0.4.0`)](#2-cambios-incompatibles-confirmados-v034--040)**
   * [2.1. `GeminiEngine` utiliza la API REST de Gemini mediante `httpx` en lugar de `google-genai`](#21-geminiengine-utiliza-la-api-rest-de-gemini-mediante-httpx-en-lugar-de-google-genai)
   * [2.2. Eliminación del atributo `GeminiEngine.client`](#22-eliminación-del-atributo-geminiengineclient)
   * [2.3. Rechazo de nombres de `Agent` duplicados entre instancias distintas](#23-rechazo-de-nombres-de-agent-duplicados-entre-instancias-distintas)
@@ -20,7 +20,7 @@ Esta guía describe todo lo que necesitas saber al actualizar **`chatflow-agent`
 
 ## 1. ¿Quiénes deben realizar cambios?
 
-Para la mayoría de las aplicaciones, actualizar de `v0.3.4` a `0.4.0rc1` es una **actualización directa que no requiere cambios en el código**. Utiliza la siguiente tabla de resumen para verificar si tu proyecto se ve afectado por alguno de los tres cambios incompatibles de `0.4.0rc1`.
+Para la mayoría de las aplicaciones, actualizar de `v0.3.4` a `0.4.0` es una **actualización directa que no requiere cambios en el código**. Utiliza la siguiente tabla de resumen para verificar si tu proyecto se ve afectado por alguno de los tres cambios incompatibles de `0.4.0`.
 
 | Patrón de uso | ¿Requiere acción? | Detalles |
 | :--- | :--- | :--- |
@@ -33,11 +33,11 @@ Para la mayoría de las aplicaciones, actualizar de `v0.3.4` a `0.4.0rc1` es una
 | Grafos multiagente que registran **instancias distintas de `Agent` con el mismo `name`** | **Sí — Requiere migración** | Consulta la [Sección 2.3](#23-rechazo-de-nombres-de-agent-duplicados-entre-instancias-distintas). |
 
 > [!NOTE]
-> Los cambios de seguridad y aislamiento ya publicados en **`v0.3.3`** (validación estricta de host local para `OpenAIEngine(base_url=...)` sin clave de API, PRs #74/#75) y **`v0.3.4`** (aislamiento estricto de variables de entorno de claves de API por proveedor, PR #126 / `GHSA-mcgm-q29p-3984`) ya forman parte de `v0.3.4` y no constituyen nuevos cambios incompatibles en `0.4.0rc1`.
+> Los cambios de seguridad y aislamiento ya publicados en **`v0.3.3`** (validación estricta de host local para `OpenAIEngine(base_url=...)` sin clave de API, PRs #74/#75) y **`v0.3.4`** (aislamiento estricto de variables de entorno de claves de API por proveedor, PR #126 / `GHSA-mcgm-q29p-3984`) ya forman parte de `v0.3.4` y no constituyen nuevos cambios incompatibles en `0.4.0`.
 
 ---
 
-## 2. Cambios incompatibles confirmados (`v0.3.4` → `0.4.0rc1`)
+## 2. Cambios incompatibles confirmados (`v0.3.4` → `0.4.0`)
 
 ### 2.1. `GeminiEngine` utiliza la API REST de Gemini mediante `httpx` en lugar de `google-genai`
 
@@ -45,8 +45,8 @@ Para la mayoría de las aplicaciones, actualizar de `v0.3.4` a `0.4.0rc1` es una
 * **Comportamiento anterior (`v0.3.4`):**
   * `google-genai>=0.3.0` era una dependencia principal del paquete en `pyproject.toml`.
   * `GeminiEngine` inicializaba `genai.Client(api_key=resolved_key)`. Cuando no se configuraba `api_key`, `GEMINI_API_KEY` ni `GOOGLE_API_KEY`, `GeminiEngine` emitía una advertencia en el log y permitía que `genai.Client()` recurriera a Google Cloud Vertex AI / Application Default Credentials (`GOOGLE_GENAI_USE_VERTEXAI` / ADC).
-* **Comportamiento actual (`0.4.0rc1`):**
-  * `google-genai` fue eliminado de `pyproject.toml`. Las dependencias principales son ahora únicamente `pydantic>=2.7.0` y `httpx>=0.27.0`.
+* **Comportamiento actual (`0.4.0`):**
+  * `google-genai` fue eliminado de `pyproject.toml`. Las dependencias principales son ahora únicamente `pydantic>=2.6.0` y `httpx>=0.27.0`.
   * `GeminiEngine` se comunica directamente con la API REST de Google Gemini (`https://generativelanguage.googleapis.com/v1beta` por defecto, o reemplazada mediante `GOOGLE_GEMINI_BASE_URL`) mediante `httpx.AsyncClient` usando el encabezado `x-goog-api-key` (o `api_key_in_query=True`), y acepta `http_client: httpx.AsyncClient | None = None`.
   * Si no se proporciona una clave mediante `api_key=...` y tampoco están definidas `GEMINI_API_KEY` ni `GOOGLE_API_KEY` en el entorno, `GeminiEngine.generate_turn_async()` lanza `ProviderError` en el primer turno (fail-closed) en lugar de intentar autenticación mediante Vertex AI ADC.
 * **Usuarios afectados:**
@@ -73,7 +73,7 @@ agent = Agent(
 )
 ```
 
-**Después (`0.4.0rc1` — clave explícita de Gemini API o `http_client` personalizado):**
+**Después (`0.4.0` — clave explícita de Gemini API o `http_client` personalizado):**
 
 ```python
 from chatflow_agent import Agent, GeminiEngine
@@ -102,7 +102,7 @@ assert engine.api_key == "AIzaSyYourGeminiKey"
 * **Origen:** PR #130 (`308fbfc`, Issue #116)
 * **Comportamiento anterior (`v0.3.4`):**
   * `GeminiEngine.__init__()` creaba `self.client = genai.Client(...)`. Algunas suites de pruebas o extensiones personalizadas aplicaban monkeypatching sobre `engine.client.aio.models.generate_content` para simular respuestas de Gemini.
-* **Comportamiento actual (`0.4.0rc1`):**
+* **Comportamiento actual (`0.4.0`):**
   * `GeminiEngine` ya no posee el atributo `.client` (acceder a `engine.client` lanza `AttributeError`).
   * En su lugar, `GeminiEngine` acepta `http_client: httpx.AsyncClient | None = None` en su constructor (y además soporta el `_ClientPool` por bucle de eventos de `Runner` al entrar mediante `async with runner:`).
 * **Usuarios afectados:**
@@ -118,12 +118,12 @@ assert engine.api_key == "AIzaSyYourGeminiKey"
 from unittest.mock import AsyncMock
 from chatflow_agent import GeminiEngine
 
-# Patrón legado de v0.3.4 (lanza AttributeError en 0.4.0rc1):
+# Patrón legado de v0.3.4 (lanza AttributeError en 0.4.0):
 # engine = GeminiEngine(api_key="test-key")
 # engine.client.aio.models.generate_content = AsyncMock(...)
 ```
 
-**Después (`0.4.0rc1` — inyección de `http_client` con `httpx.MockTransport`):**
+**Después (`0.4.0` — inyección de `http_client` con `httpx.MockTransport`):**
 
 ```python
 import asyncio
@@ -173,7 +173,7 @@ asyncio.run(main())
 * **Comportamiento anterior (`v0.3.4`):**
   * `Runner._register_agent_tree()` indexaba los agentes por `agent.name` en `self._agents_registry` usando `if agent.name in self._agents_registry: return`.
   * Si dos instancias **distintas** de `Agent` compartían el mismo `name` dentro de un grafo de handoffs, la segunda instancia era **ignorada silenciosamente**, redirigiendo los handoffs hacia la primera instancia e ignorando las instrucciones, herramientas y sub-handoffs de la segunda.
-* **Comportamiento actual (`0.4.0rc1`):**
+* **Comportamiento actual (`0.4.0`):**
   * `Runner` compara la identidad de objeto (`existing is agent`):
     * Las **referencias cíclicas o compartidas** a la **misma** instancia de `Agent` (`a1 -> a2 -> a1`, o grafos en diamante que comparten un único objeto `Agent`) siguen estando completamente soportadas.
     * **Dos instancias distintas de `Agent`** (`existing is not agent`) con el mismo `name` en el grafo de handoffs ahora lanzan `ValueError: Duplicate agent name '<name>' detected in handoff graph. Each distinct Agent instance must have a unique name.` durante la inicialización de `Runner(...)` o el registro dinámico posterior.
@@ -196,14 +196,14 @@ triage = Agent(
 )
 
 # En v0.3.4, specialist_v2 era descartado silenciosamente.
-# En 0.4.0rc1, esto lanza ValueError inmediatamente:
+# En 0.4.0, esto lanza ValueError inmediatamente:
 try:
     Runner(starting_agent=triage)
 except ValueError as exc:
     assert "Duplicate agent name 'Support'" in str(exc)
 ```
 
-**Después (`0.4.0rc1` — nombres únicos para agentes distintos, o instancia compartida):**
+**Después (`0.4.0` — nombres únicos para agentes distintos, o instancia compartida):**
 
 ```python
 from chatflow_agent import Agent, Runner
@@ -229,7 +229,7 @@ runner_shared = Runner(starting_agent=triage)
 
 ## 3. Otros cambios relevantes y mejoras de `0.4.0`
 
-Las siguientes mejoras, validaciones y correcciones de errores se incorporaron entre `v0.3.4` y `0.4.0rc1`. Ninguna de ellas rompe configuraciones válidas de `v0.3.4`.
+Las siguientes mejoras, validaciones y correcciones de errores se incorporaron entre `v0.3.4` y `0.4.0`. Ninguna de ellas rompe configuraciones válidas de `v0.3.4`.
 
 ### 3.1. Nuevas funcionalidades
 
@@ -240,13 +240,13 @@ Las siguientes mejoras, validaciones y correcciones de errores se incorporaron e
    * `Runner.run_async(..., turn_timeout: float | None = None)` acota la ejecución activa del turno (comenzando una vez adquirido el lock de la sesión), cancelando y revirtiendo el turno y lanzando `TimeoutError` al expirar (PRs #120, #131).
    * `Runner.spawn_turn(session_id, user_message, metadata=None) -> asyncio.Task[AgentResponse]` encola un turno de seguimiento independiente como tarea en segundo plano en el bucle de eventos activo (PR #120).
 3. **Timeout de espera en cola independiente en `WhatsAppChannel` (`queue_timeout_seconds`):**
-   * `WhatsAppChannel.__init__(..., queue_timeout_seconds: float | None = 120.0)` limita cuánto tiempo espera un mensaje entrante de webhook por el lock de sesión de manera independiente al presupuesto de ejecución activa `llm_timeout_seconds` (PR #131).
+   * `WhatsAppChannel.__init__(..., queue_timeout_seconds: float = 120.0)` limita cuánto tiempo espera un mensaje entrante de webhook por el lock de sesión de manera independiente al presupuesto de ejecución activa `llm_timeout_seconds`; es obligatorio y se valida como `float` positivo y finito (`TypeError` para `None`, `ValueError` para cero, negativos o valores no finitos) (PR #131).
 4. **`SQLiteSessionStore(db_path=":memory:")` en memoria y métodos de ciclo de vida:**
    * `SQLiteSessionStore` ahora soporta `db_path=":memory:"` utilizando una única conexión persistente compartida protegida por lock de hilos, además de `store.close()` explícito y soporte de context manager (`with SQLiteSessionStore(...) as store:`) (PRs #107, #120, #133).
 5. **Método público `Tool.to_openai_parameters()`:**
    * `Tool.to_openai_parameters()` forma ahora parte de la API pública de `Tool`, devolviendo el objeto `parameters` de JSON Schema estricto compartido entre los adaptadores de OpenAI, Anthropic y Gemini (PR #118).
 6. **Comando interactivo `/reset` en `CLIChannel`:**
-   * Los usuarios de `CLIChannel` pueden escribir `/reset` (o `/clear`) durante una sesión interactiva para limpiar el historial de conversación y restablecer `active_agent` y `metadata` sin reiniciar el proceso (PR #119).
+   * Los usuarios de `CLIChannel` pueden escribir `/reset` durante una sesión interactiva para limpiar el historial de conversación sin reiniciar el proceso; el agente activo y `metadata` se conservan (PR #119).
 7. **Autodetección del prefijo de modelo `deepseek-*` en `resolve_engine()`:**
    * Configurar `model="deepseek-chat"` o `model="deepseek-reasoner"` sin un `provider` explícito selecciona automáticamente `provider="deepseek"` (`https://api.deepseek.com`, `DEEPSEEK_API_KEY`) (PR #55).
 8. **Nuevas excepciones públicas exportadas en `chatflow_agent` y `chatflow_agent.exceptions`:**
@@ -313,7 +313,7 @@ asyncio.run(demo_new_features())
 
 * **Detección fail-fast de reentrada en la misma sesión (`ReentrantTurnError`):** Llamar a `runner.run_async(session, ...)` recursivamente desde dentro de una herramienta ejecutándose sobre el **mismo** `session_id` ahora lanza inmediatamente `ReentrantTurnError` en lugar de producir un deadlock infinito sobre el lock de la sesión (PR #120).
 * **Validación fail-closed de esquemas de herramientas (`ToolSchemaError`):** Registrar una función `@tool` con una anotación de tipo de parámetro no representable en JSON Schema (como una clase arbitraria personalizada, `object`, `callable` o `tuple` sin parámetros) ahora lanza `ToolSchemaError` en el momento de decoración/registro en lugar de convertir silenciosamente el parámetro a `"type": "string"` (PRs #118, #136).
-* **Protección ante sesiones eliminadas (`SessionDeletedError`):** Si una `SQLiteSessionContext` es eliminada mediante `store.delete_session(session_id)` mientras un turno está en cola o en ejecución, las operaciones de persistencia subsiguientes sobre esa sesión lanzan `SessionDeletedError` en lugar de recrear filas parciales silenciosamente (PR #120).
+* **Protección ante sesiones eliminadas (`SessionDeletedError`):** Si una `SQLiteSessionContext` es eliminada mediante `store.delete(session_id)` mientras un turno está en cola o en ejecución, el turno en curso falla con `SessionDeletedError` y hace rollback sin dejar filas detrás, y un turno en cola arranca después una sesión nueva y vacía (PR #120).
 * **Logs estructurados de timeouts en `WhatsAppChannel`:** Los mensajes de advertencia de timeout en `WhatsAppChannel` fueron refinados para distinguir entre contención en la cola del lock (`"Session busy for %s after %ss; skipping turn."`), timeouts de ejecución del turno (`"Turn timed out for %s after %ss."`) y expiración del backstop (`"Dispatch backstop expired for %s after %ss"` / `"TimeoutError raised while dispatching message from %s"`) (PR #131).
 * **`Runner.run()` dentro de un bucle de eventos activo:** Llamar al helper síncrono `Runner.run()` desde dentro de un bucle de eventos `asyncio` ya en ejecución ahora lanza un error claro `RuntimeError("Runner.run() cannot be called from a running event loop. Use `await runner.run_async(...)` instead.")` (PR #57).
 * **Validación de argumentos en constructores (`ValueError`):**
@@ -327,7 +327,7 @@ asyncio.run(demo_new_features())
 
 * **Concurrencia de sesiones SQLite y diario transaccional de turno (`SQLiteSessionStore`):**
   * Los turnos concurrentes dirigidos al mismo `session_id` a través de distintas instancias envoltorio de `SQLiteSessionContext` ahora se serializan mediante un registro débil de locks por `(event_loop, session_id)` y recargan automáticamente el último estado confirmado en SQLite (`session.refresh()`) al adquirir el lock (PR #120).
-  * `SQLiteSessionContext.restore_history()` se ejecuta ahora dentro de una única transacción `BEGIN IMMEDIATE` utilizando una tabla temporal `turn_journal`, evitando condiciones de carrera y preservando filas insertadas concurrentemente (PR #120).
+  * `SQLiteSessionContext.restore_history()` se ejecuta ahora dentro de una única transacción `BEGIN IMMEDIATE` utilizando el turn journal en memoria, evitando condiciones de carrera y preservando filas insertadas concurrentemente (PR #120).
 * **Rollback atómico del turno ante errores y cancelación:**
   * Cuando un turno falla con una excepción no controlada, expira su timeout (`turn_timeout`) o es cancelado (`asyncio.CancelledError`), `Runner` restaura atómicamente el checkpoint completo previo al turno: historial de mensajes (incluyendo mensajes antiguos podados por `SessionContext.max_turns`), `session.active_agent` y una copia profunda de `session.metadata` (PRs #34, #52, #69).
 * **Normalización determinista de IDs de llamadas a herramientas entre proveedores:**
@@ -350,9 +350,9 @@ asyncio.run(demo_new_features())
 ### 3.4. Mejoras internas que no requieren migración
 
 * **I/O no bloqueante para SQLite basado en archivo:** Las instancias de `SQLiteSessionStore` basadas en archivo delegan las operaciones bloqueantes de SQLite a un `ThreadPoolExecutor` dedicado de 4 workers mediante `_run_blocking()` cuando se invocan desde un contexto asíncrono, evitando bloqueos del bucle de eventos bajo carga (PR #133).
-* **Deduplicación atómica de `wamid` en una sola sentencia:** `SQLiteSessionStore.record_processed_message()` utiliza ahora una única sentencia atómica `INSERT OR IGNORE INTO processed_messages` con purga en línea de registros expirados (PR #120).
+* **Deduplicación atómica de `wamid` en una sola sentencia:** `SQLiteSessionStore.record_processed_message()` utiliza ahora un upsert atómico `INSERT INTO chatflow_processed_messages ... ON CONFLICT(message_id) DO UPDATE` con purga en línea de registros expirados: un id registrado dentro del TTL no se toca (0 filas cambiadas) y un registro expirado se renueva (PR #120).
 * **Gestión automática del pool en canales y `Runner.run()`:** `Runner.run()`, `TelegramChannel.run()` y el ciclo de vida (`lifespan`) de `WhatsAppChannel` entran automáticamente en `async with runner:` para que el pooling de conexiones esté activo sin configuración adicional (PR #130).
-* **Compatibilidad total hacia atrás del esquema SQLite:** Los archivos de base de datos SQLite existentes creados en `v0.3.x` funcionan en `0.4.0rc1` sin necesidad de migración manual de esquema.
+* **Compatibilidad total hacia atrás del esquema SQLite:** Los archivos de base de datos SQLite existentes creados en `v0.3.x` funcionan en `0.4.0` sin necesidad de migración manual de esquema.
 
 ---
 
