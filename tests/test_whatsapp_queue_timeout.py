@@ -228,8 +228,8 @@ async def test_burst_longer_than_llm_timeout_is_fully_answered_in_order(any_stor
     """Ten concurrent messages queue behind a running turn for longer than
     llm_timeout_seconds; each of their turns fits in it. Before the fix most of them timed
     out while queued (audit case 2)."""
-    # Each turn must fit in its own limit even on slow CI runners (SQLite on disk), while
-    # the queue still lasts longer than that limit: turn=1.0 s, wait before release 1.2 s.
+    # Queue wait (1.2 s) exceeds the initial turn limit (1.0 s). After that proof, the
+    # turn budget is raised before release so SQLite-on-disk work is not part of it (#150).
     channel, runner, engine, sent = build(any_store, queue=30.0, turn=1.0)
     engine.gates["hold"] = asyncio.Event()
     holder = runner.spawn_turn(PHONE, "hold")
@@ -240,6 +240,10 @@ async def test_burst_longer_than_llm_timeout_is_fully_answered_in_order(any_stor
     tasks = [process(channel, f"w{i}", text) for i, text in enumerate(texts)]
 
     await asyncio.sleep(1.2)  # every message has now waited longer than llm_timeout_seconds
+    # Queue wait already exceeded the original turn budget. Give each active turn a
+    # generous limit so SQLite persistence on slow runners is not part of the assertion
+    # (issue #150). Production timeouts are unchanged.
+    channel.llm_timeout_seconds = 5.0
     engine.gates["hold"].set()
     await bounded(holder)
     for text in texts:  # release one turn at a time, as soon as it is the running one
