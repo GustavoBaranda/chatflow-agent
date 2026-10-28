@@ -203,7 +203,7 @@ class BaseSessionStore(ABC):
 
 
 class SessionStore(BaseSessionStore):
-    """Thread-safe in-memory session registry with at-most-once dedup (TTL + cap).
+    """In-memory session registry with thread-safe at-most-once dedup (TTL + cap).
 
     Deduplication covers Meta's 7-day retry window using an 8-day default TTL.
     Entries are capped at 10,000 and purged amortized every 5 minutes.
@@ -227,19 +227,23 @@ class SessionStore(BaseSessionStore):
         self.default_max_turns = default_max_turns
         self.dedup_ttl_hours = dedup_ttl_hours
         self._dedup_ttl_seconds = dedup_ttl_hours * 3600.0
+        self._dedup_lock = threading.Lock()
         self._processed_ids: dict[str, float] = {}   # {wamid: monotonic timestamp}
         self._last_purge: float = _time.monotonic()
 
     def is_message_processed(self, message_id: str) -> bool:
         """Return True if message_id is within TTL."""
         import time as _time
-        ts = self._processed_ids.get(message_id)
-        if ts is None:
-            return False
-        if _time.monotonic() - ts > self._dedup_ttl_seconds:
-            del self._processed_ids[message_id]
-            return False
-        return True
+
+        with self._dedup_lock:
+            now = _time.monotonic()
+            ts = self._processed_ids.get(message_id)
+            if ts is None:
+                return False
+            if now - ts > self._dedup_ttl_seconds:
+                del self._processed_ids[message_id]
+                return False
+            return True
 
     def record_processed_message(self, message_id: str) -> bool:
         """Atomically record message_id. Returns True if new, False if duplicate.
@@ -247,27 +251,31 @@ class SessionStore(BaseSessionStore):
         Applies amortized TTL purge and caps entries at _DEDUP_MAX_ENTRIES.
         """
         import time as _time
-        now = _time.monotonic()
 
-        existing = self._processed_ids.get(message_id)
-        if existing is not None:
-            if now - existing <= self._dedup_ttl_seconds:
-                return False  # within TTL - duplicate
-            del self._processed_ids[message_id]  # stale - allow re-registration
+        with self._dedup_lock:
+            now = _time.monotonic()
 
-        # Amortized purge
-        if now - self._last_purge >= self._DEDUP_PURGE_INTERVAL:
-            cutoff = now - self._dedup_ttl_seconds
-            self._processed_ids = {k: v for k, v in self._processed_ids.items() if v > cutoff}
-            self._last_purge = now
+            existing = self._processed_ids.get(message_id)
+            if existing is not None:
+                if now - existing <= self._dedup_ttl_seconds:
+                    return False  # within TTL - duplicate
+                del self._processed_ids[message_id]  # stale - allow re-registration
 
-        # Cap enforcement
-        if len(self._processed_ids) >= self._DEDUP_MAX_ENTRIES:
-            oldest = min(self._processed_ids, key=lambda k: self._processed_ids[k])
-            del self._processed_ids[oldest]
+            # Amortized purge
+            if now - self._last_purge >= self._DEDUP_PURGE_INTERVAL:
+                cutoff = now - self._dedup_ttl_seconds
+                self._processed_ids = {
+                    k: v for k, v in self._processed_ids.items() if v > cutoff
+                }
+                self._last_purge = now
 
-        self._processed_ids[message_id] = now
-        return True
+            # Cap enforcement
+            if len(self._processed_ids) >= self._DEDUP_MAX_ENTRIES:
+                oldest = min(self._processed_ids, key=lambda k: self._processed_ids[k])
+                del self._processed_ids[oldest]
+
+            self._processed_ids[message_id] = now
+            return True
 
     def get_or_create(
         self,
