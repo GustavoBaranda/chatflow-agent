@@ -13,7 +13,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
 from chatflow_agent.channels.base import BaseChannel, split_message
-from chatflow_agent.core.memory import DEFAULT_DEDUP_TTL_HOURS, _run_blocking
+from chatflow_agent.core.memory import _run_blocking
 from chatflow_agent.core.runner import (
     _dispatch_limits,
     _DispatchLimits,
@@ -72,6 +72,9 @@ class WhatsAppChannel(BaseChannel):
     time turns out at once or, on Python 3.13, stop the event loop). A warning is logged
     for zero, negative and ``nan`` values.
 
+    Message-id deduplication TTL is configured on ``SessionStore`` /
+    ``SQLiteSessionStore`` (``dedup_ttl_hours``), not on this channel.
+
     While the app's lifespan runs (``run()``, or any ASGI server that runs the lifespan),
     the attached runner's connection-pooling scope (``async with runner:``) is open, so
     webhook turns reuse connections. Startup and shutdown handlers on ``self.app`` run
@@ -96,7 +99,6 @@ class WhatsAppChannel(BaseChannel):
         outbound_base_delay: float = 1.0,
         outbound_max_delay: float = 30.0,
         on_24h_window_expired: Any | None = None,
-        dedup_ttl_hours: float = DEFAULT_DEDUP_TTL_HOURS,
         max_body_size: int = DEFAULT_MAX_BODY_SIZE,
         enable_docs: bool = False,
         queue_timeout_seconds: float = 120.0,
@@ -142,7 +144,6 @@ class WhatsAppChannel(BaseChannel):
         self.outbound_base_delay = outbound_base_delay
         self.outbound_max_delay = outbound_max_delay
         self.on_24h_window_expired = on_24h_window_expired
-        self.dedup_ttl_hours = dedup_ttl_hours
         self.max_body_size = max_body_size
         self.enable_docs = enable_docs
 
