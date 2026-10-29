@@ -45,7 +45,38 @@ There is no built-in generic `WebhookChannel` or distributed session backend. Th
 FastAPI webhook is an example application; do not document examples or proposed features as
 shipped package components.
 
-## 3. Engineering principles
+## 3. Architectural Boundaries
+
+These are ownership constraints, not a duplicate design specification. See
+`docs/ARCHITECTURE.md` for detailed flows, and verify its details against the implementation
+and tests when they differ.
+
+- **Runner:** Owns turn orchestration and the execution lifecycle, including handoff application,
+  session coordination, timeouts, cancellation, and rollback. Do not duplicate orchestration in
+  channels, engines, or tools.
+- **Agent:** Declares agent configuration, instructions, available tools, and permitted handoff
+  targets. Keep transport and persistence responsibilities outside `Agent`.
+- **Engines:** Encapsulate provider-specific communication, request formatting, response
+  normalization, and provider error handling. Preserve provider independence and keep this logic
+  out of orchestration.
+- **Tools:** Represent callable capabilities executed through the established schema-generation,
+  execution, error-handling, and concurrency contracts. Conversational rollback cannot undo a
+  tool's external side effects.
+- **Session stores:** Own session state, persistence, and message deduplication. Keep storage
+  independent of channels and providers, and preserve the distinct in-memory and SQLite
+  guarantees documented below.
+- **Channels:** Adapt external transports and messaging platforms, then dispatch through the
+  attached `Runner` and session store contracts. Do not create parallel orchestration or
+  persistence paths.
+- **Handoffs:** Keep handoff declarations on `Agent` and their authorization and state transition
+  in `Runner`. Do not implement alternative handoff mechanisms in channels or engines.
+
+Before adding an abstraction, service, manager, or execution path, identify the component that
+already owns the responsibility and whether the capability already exists. Prefer extending that
+component over creating a competing implementation. This does not prohibit a legitimate
+architectural change explicitly authorized by the maintainer.
+
+## 4. Engineering principles
 
 - Make the smallest focused change that fully solves the assigned problem. Avoid unrelated
   refactors, formatting churn, and new abstraction layers without a demonstrated need.
@@ -63,7 +94,7 @@ shipped package components.
   library or an existing dependency is sufficient.
 - Preserve the MIT license and existing attribution. Do not copy incompatible code or assets.
 
-## 4. Public API and compatibility
+## 5. Public API and compatibility
 
 Treat the exports in `src/chatflow_agent/__init__.py`, `src/chatflow_agent/memory.py`, and
 documented constructors and methods as public compatibility surfaces.
@@ -86,7 +117,7 @@ documented constructors and methods as public compatibility surfaces.
 - Validate examples against actual public imports and signatures. Do not rely on private
   underscore-prefixed helpers in user documentation.
 
-## 5. Async execution and concurrency
+## 6. Async execution and concurrency
 
 The execution contract is tested extensively. Changes in this area require focused regression
 tests, not reasoning from a single happy path.
@@ -115,7 +146,7 @@ tests, not reasoning from a single happy path.
 - Close resources deterministically. Use `async with runner:` when testing pooled HTTP clients
   and `with SQLiteSessionStore(...)` or `store.close()` for SQLite lifecycle coverage.
 
-## 6. Session storage and persistence
+## 7. Session storage and persistence
 
 Implemented stores are `SessionStore` and `SQLiteSessionStore`, both implementing
 `BaseSessionStore`.
@@ -142,7 +173,7 @@ Implemented stores are `SessionStore` and `SQLiteSessionStore`, both implementin
 - Any schema, `PRAGMA user_version`, timestamp, JSON serialization, or legacy loading change
   needs disk and `:memory:` coverage, reopen tests, and backward-compatibility tests.
 
-## 7. Providers, tools, and channels
+## 8. Providers, tools, and channels
 
 ### Providers and tools
 
@@ -178,7 +209,7 @@ Implemented stores are `SessionStore` and `SQLiteSessionStore`, both implementin
 - Respect platform message-length rules independently. Do not assume WhatsApp and Telegram use
   identical limits or units.
 
-## 8. Testing requirements
+## 9. Testing requirements
 
 Install all optional and development dependencies in an isolated environment:
 
@@ -226,7 +257,7 @@ Testing rules:
 - Report exactly what ran, including failures, skips, platform, and any suite not executed.
   Never say a check passed when it was not run.
 
-## 9. Documentation
+## 10. Documentation
 
 - English is the primary user-documentation language. Keep the relevant Spanish counterpart
   semantically equivalent: `README.md` / `README.es.md`, `docs/ARCHITECTURE.md` /
@@ -240,7 +271,7 @@ Testing rules:
 - Avoid duplicating large architecture or contribution sections; link to the canonical document.
 - Do not translate code identifiers, exception names, paths, commands, or configuration keys.
 
-## 10. Security and reliability
+## 11. Security and reliability
 
 - Never commit, print, or include real API keys, tokens, app secrets, passwords, webhook payloads,
   or personal phone numbers. Use sanitized fixtures and mock values.
@@ -258,7 +289,7 @@ Testing rules:
 - Report security vulnerabilities through the private process in `SECURITY.md`, never a public
   issue. Do not overstate guarantees: document known trust and deployment boundaries.
 
-## 11. Git, pull requests, and releases
+## 12. Git, pull requests, and releases
 
 - Before editing, inspect the branch, exact `HEAD`, worktree status, existing instructions, and
   the target files. Preserve unrelated user changes, untracked files, branches, tags, and stashes.
@@ -283,7 +314,7 @@ Testing rules:
   `AGENTS.md` mechanically for every PR; change it only when its guidance would otherwise become
   inaccurate or incomplete.
 
-## 12. Completion checklist
+## 13. Completion checklist
 
 Before reporting a task complete:
 
