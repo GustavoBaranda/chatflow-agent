@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-import time
+from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
@@ -12,6 +12,7 @@ from chatflow_agent.channels.whatsapp import WhatsAppChannel
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.memory import SessionStore, SQLiteSessionStore
 from chatflow_agent.core.runner import Runner
+from tests.test_sqlite_dedup_atomic import _age
 from tests.test_whatsapp_background import CountingEngine, _meta_payload
 
 
@@ -85,7 +86,7 @@ def _post_wamid(client: TestClient, wamid: str) -> int:
 
 
 def test_webhook_respects_session_store_dedup_ttl() -> None:
-    store = SessionStore(dedup_ttl_hours=0.00005)
+    store = SessionStore(dedup_ttl_hours=24)
     channel, engine = _channel(store)
     client = TestClient(channel.app)
     wamid = "wamid.ttl_memory"
@@ -94,14 +95,16 @@ def test_webhook_respects_session_store_dedup_ttl() -> None:
     assert _post_wamid(client, wamid) == 0
     assert engine.call_count == 1
 
-    time.sleep(0.5)
+    with store._dedup_lock:
+        store._processed_ids[wamid] -= store._dedup_ttl_seconds + 1.0
 
     assert _post_wamid(client, wamid) == 1
     assert engine.call_count == 2
 
 
-def test_webhook_respects_sqlite_session_store_dedup_ttl() -> None:
-    store = SQLiteSessionStore(":memory:", dedup_ttl_hours=1 / 3600)
+def test_webhook_respects_sqlite_session_store_dedup_ttl(tmp_path: Path) -> None:
+    db = tmp_path / "dedup.db"
+    store = SQLiteSessionStore(db, dedup_ttl_hours=24)
     try:
         channel, engine = _channel(store)
         client = TestClient(channel.app)
@@ -111,7 +114,7 @@ def test_webhook_respects_sqlite_session_store_dedup_ttl() -> None:
         assert _post_wamid(client, wamid) == 0
         assert engine.call_count == 1
 
-        time.sleep(2.5)
+        _age(db, wamid, 25)
 
         assert _post_wamid(client, wamid) == 1
         assert engine.call_count == 2
