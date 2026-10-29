@@ -15,7 +15,6 @@ from typing import Any
 from chatflow_agent.channels.base import BaseChannel, split_message
 from chatflow_agent.core.memory import DEFAULT_DEDUP_TTL_HOURS, _run_blocking
 from chatflow_agent.core.runner import (
-    TurnTimeoutSeam,
     _dispatch_limits,
     _DispatchLimits,
     _SessionWaitTimeout,
@@ -61,8 +60,7 @@ class WhatsAppChannel(BaseChannel):
       handoffs) and starts once the turn holds the session. When it expires the turn is
       cancelled and rolled back and ``fallback_message`` is sent. It is a turn deadline,
       not a guarantee that every provider retry fits; pass an explicit value to match
-      your provider and workload. Assigning it updates turns that are still waiting for
-      the session. The runner reads the value when the turn timer starts.
+      your provider and workload.
 
     A message may therefore take up to ``queue_timeout_seconds + llm_timeout_seconds``
     before its reply is sent. Webhook HTTP acknowledgement remains immediate and is
@@ -138,8 +136,7 @@ class WhatsAppChannel(BaseChannel):
         self.api_version = api_version
         self.fallback_message = fallback_message
         self.unsupported_media_message = unsupported_media_message
-        self._pending_turn_timeouts: list[TurnTimeoutSeam] = []
-        self._llm_timeout_seconds: float | None = llm_timeout_seconds
+        self.llm_timeout_seconds = llm_timeout_seconds
         self.queue_timeout_seconds = queue_timeout_seconds
         self.max_outbound_retries = max_outbound_retries
         self.outbound_base_delay = outbound_base_delay
@@ -178,16 +175,6 @@ class WhatsAppChannel(BaseChannel):
             self.app.router.lifespan_context
         )
         self._setup_routes()
-
-    @property
-    def llm_timeout_seconds(self) -> float | None:
-        return self._llm_timeout_seconds
-
-    @llm_timeout_seconds.setter
-    def llm_timeout_seconds(self, value: float | None) -> None:
-        self._llm_timeout_seconds = value
-        for seam in getattr(self, "_pending_turn_timeouts", ()):
-            seam.seconds = value
 
     def _with_runner_scope(
         self, lifespan: Callable[[Any], AbstractAsyncContextManager[Any]]
@@ -460,11 +447,7 @@ class WhatsAppChannel(BaseChannel):
             # held, the turn itself. They reach it through a context variable so that
             # dispatch_async() keeps its signature.
             loop = asyncio.get_running_loop()
-            # Backstop math keeps the budget from dispatch time. The seam stays mutable
-            # so a later assignment can still change the turn timer.
-            turn_seam = TurnTimeoutSeam(self.llm_timeout_seconds)
-            self._pending_turn_timeouts.append(turn_seam)
-            turn_limit = turn_seam.seconds
+            turn_limit = self.llm_timeout_seconds
             # No turn limit (None, inf or nan) means no backstop either.
             backstop: float | None = None
             if turn_limit is not None and not math.isnan(turn_limit) and turn_limit != math.inf:
@@ -476,7 +459,7 @@ class WhatsAppChannel(BaseChannel):
             limits_token = _dispatch_limits.set(
                 _DispatchLimits(
                     wait_deadline=loop.time() + self.queue_timeout_seconds,
-                    turn_timeout=turn_seam,
+                    turn_timeout=turn_limit,
                 )
             )
             try:
@@ -499,7 +482,7 @@ class WhatsAppChannel(BaseChannel):
                 reply_text = self.fallback_message
             except _TurnTimeout:
                 logger.error(
-                    f"Turn timed out after {turn_seam.seconds}s (llm_timeout_seconds) "
+                    f"Turn timed out after {turn_limit}s (llm_timeout_seconds) "
                     f"for wamid={wamid} from {masked_phone}; the turn was rolled back."
                 )
                 reply_text = self.fallback_message
@@ -523,10 +506,6 @@ class WhatsAppChannel(BaseChannel):
                 reply_text = self.fallback_message
             finally:
                 _dispatch_limits.reset(limits_token)
-                try:
-                    self._pending_turn_timeouts.remove(turn_seam)
-                except ValueError:
-                    pass
 
             if self.access_token and self.phone_number_id:
                 await self._send_outbound_whatsapp(to_phone=sender_phone, text=reply_text)
