@@ -99,6 +99,7 @@ class WhatsAppChannel(BaseChannel):
         outbound_base_delay: float = 1.0,
         outbound_max_delay: float = 30.0,
         on_24h_window_expired: Any | None = None,
+        *,
         max_body_size: int = DEFAULT_MAX_BODY_SIZE,
         enable_docs: bool = False,
         queue_timeout_seconds: float = 120.0,

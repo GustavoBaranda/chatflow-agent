@@ -9,6 +9,7 @@ This guide describes everything you need to know when upgrading **`chatflow-agen
   * [2.1. `GeminiEngine` Uses the Gemini REST API via `httpx` Instead of `google-genai`](#21-geminiengine-uses-the-gemini-rest-api-via-httpx-instead-of-google-genai)
   * [2.2. `GeminiEngine.client` Attribute Removed](#22-geminiengineclient-attribute-removed)
   * [2.3. Duplicate `Agent` Names Across Distinct Instances Are Rejected](#23-duplicate-agent-names-across-distinct-instances-are-rejected)
+  * [2.4. Unused `dedup_ttl_hours` Argument Removed from `WhatsAppChannel`](#24-unused-dedup_ttl_hours-argument-removed-from-whatsappchannel)
 * **[3. Other Relevant `0.4.0` Changes & Improvements](#3-other-relevant-040-changes--improvements)**
   * [3.1. New Features](#31-new-features)
   * [3.2. Compatible Behavior Changes & Fail-Closed Validations](#32-compatible-behavior-changes--fail-closed-validations)
@@ -20,14 +21,16 @@ This guide describes everything you need to know when upgrading **`chatflow-agen
 
 ## 1. Who Needs to Make Changes?
 
-For most applications, upgrading from `v0.3.4` to `0.4.0` is a **drop-in upgrade requiring zero code changes**. Use the summary table below to check whether your project is affected by any of the three breaking changes in `0.4.0`.
+For most applications, upgrading from `v0.3.4` to `0.4.0` is a **drop-in upgrade requiring zero code changes**. Use the summary table below to check whether your project is affected by any of the four breaking changes in `0.4.0`.
 
 | Usage Pattern | Action Required? | Details |
 | :--- | :--- | :--- |
 | Standard `Agent`, `Runner`, `@tool`, `SessionContext`, or `SQLiteSessionStore` usage | **No changes required** | Existing database files, agent definitions, tools, and session APIs remain compatible. |
 | `GeminiEngine` / `provider="gemini"` with `GEMINI_API_KEY`, `GOOGLE_API_KEY`, or `api_key=...` | **No code changes required** | Now runs over `httpx` with zero extra SDK dependencies (`google-genai` is no longer required). |
 | `OpenAIEngine`, `AnthropicEngine`, Groq, xAI Grok, DeepSeek, Ollama, or vLLM | **No changes required** | All OpenAI-compatible and Anthropic engines remain source-compatible. |
-| `TelegramChannel`, `WhatsAppChannel`, or `CLIChannel` | **No changes required** | Existing constructor calls and webhook handlers continue to work unchanged. |
+| `TelegramChannel` or `CLIChannel` | **No changes required** | Existing constructor calls and webhook handlers continue to work unchanged. |
+| `WhatsAppChannel` without `dedup_ttl_hours` | **No changes required** | Constructor calls and webhook handlers that do not pass `dedup_ttl_hours` continue to work unchanged. |
+| `WhatsAppChannel(..., dedup_ttl_hours=...)` | **Yes — Migration required** | Configure the TTL on `SessionStore` or `SQLiteSessionStore` instead. See [Section 2.4](#24-unused-dedup_ttl_hours-argument-removed-from-whatsappchannel). |
 | `GeminiEngine` relying on **Google Cloud Vertex AI / Application Default Credentials (ADC)** without an API key | **Yes — Migration required** | See [Section 2.1](#21-geminiengine-uses-the-gemini-rest-api-via-httpx-instead-of-google-genai). |
 | Code or tests accessing **`GeminiEngine.client`** directly | **Yes — Migration required** | See [Section 2.2](#22-geminiengineclient-attribute-removed). |
 | Multi-agent graphs registering **distinct `Agent` instances that share the same `name`** | **Yes — Migration required** | See [Section 2.3](#23-duplicate-agent-names-across-distinct-instances-are-rejected). |
@@ -223,6 +226,45 @@ shared_billing = Agent(name="Billing", instructions="Shared billing specialist")
 tier1_support.add_handoff(shared_billing)
 tier2_support.add_handoff(shared_billing)
 runner_shared = Runner(starting_agent=triage)
+```
+
+---
+
+### 2.4. Unused `dedup_ttl_hours` Argument Removed from `WhatsAppChannel`
+
+* **Origin:** PR #154
+* **Previous behavior (`v0.3.4`):**
+  * `WhatsAppChannel.__init__` accepted `dedup_ttl_hours` (default 192) between `on_24h_window_expired` and `max_body_size`.
+  * The constructor stored that value. Dedup always used the TTL on `SessionStore` or `SQLiteSessionStore` (also default 192 hours).
+* **Current behavior (`0.4.0`):**
+  * Passing `dedup_ttl_hours` to `WhatsAppChannel` raises `TypeError`.
+  * `max_body_size`, `enable_docs`, and `queue_timeout_seconds` are keyword-only. A positional value in the old `dedup_ttl_hours` slot raises `TypeError`.
+* **Affected users:**
+  * Code that passes `dedup_ttl_hours` to `WhatsAppChannel`, by name or by position.
+* **Required migration:**
+  * Remove `dedup_ttl_hours` from the `WhatsAppChannel` call.
+  * Pass that same number to the session store, then give the store to the runner. For an in-memory bot, use `SessionStore(dedup_ttl_hours=...)` the same way.
+
+**Before (`v0.3.4`):**
+
+```python
+channel = WhatsAppChannel(
+    verify_token="token",
+    app_secret="secret",
+    dedup_ttl_hours=48,
+)
+```
+
+**After (`0.4.0`):**
+
+```python
+from chatflow_agent import Agent, Runner, SQLiteSessionStore, WhatsAppChannel
+
+agent = Agent(name="Bot", instructions="Help the user.")
+store = SQLiteSessionStore("chatflow.db", dedup_ttl_hours=48)
+runner = Runner(starting_agent=agent, session_store=store)
+channel = WhatsAppChannel(verify_token="token", app_secret="secret")
+channel.attach(runner)
 ```
 
 ---
