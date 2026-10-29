@@ -25,7 +25,15 @@ DEST_README = DEST_DIR / "README.md"
 
 
 def _venv_python(venv: Path) -> Path:
-    return venv / "bin" / "python"
+    """Return the venv interpreter for Unix or Windows layouts."""
+    unix = venv / "bin" / "python"
+    windows = venv / "Scripts" / "python.exe"
+    if unix.exists():
+        return unix
+    if windows.exists():
+        return windows
+    # Prefer the platform-default path so the FileNotFoundError names the expected layout.
+    return windows if sys.platform == "win32" else unix
 
 
 def _isolated_env() -> dict[str, str]:
