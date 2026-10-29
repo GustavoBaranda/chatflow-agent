@@ -240,7 +240,7 @@ The following enhancements, validations, and bug fixes were added between `v0.3.
    * `Runner.run_async(..., turn_timeout: float | None = None)` bounds the active execution of a turn (starting once the session lock is held), cancelling and rolling back the turn and raising `TimeoutError` on expiration (PRs #120, #131).
    * `Runner.spawn_turn(session_id, user_message, metadata=None) -> asyncio.Task[AgentResponse]` queues an independent follow-up turn as a background task on the running event loop (PR #120).
 3. **Separate Queue Wait Timeout in `WhatsAppChannel` (`queue_timeout_seconds`):**
-   * `WhatsAppChannel.__init__(..., queue_timeout_seconds: float = 120.0)` bounds how long a newly arrived webhook message waits for the per-session lock independently of the active execution budget `llm_timeout_seconds`; it is required and validated as a positive, finite `float` (`TypeError` for `None`, `ValueError` for zero, negative or non-finite values) (PR #131).
+   * `WhatsAppChannel.__init__(..., queue_timeout_seconds: float = 120.0)` bounds how long a newly arrived webhook message waits for the per-session lock independently of the active execution budget `llm_timeout_seconds`; the argument is optional and defaults to `120.0`, and any value passed must be a positive, finite `float` (`TypeError` for `None`, `ValueError` for zero, negative or non-finite values) (PR #131).
 4. **In-Memory `SQLiteSessionStore(db_path=":memory:")` and Lifecycle Methods:**
    * `SQLiteSessionStore` now supports `db_path=":memory:"` using a single persistent shared connection guarded by a threading lock, plus explicit `store.close()` and context manager support (`with SQLiteSessionStore(...) as store:`) (PRs #107, #120, #133).
 5. **Public `Tool.to_openai_parameters()` Helper:**
@@ -350,7 +350,7 @@ asyncio.run(demo_new_features())
 ### 3.4. Internal Improvements Requiring No Migration
 
 * **Non-Blocking File-Backed SQLite I/O:** File-backed `SQLiteSessionStore` instances offload blocking SQLite operations to a dedicated 4-worker `ThreadPoolExecutor` via `_run_blocking()` when called from an async context, preventing event loop stalls under load (PR #133).
-* **Single-Statement Atomic `wamid` Deduplication:** `SQLiteSessionStore.record_processed_message()` now uses a single atomic `INSERT INTO chatflow_processed_messages ... ON CONFLICT(message_id) DO UPDATE` upsert with inline expiration pruning: an id recorded within the TTL is left untouched (0 rows changed), and an expired record is renewed (PR #120).
+* **Atomic `wamid` Deduplication:** `SQLiteSessionStore.record_processed_message()` records the message id with a single conditional upsert, `INSERT INTO chatflow_processed_messages ... ON CONFLICT(message_id) DO UPDATE SET processed_at = CURRENT_TIMESTAMP WHERE processed_at < datetime('now', ?)`: an id recorded within the TTL is left untouched (0 rows changed), and an expired record is renewed. Expired records are then pruned by a separate `DELETE` in the same transaction (PR #120).
 * **Automatic Pool Scoping in Channels and `Runner.run()`:** `Runner.run()`, `TelegramChannel.run()`, and `WhatsAppChannel` lifespan automatically enter `async with runner:` so connection pooling is active out of the box (PR #130).
 * **Full SQLite Schema Backward Compatibility:** Existing SQLite database files created in `v0.3.x` work without manual schema migration in `0.4.0`.
 
