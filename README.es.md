@@ -35,7 +35,8 @@ pip install chatflow-agent
 10. [Ejemplos de uso](#ejemplos-de-uso)
 11. [Documentación técnica](#documentación-técnica)
 12. [Contribuciones](#contribuciones)
-13. [Licencia](#licencia)
+13. [Apoyo al proyecto](#apoyo-al-proyecto)
+14. [Licencia](#licencia)
 
 ---
 
@@ -913,6 +914,17 @@ Si quieres ayudar a mejorar `chatflow-agent`, puedes revisar los Issues abiertos
 * 📋 **[Todos los Issues abiertos](https://github.com/GustavoBaranda/chatflow-agent/issues)** — Consulta errores, mejoras y oportunidades de contribución disponibles.
 
 Por favor, revisa nuestra **[Guía de contribución](CONTRIBUTING.md)** antes de enviar un Pull Request. Allí se encuentran las instrucciones de configuración del entorno, estilo de código (`ruff`, `mypy --strict`) y requisitos de pruebas (`pytest`).
+
+---
+
+<a id="apoyo-al-proyecto"></a>
+## 💖 Apoyo al proyecto
+
+Si encuentras útil `chatflow-agent` para tus proyectos u organización, considera apoyar su desarrollo continuo de código abierto a través de **[GitHub Sponsors](https://github.com/sponsors/GustavoBaranda)**.
+
+El patrocinio ayuda al mantenimiento del proyecto, la mejora de la documentación, la ampliación de la cobertura de pruebas, el fortalecimiento de la confiabilidad en los canales de mensajería y la continuidad en el desarrollo de nuevas capacidades.
+
+El patrocinio es completamente voluntario y no condiciona ni limita el acceso a ninguna funcionalidad, versión o documentación del proyecto de código abierto.
 
 ---
 
