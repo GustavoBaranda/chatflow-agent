@@ -122,14 +122,18 @@ sequenceDiagram
             loop Para cada tool_call en el lote
                 Runner->>Tool: await tool.execute_async(**args)
                 alt El resultado es Handoff(target_agent_name)
-                    alt Se excedió el límite de handoffs
-                        Runner-->>Runner: tool_results.append(ToolResult(is_error=True,<br/>content="Maximum agent transfers exceeded..."))
-                        Note over Runner: Los tool_calls restantes del lote reciben ToolResults de error por omisión (se sale del loop)
-                    else Destino autorizado en current_agent.handoffs
-                        Runner->>Session: set_active_agent(target_agent, raw_output.context_updates)
-                        Runner-->>Runner: tool_results.append(ToolResult({status: HANDOFF_SUCCESS,<br/>transferred_to: target_agent.name,<br/>reason: raw_output.reason or "Specialist routing"}))
-                    else Destino no autorizado o desconocido
-                        Runner-->>Runner: Lanzar AgentHandoffError (activa rollback)
+                    Runner->>Runner: _resolve_handoff_target(current_agent, target_agent_name)
+                    alt Destino no declarado en current_agent.handoffs
+                        Runner-->>Runner: Lanzar AgentHandoffError (activa rollback, antes de comprobar el límite)
+                    else Destino autorizado
+                        Runner->>Runner: handoff_counter += 1
+                        alt handoff_counter > max_handoffs_per_turn
+                            Runner-->>Runner: tool_results.append(ToolResult(is_error=True,<br/>content="Maximum agent transfers exceeded..."))
+                            Note over Runner: Los tool_calls restantes del lote reciben ToolResults de error por omisión (se sale del loop)
+                        else Dentro del límite de handoffs
+                            Runner->>Session: set_active_agent(target_agent, raw_output.context_updates)
+                            Runner-->>Runner: tool_results.append(ToolResult({status: HANDOFF_SUCCESS,<br/>transferred_to: target_agent.name,<br/>reason: raw_output.reason or "Specialist routing"}))
+                        end
                     end
                 else Resultado de herramienta estándar
                     Runner-->>Runner: tool_results.append(ToolResult(content=raw_output))

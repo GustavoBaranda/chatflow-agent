@@ -122,14 +122,18 @@ sequenceDiagram
             loop For each tool_call in batch
                 Runner->>Tool: await tool.execute_async(**args)
                 alt Result is Handoff(target_agent_name)
-                    alt Handoff limit exceeded
-                        Runner-->>Runner: tool_results.append(ToolResult(is_error=True,<br/>content="Maximum agent transfers exceeded..."))
-                        Note over Runner: Remaining tool_calls in the batch get skipped error ToolResults (loop exits)
-                    else Target authorized in current_agent.handoffs
-                        Runner->>Session: set_active_agent(target_agent, raw_output.context_updates)
-                        Runner-->>Runner: tool_results.append(ToolResult({status: HANDOFF_SUCCESS,<br/>transferred_to: target_agent.name,<br/>reason: raw_output.reason or "Specialist routing"}))
-                    else Target unauthorized or unknown
-                        Runner-->>Runner: Raise AgentHandoffError (triggers rollback)
+                    Runner->>Runner: _resolve_handoff_target(current_agent, target_agent_name)
+                    alt Target not declared in current_agent.handoffs
+                        Runner-->>Runner: Raise AgentHandoffError (triggers rollback, before the limit check)
+                    else Target authorized
+                        Runner->>Runner: handoff_counter += 1
+                        alt handoff_counter > max_handoffs_per_turn
+                            Runner-->>Runner: tool_results.append(ToolResult(is_error=True,<br/>content="Maximum agent transfers exceeded..."))
+                            Note over Runner: Remaining tool_calls in the batch get skipped error ToolResults (loop exits)
+                        else Within the handoff limit
+                            Runner->>Session: set_active_agent(target_agent, raw_output.context_updates)
+                            Runner-->>Runner: tool_results.append(ToolResult({status: HANDOFF_SUCCESS,<br/>transferred_to: target_agent.name,<br/>reason: raw_output.reason or "Specialist routing"}))
+                        end
                     end
                 else Standard tool result
                     Runner-->>Runner: tool_results.append(ToolResult(content=raw_output))
