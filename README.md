@@ -583,6 +583,7 @@ if __name__ == "__main__":
 | `ProviderError` | `ChatFlowError` | Raised on LLM API errors, blocked responses, or malformed payloads (error excerpts capped at 1,000 chars). |
 | `ToolSchemaError` | `ChatFlowError`, `TypeError` | Raised at tool definition time when a union member cannot be mapped to a JSON schema type. |
 | `ToolExecutionError` | `ChatFlowError` | Raised when a tool call fails directly via `Tool.execute_async()`. |
+| `ToolArgumentValidationError` | `ToolExecutionError` | Raised when LLM-provided arguments fail schema validation prior to tool execution. |
 | `AgentHandoffError` | `ChatFlowError` | Raised when a handoff targets an unknown or unauthorized agent (not declared in `current_agent.handoffs`). |
 | `ReentrantTurnError` | `ChatFlowError`, `RuntimeError` | Raised when a turn attempts to start another turn for the same session inline. |
 | `SessionDeletedError` | `ChatFlowError`, `RuntimeError` | Raised when a running turn's session is deleted concurrently. |

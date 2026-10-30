@@ -13,8 +13,9 @@ Esta guía describe todo lo que necesitas saber al actualizar **`chatflow-agent`
 * **[3. Otros cambios relevantes y mejoras de `0.4.0`](#3-otros-cambios-relevantes-y-mejoras-de-040)**
   * [3.1. Nuevas funcionalidades](#31-nuevas-funcionalidades)
   * [3.2. Cambios de comportamiento compatibles y validaciones fail-closed](#32-cambios-de-comportamiento-compatibles-y-validaciones-fail-closed)
-  * [3.3. Correcciones de bugs](#33-correcciones-de-bugs)
-  * [3.4. Mejoras internas que no requieren migración](#34-mejoras-internas-que-no-requieren-migración)
+  * [3.3. Validación de argumentos de herramientas en tiempo de ejecución](#33-validación-de-argumentos-de-herramientas-en-tiempo-de-ejecución)
+  * [3.4. Correcciones de bugs](#34-correcciones-de-bugs)
+  * [3.5. Mejoras internas que no requieren migración](#35-mejoras-internas-que-no-requieren-migración)
 * **[4. Documentación relacionada](#4-documentación-relacionada)**
 
 ---
@@ -293,6 +294,7 @@ Las siguientes mejoras, validaciones y correcciones de errores se incorporaron e
    * Configurar `model="deepseek-chat"` o `model="deepseek-reasoner"` sin un `provider` explícito selecciona automáticamente `provider="deepseek"` (`https://api.deepseek.com`, `DEEPSEEK_API_KEY`) (PR #55).
 8. **Nuevas excepciones públicas exportadas en `chatflow_agent` y `chatflow_agent.exceptions`:**
    * `ToolSchemaError` (subclase de `ChatFlowError`, PRs #118, #136)
+   * `ToolArgumentValidationError` (subclase de `ToolExecutionError`)
    * `ReentrantTurnError` (subclase de `ChatFlowError` y `RuntimeError`, PR #120)
    * `SessionDeletedError` (subclase de `ChatFlowError`, PR #120)
 
@@ -308,6 +310,8 @@ from chatflow_agent import (
     SQLiteSessionStore,
     SessionDeletedError,
     Tool,
+    ToolArgumentValidationError,
+    ToolExecutionError,
     ToolSchemaError,
 )
 
@@ -321,6 +325,7 @@ tool_obj = Tool(func=lookup_order)
 schema = tool_obj.to_openai_parameters()
 assert schema["required"] == ["order_id"]
 assert issubclass(ToolSchemaError, ChatFlowError)
+assert issubclass(ToolArgumentValidationError, ToolExecutionError)
 assert issubclass(ReentrantTurnError, ChatFlowError)
 assert issubclass(SessionDeletedError, ChatFlowError)
 
@@ -365,7 +370,60 @@ asyncio.run(demo_new_features())
 
 ---
 
-### 3.3. Correcciones de bugs
+### 3.3. Validación de argumentos de herramientas en tiempo de ejecución
+
+* **Validación activa por defecto (`validate_args=True`):** En `0.4.0`, los argumentos provistos por los LLM son validados y convertidos conforme a las anotaciones de tipos de los parámetros de la función antes de su ejecución (tanto en herramientas síncronas como asíncronas).
+* **Política de coerción de cadenas (`str`):**
+  * Los proveedores LLM suelen emitir identificadores numéricos sin entrecomillar (como `order_id` o `code`). Dichos enteros y flotantes se convierten automáticamente a `str` (por ejemplo, `12345` -> `"12345"`).
+  * Valores booleanos (`True`, `False`) y contenedores (`list`, `dict`) son **estrictamente rechazados** para anotaciones de tipo `str` y nunca se convierten silenciosamente a texto.
+* **Política de coerción booleana (`bool`):**
+  * Los parámetros booleanos siguen la coerción booleana estándar de Pydantic (admitiendo booleanos nativos, representaciones comunes en cadena para valores lógicos como `"true"`/`"false"` y valores enteros `0` y `1`), rechazando cadenas inválidas, números distintos de 0 y 1 y tipos contenedor.
+* **Rigor numérico y rechazo de valores no finitos:**
+  * Tipos numéricos (`int`, `float`) rechazan estrictamente valores booleanos (en Python los booleanos son subclases de `int`, pero pasar `True` para un parámetro entero falla la validación).
+  * `NaN`, infinito positivo (`Infinity`, `+inf`) e infinito negativo (`-Infinity`, `-inf`) son rechazados (`allow_inf_nan=False`).
+* **Nulabilidad de esquemas y representaciones por proveedor:**
+  * Parámetros con valor por defecto `None` (como `x: int = None`) aceptan automáticamente tanto valores omitidos como `None` explícito, y se marcan como nulables en los esquemas de herramientas.
+  * En declaraciones canónicas para Google Gemini (OpenAPI 3.0), esto se representa como `"nullable": true` sobre tipos en mayúsculas (ej. `{"type": "INTEGER", "nullable": true}`).
+  * En declaraciones para OpenAI y Anthropic (`to_openai_parameters()`), los tipos se convierten a minúsculas conforme a JSON Schema y la nulabilidad se expresa mediante uniones de tipo o una lista `anyOf` con `{"type": "null"}` (ej. `{"anyOf": [{"type": "integer"}, {"type": "null"}]}`).
+* **Anotaciones no soportadas y contrato de fallback:**
+  * Tipos sin mapeo de esquema concreto (como `TypedDict`, `Enum`, `dataclass`, `BaseModel` y `Literal`) retienen el fallback compatible hacia atrás (Gemini OpenAPI 3.0 `{"type": "STRING"}` / OpenAI JSON Schema `{"type": "string"}`) para parámetros no unión y aceptan valores bajo `Any` en validación de runtime. En uniones, tipos no mapeables fallan tempranamente con `ToolSchemaError` al registrarse.
+* **Firmas de Python y valores por defecto:**
+  * Parámetros con guiones bajos iniciales (ej. `_id`, `_query`), parámetros nombrados `model_config` y métodos no enlazados con parámetro receptor `self` se validan correctamente sin colisiones ni advertencias.
+  * `Tool.__call__` preserva la semántica de llamada de Python en todos los tipos de parámetros (posicionales puros, variádicos, sólo por nombre), manteniendo espacios de nombres independientes cuando parámetros posicionales puros comparten nombre con entradas en `**kwargs`.
+  * Pasar argumentos posicionales puros como palabras clave falla tempranamente con el error específico `positional-only argument passed as keyword` cuando la función no tiene `**kwargs`. Con `**kwargs`, esas palabras clave se reenvían a `**kwargs`, como en Python nativo. La aceptación y el rechazo son idénticos en todas las versiones de Python soportadas.
+  * Parámetros omitidos con valores por defecto (incluyendo valores por defecto mutables como `tags: list[str] = []` u objetos centinela) preservan el enlace nativo de Python y la identidad de los objetos.
+* **Despacho de hilos, contrato de error sanitizado y errores acotados:**
+  * Las herramientas síncronas nunca se despachan al pool de hilos cuando la validación falla, previniendo sobrecarga y efectos secundarios externos.
+  * `ToolArgumentValidationError` impone un contrato de error sanitizado: instancias crudas de `ValidationError` de Pydantic nunca se retienen en `exc.original_error` ni en tracebacks, impidiendo la exposición de datos o secretos del modelo. `exc.original_error` contiene un `ValueError(message)` sanitizado y se suprimen `__cause__` y `__context__`.
+  * Los mensajes de error de validación integrados están acotados en cantidad (máximo 3) y longitud total (máximo 300 caracteres). Solo se muestran etiquetas de parámetros seguras y declaradas; claves no confiables provistas por el modelo y rutas anidadas se omiten estrictamente.
+* **Desactivación y aislamiento de herramientas compartidas (`validate_args`):**
+  * Si una herramienta personalizada requiere argumentos crudos sin validar, puede desactivarse la validación mediante `@tool(validate_args=False)`, `agent.tool(validate_args=False)`, `agent.add_tool(func, validate_args=False)` o `Tool(func, validate_args=False)`.
+  * `Agent.add_tool(tool_instance, validate_args=False)` crea una copia configurada independientemente cuando el ajuste difiere, sin mutar la instancia compartida. La copia (`Tool.clone()`) es superficial y conserva la subclase concreta de `Tool` y sus métodos sobrescritos; los atributos mutables propios se comparten con el original, pero la configuración de validación no. Un `__copy__()` de una subclase que devuelve la instancia original o un objeto que comparte sus atributos se rechaza con `TypeError`, y no se registra nada.
+  * Modificar `tool.validate_args` directamente en una herramienta publica la nueva configuración de manera atómica sin estados intermedios inseguros.
+
+```python
+from chatflow_agent import ToolArgumentValidationError, tool
+
+
+@tool
+def process_order(order_id: str, quantity: int, notify: bool = False) -> str:
+    """Procesa una orden con argumentos validados."""
+    return f"Order {order_id} x{quantity} (notify={notify})"
+
+
+# Coerción automática de enteros a cadena:
+assert process_order(order_id=12345, quantity="3", notify="true") == "Order 12345 x3 (notify=True)"
+
+# Tipos inválidos fallan inmediatamente sin ejecutar la función:
+try:
+    process_order(order_id=True, quantity=1)
+except ToolArgumentValidationError as exc:
+    assert "parameter 'order_id'" in str(exc)
+```
+
+---
+
+### 3.4. Correcciones de bugs
 
 * **Concurrencia de sesiones SQLite y diario transaccional de turno (`SQLiteSessionStore`):**
   * Los turnos concurrentes dirigidos al mismo `session_id` a través de distintas instancias envoltorio de `SQLiteSessionContext` ahora se serializan mediante un registro débil de locks por `(event_loop, session_id)` y recargan automáticamente el último estado confirmado en SQLite (`session.refresh()`) al adquirir el lock (PR #120).
@@ -389,7 +447,7 @@ asyncio.run(demo_new_features())
 
 ---
 
-### 3.4. Mejoras internas que no requieren migración
+### 3.5. Mejoras internas que no requieren migración
 
 * **I/O no bloqueante para SQLite basado en archivo:** Las instancias de `SQLiteSessionStore` basadas en archivo delegan las operaciones bloqueantes de SQLite a un `ThreadPoolExecutor` dedicado de 4 workers mediante `_run_blocking()` cuando se invocan desde un contexto asíncrono, evitando bloqueos del bucle de eventos bajo carga (PR #133).
 * **Deduplicación atómica de `wamid`:** `SQLiteSessionStore.record_processed_message()` registra el id del mensaje con un único upsert condicional, `INSERT INTO chatflow_processed_messages ... ON CONFLICT(message_id) DO UPDATE SET processed_at = CURRENT_TIMESTAMP WHERE processed_at < datetime('now', ?)`: un id registrado dentro del TTL no se toca (0 filas cambiadas) y un registro expirado se renueva. Los registros expirados se purgan después con un `DELETE` separado dentro de la misma transacción (PR #120).

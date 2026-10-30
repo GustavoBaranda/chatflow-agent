@@ -186,10 +186,18 @@ Implemented stores are `SessionStore` and `SQLiteSessionStore`, both implementin
   errors and logs using the existing helpers.
 - Tool schemas are generated at registration. Unrepresentable union members raise
   `ToolSchemaError`; unknown non-union annotations retain the backward-compatible `STRING`
-  fallback, and unresolved annotations emit a warning and retain that fallback. Tool execution
-  does not enforce annotation types at runtime. Do not alter these fallback semantics or add
-  runtime argument coercion or validation without explicit maintainer authorization and focused
-  regression tests.
+  fallback, and unresolved annotations emit a warning and retain that fallback.
+- Prior to tool execution (sync, async, and direct callable invocation), LLM-provided arguments
+  are validated and coerced against parameter annotations via Pydantic (`ToolArgumentValidationError`,
+  subclass of `ToolExecutionError`). Validation is enabled by default (`validate_args=True`). Numeric
+  types coerce integer and float strings and reject booleans, NaN, and infinity; string types coerce
+  numbers but reject booleans and collections. Parameters with leading underscores or named
+  `model_config` validate without shadowing parent BaseModel attributes. Omitted parameters with
+  defaults preserve native Python parameter binding and mutable default semantics. Synchronous tools
+  are never dispatched to worker threads when validation fails. Built-in validation errors and
+  exception tracebacks strictly redact raw inputs, untrusted parameter keys, and nested paths, with error
+  messages strictly bounded (max 3 errors, max 300 characters). Validation can be disabled per tool
+  with `validate_args=False` or overridden via `add_tool()`.
 - A conversational rollback cannot undo a tool's external side effects. Tools that charge,
   send, mutate, or publish should use application-level idempotency keys and retry-safe design.
 

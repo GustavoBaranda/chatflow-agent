@@ -13,8 +13,9 @@ This guide describes everything you need to know when upgrading **`chatflow-agen
 * **[3. Other Relevant `0.4.0` Changes & Improvements](#3-other-relevant-040-changes--improvements)**
   * [3.1. New Features](#31-new-features)
   * [3.2. Compatible Behavior Changes & Fail-Closed Validations](#32-compatible-behavior-changes--fail-closed-validations)
-  * [3.3. Bug Fixes](#33-bug-fixes)
-  * [3.4. Internal Improvements Requiring No Migration](#34-internal-improvements-requiring-no-migration)
+  * [3.3. Runtime Tool Argument Validation](#33-runtime-tool-argument-validation)
+  * [3.4. Bug Fixes](#34-bug-fixes)
+  * [3.5. Internal Improvements Requiring No Migration](#35-internal-improvements-requiring-no-migration)
 * **[4. Related Documentation](#4-related-documentation)**
 
 ---
@@ -293,6 +294,7 @@ The following enhancements, validations, and bug fixes were added between `v0.3.
    * Setting `model="deepseek-chat"` or `model="deepseek-reasoner"` without an explicit `provider` now automatically selects `provider="deepseek"` (`https://api.deepseek.com`, `DEEPSEEK_API_KEY`) (PR #55).
 8. **New Public Exceptions Exported from `chatflow_agent` and `chatflow_agent.exceptions`:**
    * `ToolSchemaError` (subclass of `ChatFlowError`, PRs #118, #136)
+   * `ToolArgumentValidationError` (subclass of `ToolExecutionError`)
    * `ReentrantTurnError` (subclass of `ChatFlowError` and `RuntimeError`, PR #120)
    * `SessionDeletedError` (subclass of `ChatFlowError`, PR #120)
 
@@ -308,6 +310,8 @@ from chatflow_agent import (
     SQLiteSessionStore,
     SessionDeletedError,
     Tool,
+    ToolArgumentValidationError,
+    ToolExecutionError,
     ToolSchemaError,
 )
 
@@ -321,6 +325,7 @@ tool_obj = Tool(func=lookup_order)
 schema = tool_obj.to_openai_parameters()
 assert schema["required"] == ["order_id"]
 assert issubclass(ToolSchemaError, ChatFlowError)
+assert issubclass(ToolArgumentValidationError, ToolExecutionError)
 assert issubclass(ReentrantTurnError, ChatFlowError)
 assert issubclass(SessionDeletedError, ChatFlowError)
 
@@ -365,7 +370,60 @@ asyncio.run(demo_new_features())
 
 ---
 
-### 3.3. Bug Fixes
+### 3.3. Runtime Tool Argument Validation
+
+* **Validation Enabled by Default (`validate_args=True`):** In `0.4.0`, arguments provided by LLMs are validated and coerced against the tool parameter type annotations before invoking the underlying Python function (both synchronous and asynchronous).
+* **String Coercion Policy:**
+  * LLM providers sometimes output unquoted integers or floats for string-annotated fields (such as `order_id` or `code`). These numeric values are automatically coerced to `str` (e.g., `12345` -> `"12345"`).
+  * Booleans (`True`, `False`) and collection types (`list`, `dict`) are **strictly rejected** for `str` annotations and are never silently stringified.
+* **Boolean Coercion Policy:**
+  * Boolean parameters follow Pydantic's standard lax boolean coercion (accepting native booleans, common logical string representations like `"true"`/`"false"`, and integer values `0` and `1`), while rejecting invalid strings, non-binary numbers, and collections.
+* **Numeric Strictness & Non-Finite Rejection:**
+  * Numeric types (`int`, `float`) strictly reject boolean values (Python booleans are subclasses of `int`, but passing `True` for an integer parameter fails validation).
+  * `NaN`, positive infinity (`Infinity`, `+inf`), and negative infinity (`-Infinity`, `-inf`) are rejected (`allow_inf_nan=False`).
+* **Schema Nullability & Provider Representations:**
+  * Parameters with a default of `None` (such as `x: int = None`) automatically accept both omitted values and explicitly passed `None`, and are marked as nullable in tool schemas.
+  * In canonical tool declarations for Google Gemini (OpenAPI 3.0), this is represented as `"nullable": true` on uppercase types (e.g. `{"type": "INTEGER", "nullable": true}`).
+  * In tool declarations for OpenAI and Anthropic (`to_openai_parameters()`), types are converted to lowercase JSON Schema types and nullability is expressed using type unions or an `anyOf` list with `{"type": "null"}` (e.g. `{"anyOf": [{"type": "integer"}, {"type": "null"}]}`).
+* **Unsupported Annotations & Fallback Contract:**
+  * Types without concrete schema mappings (such as `TypedDict`, `Enum`, `dataclass`, `BaseModel`, and `Literal`) retain the backward-compatible schema fallback (Gemini OpenAPI 3.0 `{"type": "STRING"}` / OpenAI JSON Schema `{"type": "string"}`) for non-union parameters and accept values under `Any` in runtime validation. In unions, unmappable types fail fast with `ToolSchemaError` at registration.
+* **Python Signatures & Parameter Defaults:**
+  * Parameters starting with leading underscores (e.g. `_id`, `_query`), parameters named `model_config`, and unbound methods with receiver parameter `self` validate correctly without collision or shadowing warnings.
+  * `Tool.__call__` preserves Python call semantics across all parameter kinds (positional-only, var-positional, keyword-only, var-keyword), preserving distinct namespaces when positional-only parameters share names with `**kwargs` entries.
+  * Passing positional-only arguments as keywords fails fast with a specific `positional-only argument passed as keyword` error when the function has no `**kwargs`. With `**kwargs`, such keywords are forwarded into `**kwargs`, as in native Python. Acceptance and rejection are identical on every supported Python version.
+  * Omitted parameters with default values (including mutable defaults such as `tags: list[str] = []` or sentinel objects) preserve native Python parameter binding and object identity.
+* **Worker Dispatch, Sanitized Error Contract & Bounded Errors:**
+  * Synchronous tools are never dispatched to background worker threads when validation fails, preventing unneeded thread overhead and external side effects.
+  * `ToolArgumentValidationError` enforces a sanitized error contract: raw Pydantic `ValidationError` instances are never retained on `exc.original_error` or in tracebacks, preventing model inputs or secrets from leaking. `exc.original_error` contains a sanitized `ValueError(message)`, and `__cause__` / `__context__` are suppressed.
+  * Built-in validation error messages are bounded in error count (maximum 3) and total length (maximum 300 characters). Only safe, declared parameter labels are echoed; untrusted model-supplied keys and nested paths are strictly omitted.
+* **Opting Out & Shared Tool Isolation (`validate_args`):**
+  * If a custom tool requires raw, unvalidated arguments, validation can be disabled per tool using `@tool(validate_args=False)`, `agent.tool(validate_args=False)`, `agent.add_tool(func, validate_args=False)`, or `Tool(func, validate_args=False)`.
+  * `Agent.add_tool(tool_instance, validate_args=False)` creates an independently configured tool copy when the validation setting differs, never mutating the shared instance. The copy (`Tool.clone()`) is shallow and keeps the concrete `Tool` subclass and its overridden methods; custom mutable attributes are shared with the original, while the validation configuration is not. A subclass `__copy__()` that returns the original instance or an object sharing its attributes is rejected with `TypeError`, and nothing is registered.
+  * Mutating `tool.validate_args` directly on a tool instance dynamically publishes the new configuration atomically without unsafe intermediate states.
+
+```python
+from chatflow_agent import ToolArgumentValidationError, tool
+
+
+@tool
+def process_order(order_id: str, quantity: int, notify: bool = False) -> str:
+    """Process an order with validated arguments."""
+    return f"Order {order_id} x{quantity} (notify={notify})"
+
+
+# Automatic string coercion for unquoted numeric IDs:
+assert process_order(order_id=12345, quantity="3", notify="true") == "Order 12345 x3 (notify=True)"
+
+# Invalid types fail fast before calling the function:
+try:
+    process_order(order_id=True, quantity=1)
+except ToolArgumentValidationError as exc:
+    assert "parameter 'order_id'" in str(exc)
+```
+
+---
+
+### 3.4. Bug Fixes
 
 * **SQLite Session Concurrency & Atomic Turn Journal (`SQLiteSessionStore`):**
   * Concurrent turns targeting the same `session_id` through distinct `SQLiteSessionContext` wrapper instances now serialize via a per-`(event_loop, session_id)` weak lock registry and automatically reload the latest committed SQLite state (`session.refresh()`) upon acquiring the lock (PR #120).
@@ -389,7 +447,7 @@ asyncio.run(demo_new_features())
 
 ---
 
-### 3.4. Internal Improvements Requiring No Migration
+### 3.5. Internal Improvements Requiring No Migration
 
 * **Non-Blocking File-Backed SQLite I/O:** File-backed `SQLiteSessionStore` instances offload blocking SQLite operations to a dedicated 4-worker `ThreadPoolExecutor` via `_run_blocking()` when called from an async context, preventing event loop stalls under load (PR #133).
 * **Atomic `wamid` Deduplication:** `SQLiteSessionStore.record_processed_message()` records the message id with a single conditional upsert, `INSERT INTO chatflow_processed_messages ... ON CONFLICT(message_id) DO UPDATE SET processed_at = CURRENT_TIMESTAMP WHERE processed_at < datetime('now', ?)`: an id recorded within the TTL is left untouched (0 rows changed), and an expired record is renewed. Expired records are then pruned by a separate `DELETE` in the same transaction (PR #120).

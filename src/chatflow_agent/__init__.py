@@ -22,6 +22,7 @@ from chatflow_agent.exceptions import (
     ProviderError,
     ReentrantTurnError,
     SessionDeletedError,
+    ToolArgumentValidationError,
     ToolExecutionError,
     ToolSchemaError,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "WhatsAppChannel",
     "ChatFlowError",
     "DependencyError",
+    "ToolArgumentValidationError",
     "ToolExecutionError",
     "ToolSchemaError",
     "AgentHandoffError",

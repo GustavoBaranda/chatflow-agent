@@ -30,7 +30,11 @@ from chatflow_agent.core.memory import (
     _offloads_blocking_io,
     _run_blocking,
 )
-from chatflow_agent.exceptions import AgentHandoffError, ReentrantTurnError
+from chatflow_agent.exceptions import (
+    AgentHandoffError,
+    ReentrantTurnError,
+    ToolArgumentValidationError,
+)
 from chatflow_agent.types import (
     AgentResponse,
     Handoff,
@@ -671,6 +675,22 @@ class Runner:
                         # Execute tool safely
                         try:
                             raw_output = await tool_instance.execute_async(**call.args)
+                        except ToolArgumentValidationError as err:
+                            logger.warning(
+                                "Tool argument validation failed - Tool: '%s' on agent '%s': %s",
+                                call.name,
+                                current_agent.name,
+                                err.message,
+                            )
+                            tool_results.append(
+                                ToolResult(
+                                    tool_call_id=call.id,
+                                    name=call.name,
+                                    content=f"{err.message}. Please provide valid arguments matching the required schema.",
+                                    is_error=True,
+                                )
+                            )
+                            continue
                         except Exception as err:
                             trace_id = str(uuid.uuid4())
                             logger.error(

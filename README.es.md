@@ -583,6 +583,7 @@ if __name__ == "__main__":
 | `ProviderError` | `ChatFlowError` | Lanzada ante errores de API del proveedor LLM, respuestas bloqueadas o payloads malformados (extractos acotados a 1.000 caracteres). |
 | `ToolSchemaError` | `ChatFlowError`, `TypeError` | Lanzada al registrar una herramienta cuando un miembro de una unión no puede mapearse a JSON Schema. |
 | `ToolExecutionError` | `ChatFlowError` | Lanzada cuando falla la ejecución directa de una herramienta mediante `Tool.execute_async()`. |
+| `ToolArgumentValidationError` | `ToolExecutionError` | Lanzada cuando los argumentos provistos por el LLM no superan la validación de esquema antes de ejecutar la herramienta. |
 | `AgentHandoffError` | `ChatFlowError` | Lanzada cuando un handoff apunta a un agente destino desconocido o no autorizado (no declarado en `current_agent.handoffs`). |
 | `ReentrantTurnError` | `ChatFlowError`, `RuntimeError` | Lanzada cuando un turno intenta iniciar otro turno de la misma sesión en línea. |
 | `SessionDeletedError` | `ChatFlowError`, `RuntimeError` | Lanzada cuando la sesión de un turno en curso se elimina concurrentemente. |

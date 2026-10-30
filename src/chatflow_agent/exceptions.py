@@ -30,6 +30,26 @@ class ToolExecutionError(ChatFlowError):
         self.original_error = original_error
 
 
+class ToolArgumentValidationError(ToolExecutionError):
+    """Raised when tool arguments provided by a model fail schema validation.
+
+    Enforces a sanitized error contract: raw Pydantic ``ValidationError`` instances
+    and sensitive inputs are never retained in ``original_error``, string representations,
+    or exception tracebacks. ``self.original_error`` always holds a sanitized
+    ``ValueError(message)``.
+    """
+
+    def __init__(
+        self, tool_name: str, message: str, original_error: Exception | None = None
+    ) -> None:
+        clean_error = ValueError(message)
+        super().__init__(tool_name=tool_name, original_error=clean_error)
+        self.message = message
+        self.__cause__ = None
+        self.__context__ = None
+        self.__suppress_context__ = True
+
+
 class ToolSchemaError(ChatFlowError):
     """Raised when a tool's parameter annotation cannot be expressed as a valid schema."""
 

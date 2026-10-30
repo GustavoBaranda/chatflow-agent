@@ -98,12 +98,23 @@ class Agent:
             return self.instructions()
         return self.instructions
 
-    def add_tool(self, tool_or_callable: Tool | Callable[..., Any]) -> Tool:
+    def add_tool(
+        self,
+        tool_or_callable: Tool | Callable[..., Any],
+        *,
+        validate_args: bool | None = None,
+    ) -> Tool:
         """Register a tool or callable to this agent."""
         if isinstance(tool_or_callable, Tool):
-            t = tool_or_callable
+            if validate_args is not None and validate_args != tool_or_callable.validate_args:
+                # Never mutate the caller's Tool instance: create an independently
+                # configured copy preserving metadata, schema and execution behavior.
+                t = tool_or_callable.clone(validate_args=validate_args)
+            else:
+                t = tool_or_callable
         else:
-            t = Tool(tool_or_callable)
+            effective_validate_args = True if validate_args is None else validate_args
+            t = Tool(tool_or_callable, validate_args=effective_validate_args)
 
         # Avoid duplicate tools by name
         self.tools = [existing for existing in self.tools if existing.name != t.name]
@@ -116,6 +127,7 @@ class Agent:
         *,
         name: str | None = None,
         description: str | None = None,
+        validate_args: bool = True,
     ) -> Any:
         """Decorator to register a tool directly onto this agent instance.
 
@@ -127,13 +139,18 @@ class Agent:
             def query_db(id: int) -> dict: ...
         """
         if callable(name_or_func):
-            t = Tool(name_or_func)
+            t = Tool(name_or_func, validate_args=validate_args)
             self.add_tool(t)
             return t
 
         def decorator(fn: Callable[..., Any]) -> Tool:
             tool_name = name or (name_or_func if isinstance(name_or_func, str) else None)
-            t = Tool(fn, name=tool_name, description=description)
+            t = Tool(
+                fn,
+                name=tool_name,
+                description=description,
+                validate_args=validate_args,
+            )
             self.add_tool(t)
             return t
 
