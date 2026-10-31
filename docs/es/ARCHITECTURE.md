@@ -230,7 +230,7 @@ Cuando `Runner` evalúa un turno para `current_agent`, [`resolve_engine()`](../.
    - `grok*` → [`OpenAIEngine`](../../src/chatflow_agent/core/engines/openai_compatible.py) (`provider="grok"`)
    - prefijo literal `deepseek-` → [`OpenAIEngine`](../../src/chatflow_agent/core/engines/openai_compatible.py) (`provider="deepseek"`)
    - `gemma*`, `llama*`, `mistral*`, `qwen*`, `phi*` → [`OpenAIEngine`](../../src/chatflow_agent/core/engines/openai_compatible.py) (`provider="ollama"`)
-6. **Motor de Fallback:** Utiliza `default_engine` cuando se proporcionó uno y ninguna regla anterior coincidió.
+6. **Motor de Fallback:** Utiliza `default_engine` cuando se proporcionó uno y ninguna regla anterior coincidió. Si `agent.api_key` está definida y `default_engine` es un [`GeminiEngine`](../../src/chatflow_agent/core/engines/gemini.py) estándar (como el que `Runner` crea cuando no se le pasa `engine`), se usa una copia de ese motor con la clave del agente en lugar de las credenciales del `Runner` o del entorno; el proveedor sigue siendo Gemini. Cualquier otro `default_engine` (una subclase o un motor personalizado) se usa sin cambios.
 7. **Valor por Defecto Final:** Instancia [`GeminiEngine`](../../src/chatflow_agent/core/engines/gemini.py).
 
 #### Implementaciones de Motores y Normalización entre Proveedores

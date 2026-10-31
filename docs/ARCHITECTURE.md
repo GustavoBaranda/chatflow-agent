@@ -230,7 +230,7 @@ When `Runner` evaluates a turn for `current_agent`, [`resolve_engine()`](../src/
    - `grok*` → [`OpenAIEngine`](../src/chatflow_agent/core/engines/openai_compatible.py) (`provider="grok"`)
    - literal prefix `deepseek-` → [`OpenAIEngine`](../src/chatflow_agent/core/engines/openai_compatible.py) (`provider="deepseek"`)
    - `gemma*`, `llama*`, `mistral*`, `qwen*`, `phi*` → [`OpenAIEngine`](../src/chatflow_agent/core/engines/openai_compatible.py) (`provider="ollama"`)
-6. **Fallback Engine:** Uses `default_engine` when one was supplied and no earlier rule matched.
+6. **Fallback Engine:** Uses `default_engine` when one was supplied and no earlier rule matched. If `agent.api_key` is set and `default_engine` is a plain [`GeminiEngine`](../src/chatflow_agent/core/engines/gemini.py) (such as the one `Runner` builds when no `engine` is passed), a copy of it that uses the agent's key is used instead of the `Runner` or environment credentials; the provider stays Gemini. Any other `default_engine` (a subclass or a custom engine) is used unchanged.
 7. **Ultimate Default:** Instantiates [`GeminiEngine`](../src/chatflow_agent/core/engines/gemini.py).
 
 #### Engine Implementations & Cross-Provider Normalization
