@@ -36,7 +36,7 @@ _T = TypeVar("_T")
 
 
 class SessionContext:
-    """Stores conversation state, dialogue history, and active agent pointer for a session."""
+    """Stores isolated conversation state, dialogue history, and the active agent pointer."""
 
     def __init__(
         self,
@@ -53,7 +53,7 @@ class SessionContext:
         self.active_agent = initial_agent
         self.max_turns = max_turns
         self.history: list[Message] = []
-        self.metadata: dict[str, Any] = metadata or {}
+        self.metadata: dict[str, Any] = copy.deepcopy(metadata) if metadata is not None else {}
         self._lock: asyncio.Lock | None = None
 
     @property
@@ -70,7 +70,7 @@ class SessionContext:
 
     def update_metadata(self, updates: dict[str, Any]) -> None:
         """Merge metadata updates without changing the active agent or history."""
-        self.metadata.update(updates)
+        self.metadata.update(copy.deepcopy(updates))
 
     def set_active_agent(
         self,
@@ -78,9 +78,10 @@ class SessionContext:
         context_updates: dict[str, Any] | None = None,
     ) -> None:
         """Switch the active agent and merge any state forwarded with the handoff."""
+        copied_updates = copy.deepcopy(context_updates) if context_updates else None
         self.active_agent = agent
-        if context_updates:
-            self.metadata.update(context_updates)
+        if copied_updates:
+            self.metadata.update(copied_updates)
 
     def clear_history(self) -> None:
         """Reset the conversation dialogue history."""

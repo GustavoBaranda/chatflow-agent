@@ -93,6 +93,25 @@ def test_session_store_lifecycle(test_agents: tuple[Agent, Agent]) -> None:
     assert store.get("user_alpha") is None
     assert "user_alpha" not in store.list_sessions()
 
+
+def test_session_store_copies_metadata_for_each_session(test_agents: tuple[Agent, Agent]) -> None:
+    agent1, _ = test_agents
+    original_metadata = {"channel": "web", "preferences": {"labels": ["support"]}}
+    expected_metadata = {"channel": "web", "preferences": {"labels": ["support"]}}
+    store = SessionStore()
+
+    first = store.get_or_create("session_a", default_agent=agent1, metadata=original_metadata)
+    second = store.get_or_create("session_b", default_agent=agent1, metadata=original_metadata)
+
+    first.update_metadata({"private": "session_a"})
+    first.metadata["preferences"]["labels"].append("private")
+
+    assert first.metadata is not second.metadata
+    assert first.metadata["preferences"] is not original_metadata["preferences"]
+    assert second.metadata == expected_metadata
+    assert original_metadata == expected_metadata
+
+
 @pytest.mark.parametrize("limit", [0, -1, -10])
 def test_invalid_max_turns(limit: int) -> None:
     agent = Agent(name="A", instructions="test")
