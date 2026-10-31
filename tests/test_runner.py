@@ -137,6 +137,9 @@ async def test_runner_multiagent_handoff_flow() -> None:
 @pytest.mark.asyncio
 async def test_runner_handoff_context_updates_are_available_to_recipient_tools() -> None:
     billing_agent = Agent(name="Billing Agent", instructions="Handle invoices and refunds.")
+    caller_metadata = {"customer_id": "C-1", "customer_tier": "standard"}
+    turn_metadata = {"request_id": "request-101"}
+    handoff_context_updates = {"customer_tier": "VIP", "invoice_id": "INV-101"}
     triage_agent = Agent(
         name="Triage Agent",
         instructions="Route users to the correct specialist.",
@@ -147,14 +150,14 @@ async def test_runner_handoff_context_updates_are_available_to_recipient_tools()
     def transfer_with_context() -> Handoff:
         return Handoff(
             target_agent_name="Billing Agent",
-            context_updates={"customer_tier": "VIP", "invoice_id": "INV-101"},
+            context_updates=handoff_context_updates,
         )
 
     session_store = SessionStore()
     session = session_store.get_or_create(
         session_id="user_context_handoff",
         default_agent=triage_agent,
-        metadata={"customer_id": "C-1", "customer_tier": "standard"},
+        metadata=caller_metadata,
     )
 
     @billing_agent.tool
@@ -177,7 +180,9 @@ async def test_runner_handoff_context_updates_are_available_to_recipient_tools()
     runner = Runner(starting_agent=triage_agent, session_store=session_store, engine=mock_engine)
 
     response = await runner.run_async(
-        session_id="user_context_handoff", user_message="Please review invoice INV-101."
+        session_id="user_context_handoff",
+        user_message="Please review invoice INV-101.",
+        metadata=turn_metadata,
     )
 
     assert response.active_agent_name == "Billing Agent"
@@ -185,7 +190,44 @@ async def test_runner_handoff_context_updates_are_available_to_recipient_tools()
         "customer_id": "C-1",
         "customer_tier": "VIP",
         "invoice_id": "INV-101",
+        "request_id": "request-101",
     }
+    assert caller_metadata == {"customer_id": "C-1", "customer_tier": "standard"}
+    assert turn_metadata == {"request_id": "request-101"}
+    assert handoff_context_updates == {"customer_tier": "VIP", "invoice_id": "INV-101"}
+
+
+@pytest.mark.asyncio
+async def test_runner_failure_rolls_back_metadata_without_mutating_caller() -> None:
+    agent = Agent(name="Echo", instructions="Echo input.")
+    original_metadata = {"nested": {"owner": "caller"}}
+    expected_metadata = {"nested": {"owner": "caller"}}
+    turn_metadata = {"request_id": "request-failed"}
+    session_store = SessionStore()
+    session = session_store.get_or_create(
+        "failed_metadata_turn", default_agent=agent, metadata=original_metadata
+    )
+
+    class FailingEngine(BaseEngine):
+        async def generate_turn_async(
+            self, agent: Agent, history: list[Message]
+        ) -> EngineTurnResult:
+            raise RuntimeError("provider failed")
+
+    runner = Runner(starting_agent=agent, session_store=session_store, engine=FailingEngine())
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        await runner.run_async(
+            session_id="failed_metadata_turn",
+            user_message="This turn fails.",
+            metadata=turn_metadata,
+        )
+
+    assert session.metadata == expected_metadata
+    assert session.metadata is not original_metadata
+    assert session.metadata["nested"] is not original_metadata["nested"]
+    assert original_metadata == expected_metadata
+    assert turn_metadata == {"request_id": "request-failed"}
 
 
 @pytest.mark.asyncio

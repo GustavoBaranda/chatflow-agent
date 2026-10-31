@@ -36,7 +36,7 @@ _T = TypeVar("_T")
 
 
 class SessionContext:
-    """Stores conversation state, dialogue history, and active agent pointer for a session."""
+    """Stores isolated conversation state, dialogue history, and the active agent pointer."""
 
     def __init__(
         self,
@@ -53,7 +53,7 @@ class SessionContext:
         self.active_agent = initial_agent
         self.max_turns = max_turns
         self.history: list[Message] = []
-        self.metadata: dict[str, Any] = metadata or {}
+        self.metadata: dict[str, Any] = copy.deepcopy(metadata) if metadata is not None else {}
         self._lock: asyncio.Lock | None = None
 
     @property
