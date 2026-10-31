@@ -10,6 +10,7 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,10 @@ from chatflow_agent.core.runner import Runner
 from chatflow_agent.types import Message, Role
 
 SAFETY = 30.0
-MAX_STALL = 0.1
+# A dedup write blocking the loop stalls it for its whole wait on the lock: busy_timeout
+# (10 s) or more. 1.0 s keeps a 10x margin over that and stays clear of scheduler jitter
+# on loaded runners; dedup_threads() checks deterministically where the write runs.
+MAX_STALL = 1.0
 PHONE = "5491100000077"
 
 
@@ -97,6 +101,27 @@ class Heartbeat:
         return max(self.gaps) if self.gaps else 0.0
 
 
+def dedup_threads(store: SQLiteSessionStore) -> list[str]:
+    """Record the name of the thread each ``record_processed_message`` call runs on."""
+    names: list[str] = []
+    real = store.record_processed_message
+
+    def spy(message_id: str) -> bool:
+        names.append(threading.current_thread().name)
+        return real(message_id)
+
+    store.record_processed_message = spy  # type: ignore[method-assign]
+    return names
+
+
+def on_sqlite_workers(names: list[str]) -> bool:
+    """Whether every call ran on the store's worker threads, never on the loop's thread."""
+    loop_thread = threading.current_thread().name
+    return bool(names) and all(
+        n.startswith("chatflow-sqlite") and n != loop_thread for n in names
+    )
+
+
 def channel(store: Any, engine: BaseEngine | None = None) -> WhatsAppChannel:
     ch = WhatsAppChannel(verify_token="tok", verify_signature=False)
     ch.attach(Runner(Agent(name="Bot", instructions="Test"), session_store=store, engine=engine or Engine()))
@@ -152,13 +177,21 @@ def queued(res: dict[str, Any]) -> int:
 @pytest.fixture
 def db(tmp_path: Path) -> Path:
     path = tmp_path / "wa.db"
-    SQLiteSessionStore(path)  # schema
+    SQLiteSessionStore(path).close()  # schema
     return path
 
 
+@pytest.fixture
+def store(db: Path) -> Iterator[SQLiteSessionStore]:
+    with SQLiteSessionStore(db) as s:  # closed at teardown: shuts down its worker threads
+        yield s
+
+
 @pytest.mark.asyncio
-async def test_2_ack_waits_for_its_dedup_write_but_the_loop_keeps_serving(db: Path) -> None:
-    store = SQLiteSessionStore(db)
+async def test_2_ack_waits_for_its_dedup_write_but_the_loop_keeps_serving(
+    db: Path, store: SQLiteSessionStore
+) -> None:
+    threads = dedup_threads(store)
     ch = channel(store)
     with ExternalWriter(db) as writer:
         async with Heartbeat() as hb:
@@ -172,6 +205,7 @@ async def test_2_ack_waits_for_its_dedup_write_but_the_loop_keeps_serving(db: Pa
             res = await asyncio.wait_for(post, SAFETY)
     assert res["status"] == 200 and queued(res) == 1
     assert res["ack"] >= t_release
+    assert len(threads) == 1 and on_sqlite_workers(threads), threads
     assert hb.max_gap < MAX_STALL
     assert store.is_message_processed("wamid.2")
 
@@ -194,11 +228,13 @@ async def test_12_concurrent_deliveries_of_one_wamid_are_queued_once(db: Path) -
 
 
 @pytest.mark.asyncio
-async def test_3_11_lock_beyond_busy_timeout_fails_the_webhook_not_the_loop_and_retry_works(db: Path) -> None:
+async def test_3_11_lock_beyond_busy_timeout_fails_the_webhook_not_the_loop_and_retry_works(
+    db: Path, store: SQLiteSessionStore
+) -> None:
     """Lock held well beyond busy_timeout (10 s; more on Windows): that webhook ends in
     HTTP 500 and records nothing, so Meta's retry is processed once; meanwhile the loop
     and an unrelated runner keep working."""
-    store = SQLiteSessionStore(db)
+    threads = dedup_threads(store)
     engine = Engine()
     ch = channel(store, engine)
     other_runner = Runner(Agent(name="Bot", instructions="x"), session_store=SessionStore(), engine=Engine())
@@ -214,6 +250,7 @@ async def test_3_11_lock_beyond_busy_timeout_fails_the_webhook_not_the_loop_and_
     assert res["status"] == 500
     assert isinstance(res["exc"], sqlite3.OperationalError)
     assert elapsed >= 9.0
+    assert len(threads) == 1 and on_sqlite_workers(threads), threads
     assert hb.max_gap < MAX_STALL
     assert not store.is_message_processed("wamid.3")
     # 11: Meta's retry is processed once; a further duplicate is skipped.
@@ -222,3 +259,4 @@ async def test_3_11_lock_beyond_busy_timeout_fails_the_webhook_not_the_loop_and_
     again = await request(ch.app, "POST", "/webhook", meta("wamid.3"))
     assert queued(again) == 0
     assert engine.calls == ["hola"]
+    assert len(threads) == 3 and on_sqlite_workers(threads), threads

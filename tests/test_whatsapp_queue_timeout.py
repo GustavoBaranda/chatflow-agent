@@ -10,6 +10,7 @@ gates released by the test; sleeps only establish lower bounds on waiting time.
 
 import asyncio
 import logging
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -24,6 +25,7 @@ from chatflow_agent.core.engines.base import EngineTurnResult
 from chatflow_agent.core.memory import SessionStore, SQLiteSessionStore
 from chatflow_agent.core.runner import Runner, _dispatch_limits
 from chatflow_agent.types import Message, Role, ToolCall
+from tests.test_runner_turn_timeout import patch_intact_turn_budget
 
 SAFETY = 10.0
 FALLBACK = "fallback-reply"
@@ -32,12 +34,16 @@ MASKED = "5491***001"
 
 
 @pytest.fixture(params=["sqlite_file", "sqlite_memory", "memory"])
-def any_store(request: pytest.FixtureRequest, tmp_path: Path) -> Any:
+def any_store(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Any]:
     if request.param == "sqlite_file":
-        return SQLiteSessionStore(tmp_path / "wa.db")
-    if request.param == "sqlite_memory":
-        return SQLiteSessionStore(":memory:")
-    return SessionStore()
+        store: Any = SQLiteSessionStore(tmp_path / "wa.db")
+    elif request.param == "sqlite_memory":
+        store = SQLiteSessionStore(":memory:")
+    else:
+        store = SessionStore()
+    yield store
+    if isinstance(store, SQLiteSessionStore):
+        store.close()  # shuts down its worker threads
 
 
 class GateEngine(BaseEngine):
@@ -123,26 +129,6 @@ async def bounded(aw: Any) -> Any:
     return await asyncio.wait_for(aw, SAFETY)
 
 
-def patch_intact_turn_budget(original: float, widened: float) -> Any:
-    """Patch ``runner._within`` so a turn timer still equal to ``original`` uses ``widened``.
-
-    Start the patch only after queue wait has exceeded ``original``. A timer the
-    queue wait already reduced stays reduced, and that regression still fails.
-    """
-    real = runner_mod._within
-
-    async def _within(
-        timeout: float | None,
-        coro: Any,
-        expired: type[asyncio.TimeoutError] = asyncio.TimeoutError,
-    ) -> Any:
-        if expired is runner_mod._TurnTimeout and timeout == original:
-            timeout = widened
-        return await real(timeout, coro, expired)
-
-    return patch.object(runner_mod, "_within", _within)
-
-
 # ---------------------------------------------------------------- configuration
 
 
@@ -164,8 +150,6 @@ def test_queue_timeout_must_be_positive_and_finite(value: float) -> None:
 @pytest.mark.asyncio
 async def test_waiting_behind_a_turn_does_not_consume_llm_timeout(any_store: Any) -> None:
     """Audit case 1a: a message that needs ~0 s used to time out while queued."""
-    # The turn limit must cover the queued turn's own work, which with a file store
-    # includes real disk writes (slow on CI runners); the wait below still exceeds it.
     channel, runner, engine, sent = build(any_store, queue=5.0, turn=1.0)
     engine.gates["hold"] = asyncio.Event()
     holder = runner.spawn_turn(PHONE, "hold")  # a turn of the same session, not bounded
@@ -174,8 +158,11 @@ async def test_waiting_behind_a_turn_does_not_consume_llm_timeout(any_store: Any
     task = process(channel, "w2", "queued")
     await asyncio.sleep(1.2)  # queued has waited longer than llm_timeout_seconds
     assert not task.done()
-    engine.gates["hold"].set()
-    await bounded(asyncio.gather(holder, task))
+    # The 1.0 s budget captured at dispatch is still intact. Widen that turn timer so
+    # file-backed SQLite writes on slow runners are outside the assertion (as in #152).
+    with patch_intact_turn_budget(1.0, 5.0):
+        engine.gates["hold"].set()
+        await bounded(asyncio.gather(holder, task))
 
     assert sent == [(PHONE, "re:queued")]
     assert history(any_store) == ["hold", "re:hold", "queued", "re:queued"]

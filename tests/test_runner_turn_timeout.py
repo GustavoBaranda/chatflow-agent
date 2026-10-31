@@ -9,11 +9,14 @@ bound on how long a turn waited.
 import asyncio
 import inspect
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
+from chatflow_agent.core import runner as runner_mod
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import BaseEngine
 from chatflow_agent.core.engines.base import EngineTurnResult
@@ -34,12 +37,16 @@ SAFETY = 10.0  # bound for waits that must finish; never reached when the code i
 
 
 @pytest.fixture(params=["sqlite_file", "sqlite_memory", "memory"])
-def any_store(request: pytest.FixtureRequest, tmp_path: Path) -> Any:
+def any_store(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Any]:
     if request.param == "sqlite_file":
-        return SQLiteSessionStore(tmp_path / "s.db")
-    if request.param == "sqlite_memory":
-        return SQLiteSessionStore(":memory:")
-    return SessionStore()
+        store: Any = SQLiteSessionStore(tmp_path / "s.db")
+    elif request.param == "sqlite_memory":
+        store = SQLiteSessionStore(":memory:")
+    else:
+        store = SessionStore()
+    yield store
+    if isinstance(store, SQLiteSessionStore):
+        store.close()  # shuts down its worker threads
 
 
 class GateEngine(BaseEngine):
@@ -78,6 +85,26 @@ def history(store: Any, session_id: str = "s") -> list[str | None]:
 
 async def bounded(aw: Any) -> Any:
     return await asyncio.wait_for(aw, SAFETY)
+
+
+def patch_intact_turn_budget(original: float, widened: float) -> Any:
+    """Patch ``runner._within`` so a turn timer still equal to ``original`` uses ``widened``.
+
+    Start the patch only after queue wait has exceeded ``original``. A timer the
+    queue wait already reduced stays reduced, and that regression still fails.
+    """
+    real = runner_mod._within
+
+    async def _within(
+        timeout: float | None,
+        coro: Any,
+        expired: type[asyncio.TimeoutError] = asyncio.TimeoutError,
+    ) -> Any:
+        if expired is runner_mod._TurnTimeout and timeout == original:
+            timeout = widened
+        return await real(timeout, coro, expired)
+
+    return patch.object(runner_mod, "_within", _within)
 
 
 def make_runner(store: Any, tools: list[Any] | None = None, engine: BaseEngine | None = None):
@@ -158,16 +185,17 @@ async def test_waiting_for_the_session_does_not_count_toward_turn_timeout(any_st
     holder = runner.spawn_turn("s", "hold")
     await bounded(engine.started_event("hold").wait())
 
-    # The turn limit must cover the queued turn's own work, which with a file store
-    # includes real disk writes (slow on CI runners); the wait below still exceeds it.
     queued = asyncio.create_task(runner.run_async("s", "queued", turn_timeout=1.0))
     await asyncio.sleep(1.2)  # queued has waited longer than its turn limit
     assert not queued.done()
     assert "queued" not in engine.calls
 
-    engine.gates["hold"].set()
-    assert (await bounded(queued)).content == "re:queued"
-    await bounded(holder)
+    # The 1.0 s budget is still intact. Widen that turn timer so file-backed SQLite
+    # writes on slow runners are outside the assertion (as in #152).
+    with patch_intact_turn_budget(1.0, 5.0):
+        engine.gates["hold"].set()
+        assert (await bounded(queued)).content == "re:queued"
+        await bounded(holder)
     assert history(any_store) == ["hold", "re:hold", "queued", "re:queued"]
 
 
