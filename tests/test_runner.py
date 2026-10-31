@@ -139,7 +139,11 @@ async def test_runner_handoff_context_updates_are_available_to_recipient_tools()
     billing_agent = Agent(name="Billing Agent", instructions="Handle invoices and refunds.")
     caller_metadata = {"customer_id": "C-1", "customer_tier": "standard"}
     turn_metadata = {"request_id": "request-101"}
-    handoff_context_updates = {"customer_tier": "VIP", "invoice_id": "INV-101"}
+    handoff_context_updates = {
+        "customer_tier": "VIP",
+        "invoice_id": "INV-101",
+        "preferences": {"labels": ["handoff"]},
+    }
     triage_agent = Agent(
         name="Triage Agent",
         instructions="Route users to the correct specialist.",
@@ -162,6 +166,7 @@ async def test_runner_handoff_context_updates_are_available_to_recipient_tools()
 
     @billing_agent.tool
     def get_customer_context() -> dict[str, str]:
+        session.metadata["preferences"]["labels"].append("billing")
         return {
             "customer_id": session.metadata["customer_id"],
             "customer_tier": session.metadata["customer_tier"],
@@ -191,10 +196,40 @@ async def test_runner_handoff_context_updates_are_available_to_recipient_tools()
         "customer_tier": "VIP",
         "invoice_id": "INV-101",
         "request_id": "request-101",
+        "preferences": {"labels": ["handoff", "billing"]},
     }
     assert caller_metadata == {"customer_id": "C-1", "customer_tier": "standard"}
     assert turn_metadata == {"request_id": "request-101"}
-    assert handoff_context_updates == {"customer_tier": "VIP", "invoice_id": "INV-101"}
+    assert handoff_context_updates == {
+        "customer_tier": "VIP",
+        "invoice_id": "INV-101",
+        "preferences": {"labels": ["handoff"]},
+    }
+
+
+@pytest.mark.asyncio
+async def test_runner_isolates_reused_nested_metadata_between_sessions() -> None:
+    agent = Agent(name="Assistant", instructions="Help the user.")
+    shared_metadata = {"prefs": {"labels": ["a"]}}
+    engine = MockEngine([
+        EngineTurnResult(text="First reply."),
+        EngineTurnResult(text="Second reply."),
+    ])
+    runner = Runner(starting_agent=agent, engine=engine)
+
+    await runner.run_async("first-session", "First message.", metadata=shared_metadata)
+    await runner.run_async("second-session", "Second message.", metadata=shared_metadata)
+
+    first = runner.get_session("first-session")
+    second = runner.get_session("second-session")
+    assert first is not None
+    assert second is not None
+
+    first.metadata["prefs"]["labels"].append("first-only")
+
+    assert first.metadata["prefs"]["labels"] == ["a", "first-only"]
+    assert second.metadata["prefs"]["labels"] == ["a"]
+    assert shared_metadata["prefs"]["labels"] == ["a"]
 
 
 @pytest.mark.asyncio

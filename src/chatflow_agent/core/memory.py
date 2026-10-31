@@ -70,7 +70,7 @@ class SessionContext:
 
     def update_metadata(self, updates: dict[str, Any]) -> None:
         """Merge metadata updates without changing the active agent or history."""
-        self.metadata.update(updates)
+        self.metadata.update(copy.deepcopy(updates))
 
     def set_active_agent(
         self,
@@ -78,9 +78,10 @@ class SessionContext:
         context_updates: dict[str, Any] | None = None,
     ) -> None:
         """Switch the active agent and merge any state forwarded with the handoff."""
+        copied_updates = copy.deepcopy(context_updates) if context_updates else None
         self.active_agent = agent
-        if context_updates:
-            self.metadata.update(context_updates)
+        if copied_updates:
+            self.metadata.update(copied_updates)
 
     def clear_history(self) -> None:
         """Reset the conversation dialogue history."""
