@@ -491,6 +491,51 @@ def test_m2_string_coercion_policy() -> None:
         lookup_by_code.execute(code={"key": "val"})
 
 
+def _union_tool(annotation: Any) -> Tool:
+    def echo(x: Any) -> Any:
+        return x
+
+    echo.__annotations__["x"] = annotation
+    return Tool(echo, name="echo")
+
+
+@pytest.mark.parametrize("annotation", [str | int, int | str])
+def test_union_member_order_does_not_change_delivery(annotation: Any) -> None:
+    """A value that already matches a union member exactly is delivered unchanged (#168)."""
+    deliver = _union_tool(annotation).execute
+
+    result = deliver(x=5)
+    assert result == 5
+    assert type(result) is int
+    assert deliver(x="5") == "5"
+    assert deliver(x=5.0) == "5.0"
+
+    with pytest.raises(ToolArgumentValidationError):
+        deliver(x=True)
+
+
+@pytest.mark.parametrize("annotation", [str | int | None, int | str | None])
+def test_optional_union_member_order_does_not_change_delivery(annotation: Any) -> None:
+    """Optional unions keep the same member-order independence, including None."""
+    deliver = _union_tool(annotation).execute
+
+    assert deliver(x=5) == 5
+    assert deliver(x="5") == "5"
+    assert deliver(x=None) is None
+
+    with pytest.raises(ToolArgumentValidationError):
+        deliver(x=True)
+
+
+@pytest.mark.parametrize("annotation", [list[str | int], list[int | str]])
+def test_union_member_order_inside_a_list(annotation: Any) -> None:
+    """The union clean-up recurses into containers, so list elements stay consistent."""
+    delivered = _union_tool(annotation).execute(x=[5, "5", 5.0])
+
+    assert delivered == [5, "5", "5.0"]
+    assert [type(item) for item in delivered] == [int, str, str]
+
+
 def test_reject_bool_for_numeric() -> None:
     """Booleans are rejected when int or float is expected."""
 

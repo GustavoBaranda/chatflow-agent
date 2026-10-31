@@ -319,6 +319,19 @@ CoercedInt = Annotated[int, BeforeValidator(_reject_bool_for_int)]
 CoercedFloat = Annotated[float, BeforeValidator(_reject_bool_for_float)]
 
 
+def _is_str_union_member(arg: Any) -> bool:
+    """Whether a union member is ``str`` (possibly ``Annotated[str, ...]``)."""
+    if isinstance(arg, str):  # forward reference, sanitized to Any elsewhere
+        return False
+    origin = get_origin(arg)
+    while origin is Annotated:
+        arg = get_args(arg)[0]
+        if isinstance(arg, str):
+            return False
+        origin = get_origin(arg)
+    return (origin or arg) is str
+
+
 def _sanitize_annotation_for_validation(ann: Any) -> Any:
     """Sanitize annotations for runtime validation.
 
@@ -353,6 +366,12 @@ def _sanitize_annotation_for_validation(ann: Any) -> Any:
                 clean_union_args.append(clean_arg)
         if Any in clean_union_args:
             return Any
+        # Pydantic's smart union takes the first member that validates in a pass,
+        # and CoercedStr turns a number into text during that pass. A str member
+        # listed first therefore captures values that already match another member
+        # exactly (str | int sent 5 as "5"). Trying the str member last keeps the
+        # exact match; its coercion still applies when no other member accepts.
+        clean_union_args.sort(key=_is_str_union_member)
         return Union[tuple(clean_union_args)]  # noqa: UP007
 
     container = origin or ann
