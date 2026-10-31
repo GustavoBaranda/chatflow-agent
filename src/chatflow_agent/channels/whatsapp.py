@@ -134,6 +134,12 @@ class WhatsAppChannel(BaseChannel):
         self.verify_token = verify_token
         self.access_token = access_token
         self.phone_number_id = phone_number_id
+        if not access_token or not phone_number_id:
+            logger.warning(
+                "WhatsAppChannel created without outbound credentials "
+                "(access_token and/or phone_number_id missing); turns will run "
+                "but no WhatsApp replies will be sent."
+            )
         self.app_secret = app_secret
         self.verify_signature = verify_signature
         self.api_version = api_version
@@ -173,9 +179,7 @@ class WhatsAppChannel(BaseChannel):
         )
         # Wrapped rather than replaced via FastAPI(lifespan=...), which would stop
         # @app.on_event("startup"/"shutdown") handlers from running.
-        self.app.router.lifespan_context = self._with_runner_scope(
-            self.app.router.lifespan_context
-        )
+        self.app.router.lifespan_context = self._with_runner_scope(self.app.router.lifespan_context)
         self._setup_routes()
 
     def _with_runner_scope(
@@ -523,13 +527,26 @@ class WhatsAppChannel(BaseChannel):
                     logger.exception(f"Failed to deliver fallback to {masked_phone}: {fb_err}")
 
     async def _send_outbound_whatsapp(self, to_phone: str, text: str) -> None:
-        """Send message back to user via Meta WhatsApp Cloud API, chunking long replies."""
+        """Send message back to user via Meta WhatsApp Cloud API, chunking long replies.
+
+        Stops after the first chunk that definitively fails so later chunks are
+        not posted with a silent gap. Empty/whitespace-only replies are replaced
+        with ``fallback_message`` before splitting (Meta rejects empty bodies).
+        """
+        if not (text or "").strip():
+            text = self.fallback_message
         chunks = split_message(text, max_len=4096)
         for chunk in chunks:
-            await self._send_single_outbound_whatsapp(to_phone=to_phone, text=chunk)
+            ok = await self._send_single_outbound_whatsapp(to_phone=to_phone, text=chunk)
+            if not ok:
+                return
 
-    async def _send_single_outbound_whatsapp(self, to_phone: str, text: str) -> None:
-        """Send a single text message chunk via Meta WhatsApp Cloud API with retries and 24h detection."""
+    async def _send_single_outbound_whatsapp(self, to_phone: str, text: str) -> bool:
+        """Send a single text message chunk via Meta WhatsApp Cloud API with retries and 24h detection.
+
+        Returns True on success, False when the chunk is abandoned after a
+        definitive failure (so the multi-chunk loop can stop).
+        """
         import random
 
         masked = _mask_phone(to_phone)
@@ -552,7 +569,7 @@ class WhatsAppChannel(BaseChannel):
                     res = await client.post(url, json=body, headers=headers, timeout=10.0)
 
                     if res.status_code < 400:
-                        return
+                        return True
 
                     # Handle 429 Too Many Requests: respect Retry-After header + jitter
                     if res.status_code == 429:
@@ -581,7 +598,7 @@ class WhatsAppChannel(BaseChannel):
                             retries += 1
                             continue
                         logger.error(f"Max retries exceeded for {masked} after HTTP 429.")
-                        return
+                        return False
 
                     # Inspect Meta error payload for 24h window expiration (error code 131047)
                     try:
@@ -601,7 +618,7 @@ class WhatsAppChannel(BaseChannel):
                                     logger.error(
                                         f"Error executing on_24h_window_expired hook for {masked}: {hook_err}"
                                     )
-                            return
+                            return False
                     except Exception as parse_err:
                         logger.warning(
                             f"Unable to parse Meta error payload for {masked}: {parse_err} (raw: {res.text[:150]})"
@@ -611,7 +628,7 @@ class WhatsAppChannel(BaseChannel):
                     logger.error(
                         f"Failed to send outbound WhatsApp message to {masked}: {res.status_code} - {res.text}"
                     )
-                    return
+                    return False
 
             # ONLY retry on connect errors (connection failed before request could be accepted by Meta)
             except (self._httpx.ConnectError, self._httpx.ConnectTimeout) as net_err:
@@ -627,7 +644,7 @@ class WhatsAppChannel(BaseChannel):
                     retries += 1
                     continue
                 logger.error(f"Max retries exceeded for {masked} after connect error: {net_err}")
-                return
+                return False
 
             # Read/Write timeouts must NOT retry because Meta may have already received and delivered the message
             except (self._httpx.ReadTimeout, self._httpx.WriteTimeout) as timeout_err:
@@ -635,11 +652,11 @@ class WhatsAppChannel(BaseChannel):
                     f"Read/write timeout sending outbound message to {masked}: {timeout_err}. "
                     "Not retrying to prevent duplicate message dispatch."
                 )
-                return
+                return False
 
             except Exception as err:
                 logger.error(f"Error calling WhatsApp Cloud API for {masked}: {err}")
-                return
+                return False
 
     def run(self, host: str = "0.0.0.0", port: int = 8000, **kwargs: Any) -> None:
         """Launch the FastAPI webhook server using uvicorn."""

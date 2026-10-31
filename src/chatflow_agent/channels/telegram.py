@@ -58,9 +58,7 @@ class TelegramChannel(BaseChannel):
 
         self.app.add_handler(CommandHandler("start", self._handle_start))
         self.app.add_handler(CommandHandler("reset", self._handle_reset))
-        self.app.add_handler(
-            MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
-        )
+        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
 
     async def _handle_start(self, update: Any, context: Any) -> None:
         """Respond to /start command."""
@@ -84,15 +82,11 @@ class TelegramChannel(BaseChannel):
                     if getattr(member, "status", None) in ("creator", "administrator"):
                         is_admin = True
                 except Exception as err:
-                    logger.error(
-                        f"Failed to verify chat member permissions for /reset: {err}"
-                    )
+                    logger.error(f"Failed to verify chat member permissions for /reset: {err}")
                     is_admin = False
 
             if not is_admin:
-                await update.message.reply_text(
-                    "Only group admins can reset the conversation."
-                )
+                await update.message.reply_text("Only group admins can reset the conversation.")
                 return
 
         chat_id = str(update.effective_chat.id)
@@ -134,7 +128,10 @@ class TelegramChannel(BaseChannel):
                     "username": user_name,
                 },
             )
-            chunks = split_message(response.content, max_len=4096)
+            reply_text = response.content
+            if not (reply_text or "").strip():
+                reply_text = self.fallback_message
+            chunks = split_message(reply_text, max_len=4096)
             for chunk in chunks:
                 await update.message.reply_text(chunk)
         except Exception as err:
@@ -190,7 +187,9 @@ class TelegramChannel(BaseChannel):
                 await close_scope()
 
         def shutdown_unfinished() -> bool:
-            pending = [t for t in (post_init_task, post_shutdown_task) if t is not None and not t.done()]
+            pending = [
+                t for t in (post_init_task, post_shutdown_task) if t is not None and not t.done()
+            ]
             return scope_open or bool(pending)
 
         async def finish_shutdown() -> None:
