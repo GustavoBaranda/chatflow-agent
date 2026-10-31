@@ -61,9 +61,7 @@ async def test_telegram_message_dispatch(telegram_channel: TelegramChannel) -> N
     context.bot.send_chat_action.assert_called_once()
 
     # 2. Reply sent with runner output
-    update.message.reply_text.assert_called_once_with(
-        "Telegram answer from ChatFlow!"
-    )
+    update.message.reply_text.assert_called_once_with("Telegram answer from ChatFlow!")
 
 
 @pytest.mark.asyncio
@@ -94,6 +92,29 @@ async def test_telegram_message_dispatch_splits_long_messages() -> None:
 
 
 @pytest.mark.asyncio
+async def test_telegram_empty_reply_uses_fallback_message() -> None:
+    """Empty/whitespace engine replies must send fallback_message, not an empty body (#169)."""
+    agent = Agent(name="EmptyBot", instructions="Test")
+    runner = Runner(starting_agent=agent, engine=MockEngine("   "))
+    channel = TelegramChannel(
+        token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        fallback_message="FALLBACK_TG",
+    )
+    channel.attach(runner)
+
+    update = MagicMock()
+    update.effective_chat = MagicMock(id=987654)
+    update.effective_user = MagicMock(username="tester")
+    update.message = AsyncMock(text="hi")
+    context = MagicMock()
+    context.bot = AsyncMock()
+
+    await channel._handle_message(update, context)
+
+    update.message.reply_text.assert_called_once_with("FALLBACK_TG")
+
+
+@pytest.mark.asyncio
 async def test_telegram_reset_handler(telegram_channel: TelegramChannel) -> None:
     update = MagicMock()
     update.effective_chat = MagicMock(id=987654)
@@ -108,9 +129,7 @@ async def test_telegram_reset_handler(telegram_channel: TelegramChannel) -> None
 
     await telegram_channel._handle_reset(update, context)
     assert len(session.history) == 0
-    update.message.reply_text.assert_called_once_with(
-        "Conversation memory has been reset."
-    )
+    update.message.reply_text.assert_called_once_with("Conversation memory has been reset.")
 
 
 @pytest.mark.asyncio
@@ -134,9 +153,7 @@ async def test_telegram_reset_allowed_in_private_chat(
 
     context.bot.get_chat_member.assert_not_called()
     assert len(session.history) == 0
-    update.message.reply_text.assert_called_once_with(
-        "Conversation memory has been reset."
-    )
+    update.message.reply_text.assert_called_once_with("Conversation memory has been reset.")
 
 
 @pytest.mark.asyncio
@@ -165,13 +182,9 @@ async def test_telegram_reset_allowed_for_group_admin(
 
     await telegram_channel._handle_reset(update, context)
 
-    context.bot.get_chat_member.assert_called_once_with(
-        chat_id=chat_id, user_id=user_id
-    )
+    context.bot.get_chat_member.assert_called_once_with(chat_id=chat_id, user_id=user_id)
     assert len(session.history) == 0
-    update.message.reply_text.assert_called_once_with(
-        "Conversation memory has been reset."
-    )
+    update.message.reply_text.assert_called_once_with("Conversation memory has been reset.")
 
 
 @pytest.mark.asyncio
@@ -199,9 +212,7 @@ async def test_telegram_reset_rejected_for_regular_group_member(
 
     await telegram_channel._handle_reset(update, context)
 
-    context.bot.get_chat_member.assert_called_once_with(
-        chat_id=chat_id, user_id=user_id
-    )
+    context.bot.get_chat_member.assert_called_once_with(chat_id=chat_id, user_id=user_id)
     # Memory must NOT be reset
     assert len(session.history) > 0
     update.message.reply_text.assert_called_once_with(
@@ -404,4 +415,3 @@ async def test_telegram_multi_chat_session_isolation(
     assert "message from chat B" in user_contents_b
     assert "message from chat A" not in user_contents_b
     assert "message from chat B" not in user_contents_a
-
