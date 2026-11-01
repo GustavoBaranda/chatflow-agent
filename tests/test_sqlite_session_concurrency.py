@@ -10,11 +10,15 @@ import multiprocessing
 import sqlite3
 import sys
 import threading
+import time
+import traceback
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from chatflow_agent.core import memory as memory_mod
+from chatflow_agent.core import runner as runner_mod
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import BaseEngine
 from chatflow_agent.core.engines.base import EngineTurnResult
@@ -23,6 +27,9 @@ from chatflow_agent.core.memory import (
     SessionContext,
     SessionStore,
     SQLiteSessionStore,
+)
+from chatflow_agent.core.memory import (
+    _run_blocking as _memory_run_blocking,
 )
 from chatflow_agent.core.runner import Runner
 from chatflow_agent.exceptions import ChatFlowError, ReentrantTurnError, SessionDeletedError
@@ -807,20 +814,136 @@ async def test_delete_during_a_running_turn_leaves_no_rows(tmp_path: Path) -> No
 
 # --- Nested turns of the same session (H-02) -----------------------------------------
 
-SAFETY = 10.0
+NO_PROGRESS = 10.0
+ABSOLUTE_CAP = 60.0
+
+
+class _SqliteProgress:
+    """Test-only activity clock for SQLite work offloaded via ``_run_blocking``.
+
+    Both the start and the end of an offloaded call refresh ``activity``, so a
+    single slow disk operation that is still running does not look like a stall.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.activity = time.monotonic()
+        self.completed = 0
+        self.inflight = 0
+
+    def begin(self) -> None:
+        with self._lock:
+            self.inflight += 1
+            self.activity = time.monotonic()
+
+    def end(self) -> None:
+        with self._lock:
+            self.inflight = max(0, self.inflight - 1)
+            self.completed += 1
+            self.activity = time.monotonic()
+
+    def snapshot(self) -> tuple[float, int, int]:
+        with self._lock:
+            return self.activity, self.completed, self.inflight
+
+
+_sqlite_progress = _SqliteProgress()
+
+
+def _deadlock_diagnostics(task: asyncio.Future[Any]) -> str:
+    """Task + worker-thread stacks for a timeout failure."""
+    chunks: list[str] = [
+        f"awaited task done={task.done()} cancelled={task.cancelled()}",
+        "awaited task stack:",
+    ]
+    if not task.done():
+        try:
+            for fr in task.get_stack(limit=40):
+                chunks.append("".join(traceback.format_stack(fr)))
+        except Exception as err:  # noqa: BLE001 - diagnostics only
+            chunks.append(f"(task stack unavailable: {err})")
+    chunks.append("all asyncio tasks:")
+    for t in asyncio.all_tasks():
+        chunks.append(f"- {t!r}")
+        try:
+            for fr in t.get_stack(limit=20):
+                chunks.append("".join(traceback.format_stack(fr)))
+        except Exception:
+            pass
+    chunks.append("worker threads:")
+    frames = sys._current_frames()
+    for th in threading.enumerate():
+        chunks.append(f"- {th.name} ident={th.ident} daemon={th.daemon}")
+        frame = frames.get(th.ident) if th.ident is not None else None
+        if frame is not None:
+            chunks.append("".join(traceback.format_stack(frame)))
+    return "\n".join(chunks)
+
+
+def _fail_deadlock(task: asyncio.Future[Any], reason: str) -> None:
+    detail = _deadlock_diagnostics(task)
+    if not task.done():
+        task.cancel()
+    pytest.fail(f"deadlock: {reason}\n{detail}")
 
 
 async def no_deadlock(awaitable: Any) -> Any:
-    """Await with a safety net: hitting it means a real deadlock, not a slow wait."""
-    try:
-        return await asyncio.wait_for(awaitable, SAFETY)
-    except asyncio.TimeoutError:
-        pytest.fail("deadlock: no progress within the safety timeout")
+    """Await with a progress-aware safety net.
+
+    A true stall (no SQLite ``_run_blocking`` activity for ``NO_PROGRESS`` seconds)
+    or an absolute ``ABSOLUTE_CAP`` fails the test. Slow but progressing SQLite I/O
+    refreshes the activity clock and must not false-fail.
+    """
+    task = asyncio.ensure_future(awaitable)
+    start = time.monotonic()
+    # Fresh window so a previous test's activity cannot mask a stall here.
+    with _sqlite_progress._lock:
+        _sqlite_progress.activity = start
+    while True:
+        now = time.monotonic()
+        remaining_cap = ABSOLUTE_CAP - (now - start)
+        if remaining_cap <= 0:
+            _fail_deadlock(task, "absolute safety cap exceeded")
+        activity, _, _ = _sqlite_progress.snapshot()
+        idle = now - activity
+        wait = min(max(0.05, NO_PROGRESS - idle), remaining_cap)
+        done, _ = await asyncio.wait({task}, timeout=wait)
+        if task in done:
+            return task.result()
+        now = time.monotonic()
+        if now - start >= ABSOLUTE_CAP:
+            _fail_deadlock(task, "absolute safety cap exceeded")
+        activity, _, _ = _sqlite_progress.snapshot()
+        if now - activity >= NO_PROGRESS:
+            _fail_deadlock(task, "no progress within the safety timeout")
+
+
+@pytest.fixture(autouse=True)
+def _instrument_sqlite_run_blocking(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bump the test progress clock around offloaded SQLite ``_run_blocking`` calls."""
+
+    async def tracked(store: object, call: Any, *, must_run: bool = False) -> Any:
+        offload = memory_mod._offloads_blocking_io(store)
+        if offload:
+            _sqlite_progress.begin()
+        try:
+            return await _memory_run_blocking(store, call, must_run=must_run)
+        finally:
+            if offload:
+                _sqlite_progress.end()
+
+    monkeypatch.setattr(memory_mod, "_run_blocking", tracked)
+    monkeypatch.setattr(runner_mod, "_run_blocking", tracked)
 
 
 @pytest.fixture(params=["sqlite", "memory"])
 def any_store(request: pytest.FixtureRequest, tmp_path: Path) -> Any:
-    return SQLiteSessionStore(tmp_path / "s.db") if request.param == "sqlite" else SessionStore()
+    if request.param == "sqlite":
+        store = SQLiteSessionStore(tmp_path / "s.db")
+        yield store
+        store.close()
+    else:
+        yield SessionStore()
 
 
 class ToolTurnEngine(BaseEngine):
@@ -1149,3 +1272,81 @@ async def test_custom_store_gets_the_same_reentrancy_contract() -> None:
     assert is_reentrant_refusal(outcomes[0])
     follow_up = runner.spawn_turn("s", "follow-up")
     assert (await no_deadlock(follow_up)).content == "re:follow-up"
+
+
+@pytest.mark.asyncio
+async def test_no_deadlock_tolerates_slow_sqlite_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Artificial per-op delay that would exceed the old 10s wall clock must still pass."""
+    real = _memory_run_blocking
+
+    async def slow(store: object, call: Any, *, must_run: bool = False) -> Any:
+        offload = memory_mod._offloads_blocking_io(store)
+        if offload:
+            _sqlite_progress.begin()
+            await asyncio.get_running_loop().run_in_executor(None, time.sleep, 0.35)
+        try:
+            return await real(store, call, must_run=must_run)
+        finally:
+            if offload:
+                _sqlite_progress.end()
+
+    monkeypatch.setattr(memory_mod, "_run_blocking", slow)
+    monkeypatch.setattr(runner_mod, "_run_blocking", slow)
+
+    holder: dict[str, Runner] = {}
+
+    async def back_to_first() -> str:
+        """Run a turn of the first session again."""
+        try:
+            await holder["runner"].run_async("s", "again")
+        except ReentrantTurnError:
+            return "refused"
+        return "ran"
+
+    async def to_other() -> str:
+        """Run a turn of another session."""
+        return (await holder["runner"].run_async("other", "go-back")).content
+
+    class Chain(BaseEngine):
+        async def generate_turn_async(
+            self, agent: Agent, history: list[Message]
+        ) -> EngineTurnResult:
+            last = history[-1]
+            if last.role == Role.USER and last.content == "outer":
+                return EngineTurnResult(tool_calls=[ToolCall(id="c1", name="to_other", args={})])
+            if last.role == Role.USER and last.content == "go-back":
+                return EngineTurnResult(
+                    tool_calls=[ToolCall(id="c2", name="back_to_first", args={})]
+                )
+            if last.role == Role.TOOL and last.tool_results:
+                return EngineTurnResult(text=str(last.tool_results[0].content))
+            return EngineTurnResult(text="ok")
+
+    agent = Agent(name="Bot", instructions="x", tools=[to_other, back_to_first])
+    store = SQLiteSessionStore(tmp_path / "slow.db")
+    try:
+        holder["runner"] = Runner(agent, session_store=store, engine=Chain())
+        result = await no_deadlock(holder["runner"].run_async("s", "outer"))
+        assert result.content == "refused"
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_no_deadlock_still_detects_a_true_stall() -> None:
+    """A future that never completes and never touches SQLite must still fail."""
+
+    async def never() -> None:
+        await asyncio.Event().wait()
+
+    global NO_PROGRESS, ABSOLUTE_CAP
+    old_np, old_cap = NO_PROGRESS, ABSOLUTE_CAP
+    NO_PROGRESS = 0.2
+    ABSOLUTE_CAP = 2.0
+    try:
+        with pytest.raises(pytest.fail.Exception, match="no progress within the safety timeout"):
+            await no_deadlock(never())
+    finally:
+        NO_PROGRESS, ABSOLUTE_CAP = old_np, old_cap
