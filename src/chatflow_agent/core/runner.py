@@ -32,6 +32,7 @@ from chatflow_agent.core.memory import (
 )
 from chatflow_agent.exceptions import (
     AgentHandoffError,
+    ConfigurationError,
     ReentrantTurnError,
     ToolArgumentValidationError,
 )
@@ -314,6 +315,10 @@ class Runner:
         max_handoffs_per_turn: int = 5,
         max_tool_iterations: int = 10,
     ) -> None:
+        if engine is not None and not isinstance(engine, BaseEngine):
+            raise ConfigurationError(
+                f"Runner 'engine' must be an instance of BaseEngine or None, got {type(engine).__name__}."
+            )
         self.starting_agent = starting_agent
         self.session_store: BaseSessionStore | SessionStore = session_store or SessionStore()
         self.engine = engine or GeminiEngine(api_key=api_key)
@@ -339,9 +344,20 @@ class Runner:
         self._manual_agent_names: set[str] = set()
         self._registry_lock = threading.Lock()
         self._register_agent_tree(self.starting_agent)
+        self._validate_agent_configurations()
 
         if hasattr(self.session_store, "set_agent_resolver"):
             self.session_store.set_agent_resolver(lambda name: self._agents_registry.get(name))
+
+    def _validate_agent_configurations(self) -> None:
+        """Validate that all registered agents have a valid engine configuration."""
+        with self._registry_lock:
+            for agent in self._agents_registry.values():
+                resolve_engine(
+                    agent,
+                    default_engine=self.engine,
+                    prefer_default_engine=self._engine_provided,
+                )
 
     def _register_agent_tree(self, root: Agent) -> None:
         """Traverse and index all agents in the handoff tree."""
@@ -444,9 +460,27 @@ class Runner:
         with self._registry_lock:
             existing = self._agents_registry.get(target_name)
             if existing is None:
-                self._register_agent_tree_unlocked(authorized)
+                to_add = self._collect_new_agents_unlocked(authorized)
+                candidates: list[Agent] = []
+                seen_cands: set[int] = set()
+                for cand in [authorized] + list(to_add.values()):
+                    if id(cand) not in seen_cands:
+                        seen_cands.add(id(cand))
+                        candidates.append(cand)
+                for cand in candidates:
+                    resolve_engine(
+                        cand,
+                        default_engine=self.engine,
+                        prefer_default_engine=self._engine_provided,
+                    )
+                self._agents_registry.update(to_add)
                 return authorized
             if existing is authorized:
+                resolve_engine(
+                    authorized,
+                    default_engine=self.engine,
+                    prefer_default_engine=self._engine_provided,
+                )
                 return authorized
             if target_name in self._manual_agent_names:
                 raise ValueError(
@@ -468,6 +502,20 @@ class Runner:
                     self._collect_new_agents_unlocked(peer, registry=trial)
                 )
                 trial.update(peers_to_add)
+
+            candidates = []
+            seen_cands = set()
+            for cand in [authorized] + list(peers_to_add.values()):
+                if id(cand) not in seen_cands:
+                    seen_cands.add(id(cand))
+                    candidates.append(cand)
+            for cand in candidates:
+                resolve_engine(
+                    cand,
+                    default_engine=self.engine,
+                    prefer_default_engine=self._engine_provided,
+                )
+
             self._agents_registry[target_name] = authorized
             self._agents_registry.update(peers_to_add)
             return authorized
@@ -479,9 +527,21 @@ class Runner:
         replacement.
         """
         with self._registry_lock:
-            before = set(self._agents_registry.keys())
-            self._register_agent_tree_unlocked(agent)
-            for name in set(self._agents_registry.keys()) - before:
+            to_add = self._collect_new_agents_unlocked(agent)
+            candidates: list[Agent] = []
+            seen_cands: set[int] = set()
+            for cand in [agent] + list(to_add.values()):
+                if id(cand) not in seen_cands:
+                    seen_cands.add(id(cand))
+                    candidates.append(cand)
+            for cand in candidates:
+                resolve_engine(
+                    cand,
+                    default_engine=self.engine,
+                    prefer_default_engine=self._engine_provided,
+                )
+            self._agents_registry.update(to_add)
+            for name in to_add:
                 self._manual_agent_names.add(name)
             if self._agents_registry.get(agent.name) is agent:
                 self._manual_agent_names.add(agent.name)

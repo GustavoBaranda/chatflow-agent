@@ -580,6 +580,7 @@ if __name__ == "__main__":
 | `max_handoffs_per_turn` (`Runner`) | `5` | Cantidad máxima de transferencias entre agentes permitidas en un mismo turno; al superarse, registra un `ToolResult` de error (`is_error=True`) y omite las llamadas a herramientas restantes de ese lote. |
 | `turn_timeout` (`run_async`) | `None` | Límite de tiempo opcional por turno en segundos (comienza tras adquirir el lock de la sesión). |
 | `ChatFlowError` | `Exception` | Clase base de todas las excepciones públicas de `chatflow_agent`. |
+| `ConfigurationError` | `ChatFlowError`, `ValueError` | Lanzada tempranamente ante configuración inválida de agente, motor, proveedor o endpoint (p. ej., proveedor no soportado, base_url contradictorio en Gemini, api_key faltante en endpoint personalizado). |
 | `ProviderError` | `ChatFlowError` | Lanzada ante errores de API del proveedor LLM, respuestas bloqueadas o payloads malformados (extractos acotados a 1.000 caracteres). |
 | `ToolSchemaError` | `ChatFlowError`, `TypeError` | Lanzada al registrar una herramienta cuando un miembro de una unión no puede mapearse a JSON Schema. |
 | `ToolExecutionError` | `ChatFlowError` | Lanzada cuando falla la ejecución directa de una herramienta mediante `Tool.execute_async()`. |

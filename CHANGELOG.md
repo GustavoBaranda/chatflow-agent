@@ -14,6 +14,14 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## English
 
+## [Unreleased]
+
+### Added
+- **New Public Exception `ConfigurationError`** (subclass of `ChatFlowError` and `ValueError`) ([#166](https://github.com/GustavoBaranda/chatflow-agent/issues/166)): exported from `chatflow_agent`.
+
+### Fixed
+- **Prevent Silent Provider and Endpoint Fallbacks** ([#166](https://github.com/GustavoBaranda/chatflow-agent/issues/166)): an explicitly configured provider on an `Agent` is now validated strictly against the supported provider set (`gemini`, `google`, `openai`, `grok`, `xai`, `deepseek`, `groq`, `ollama`, `gemma`, `anthropic`, `claude`); unsupported providers (such as `"mistral"`) raise `ConfigurationError` immediately instead of silently falling through to model-prefix heuristics and unintended local endpoints. Combining `provider="gemini"` or `"google"` with `base_url` raises `ConfigurationError` rather than silently ignoring the endpoint (custom Gemini endpoints must use the `GOOGLE_GEMINI_BASE_URL` environment variable). Custom remote endpoints without an `api_key` raise `ConfigurationError` early at `Runner` initialization rather than failing mid-turn as a plain `ValueError`. `OpenAIEngine(provider=...)` with an unrecognized provider without an explicit `base_url` raises `ConfigurationError` instead of falling back to OpenAI. Unrecognized model prefixes without an explicit provider preserve their documented fallback to Gemini.
+
 ## [0.4.0rc1] - 2026-10-27
 
 > **Upgrading from 0.3.4?** Most applications need no code changes. Read the **[Migration Guide](docs/MIGRATION_0.4.md)** ([Español](docs/es/MIGRATION_0.4.md)) to check whether any of the three breaking changes below affects you.
@@ -173,6 +181,14 @@ If you are upgrading from v0.2.0:
 ---
 
 ## Español
+
+## [Unreleased]
+
+### Agregado
+- **Nueva Excepción Pública `ConfigurationError`** (subclase de `ChatFlowError` y `ValueError`) ([#166](https://github.com/GustavoBaranda/chatflow-agent/issues/166)): exportada desde `chatflow_agent`.
+
+### Corregido
+- **Prevención de Fallbacks Silenciosos de Proveedor y Endpoint** ([#166](https://github.com/GustavoBaranda/chatflow-agent/issues/166)): la configuración explícita de `provider` en un `Agent` ahora se valida estrictamente contra el conjunto de proveedores soportados (`gemini`, `google`, `openai`, `grok`, `xai`, `deepseek`, `groq`, `ollama`, `gemma`, `anthropic`, `claude`); proveedores no soportados (como `"mistral"`) levantan `ConfigurationError` inmediatamente en lugar de derivar silenciosamente a heurísticas de prefijo de modelo y endpoints locales no intencionados. Combinar `provider="gemini"` o `"google"` con `base_url` levanta `ConfigurationError` en vez de ignorar el endpoint (los endpoints personalizados de Gemini deben usar la variable de entorno `GOOGLE_GEMINI_BASE_URL`). Endpoints remotos personalizados sin `api_key` levantan `ConfigurationError` tempranamente al inicializar el `Runner` en lugar de fallar a mitad del turno con un `ValueError` genérico. `OpenAIEngine(provider=...)` con un proveedor no reconocido sin `base_url` explícito levanta `ConfigurationError` en lugar de degradar a OpenAI. Prefijos de modelos no reconocidos sin un proveedor explícito conservan su fallback documentado a Gemini.
 
 ## [0.4.0rc1] - 2026-10-27
 

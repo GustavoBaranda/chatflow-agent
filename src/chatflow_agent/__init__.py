@@ -18,6 +18,7 @@ from chatflow_agent.core.tools import Tool, tool
 from chatflow_agent.exceptions import (
     AgentHandoffError,
     ChatFlowError,
+    ConfigurationError,
     DependencyError,
     ProviderError,
     ReentrantTurnError,
@@ -67,6 +68,7 @@ __all__ = [
     "ToolResult",
     "WhatsAppChannel",
     "ChatFlowError",
+    "ConfigurationError",
     "DependencyError",
     "ToolArgumentValidationError",
     "ToolExecutionError",

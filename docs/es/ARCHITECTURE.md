@@ -215,14 +215,14 @@ Todas las integraciones LLM implementan [`BaseEngine`](../../src/chatflow_agent/
 
 #### Precedencia de 7 Niveles en la Resolución de Motores (`resolve_engine`)
 
-Cuando `Runner` evalúa un turno para `current_agent`, [`resolve_engine()`](../../src/chatflow_agent/core/engines/factory.py) selecciona el motor siguiendo este orden estricto:
+Cuando `Runner` evalúa un turno para `current_agent`, [`resolve_engine()`](../../src/chatflow_agent/core/engines/factory.py) selecciona el motor siguiendo este orden estricto, con validación fail-fast temprana al inicializar `Agent` y `Runner`:
 
-1. **Motor Explícito en el Agente (`agent.engine`):** Utiliza la instancia de `BaseEngine` asignada directamente al agente.
-2. **Nombre de Proveedor Explícito (`agent.provider`):**
-   - `"gemini"`, `"google"` → [`GeminiEngine`](../../src/chatflow_agent/core/engines/gemini.py)
+1. **Motor Explícito en el Agente (`agent.engine`):** Utiliza la instancia de `BaseEngine` asignada directamente al agente (debe ser instancia de `BaseEngine`, de lo contrario levanta [`ConfigurationError`](../../src/chatflow_agent/exceptions.py)).
+2. **Nombre de Proveedor Explícito (`agent.provider`):** Se valida estrictamente contra el conjunto de proveedores soportados (`gemini`, `google`, `openai`, `grok`, `xai`, `deepseek`, `groq`, `ollama`, `gemma`, `anthropic`, `claude`). Proveedores no soportados levantan [`ConfigurationError`](../../src/chatflow_agent/exceptions.py) inmediatamente y nunca derivan a heurísticas de prefijo de modelo.
+   - `"gemini"`, `"google"` → [`GeminiEngine`](../../src/chatflow_agent/core/engines/gemini.py). Combinar con un `base_url` personalizado levanta `ConfigurationError` (utilizá `GOOGLE_GEMINI_BASE_URL` en su lugar).
    - `"openai"`, `"grok"`, `"xai"`, `"deepseek"`, `"groq"`, `"ollama"`, `"gemma"` → [`OpenAIEngine`](../../src/chatflow_agent/core/engines/openai_compatible.py)
    - `"anthropic"`, `"claude"` → [`AnthropicEngine`](../../src/chatflow_agent/core/engines/anthropic.py)
-3. **URL Base Personalizada (`agent.base_url`):** Cuando se omite `provider` pero se define `base_url`, enruta hacia [`OpenAIEngine`](../../src/chatflow_agent/core/engines/openai_compatible.py).
+3. **URL Base Personalizada (`agent.base_url`):** Cuando se omite `provider` pero se define `base_url`, enruta hacia [`OpenAIEngine`](../../src/chatflow_agent/core/engines/openai_compatible.py). Endpoints remotos no locales exigen una `api_key` explícita y levantan `ConfigurationError` tempranamente al inicializar el Runner si se omite.
 4. **Motor por Defecto Explícito del Runner (`Runner(engine=...)` con `prefer_default_engine=True`):** Tiene prioridad sobre las heurísticas de prefijo de modelo cuando el agente no especificó un `engine`, `provider` o `base_url` explícito.
 5. **Heurísticas por Prefijo de Modelo (`agent.model`):**
    - prefijo literal `claude-` → [`AnthropicEngine`](../../src/chatflow_agent/core/engines/anthropic.py)
@@ -230,7 +230,7 @@ Cuando `Runner` evalúa un turno para `current_agent`, [`resolve_engine()`](../.
    - `grok*` → [`OpenAIEngine`](../../src/chatflow_agent/core/engines/openai_compatible.py) (`provider="grok"`)
    - prefijo literal `deepseek-` → [`OpenAIEngine`](../../src/chatflow_agent/core/engines/openai_compatible.py) (`provider="deepseek"`)
    - `gemma*`, `llama*`, `mistral*`, `qwen*`, `phi*` → [`OpenAIEngine`](../../src/chatflow_agent/core/engines/openai_compatible.py) (`provider="ollama"`)
-6. **Motor de Fallback:** Utiliza `default_engine` cuando se proporcionó uno y ninguna regla anterior coincidió. Si `agent.api_key` está definida y `default_engine` es un [`GeminiEngine`](../../src/chatflow_agent/core/engines/gemini.py) estándar (como el que `Runner` crea cuando no se le pasa `engine`), se usa una copia de ese motor con la clave del agente en lugar de las credenciales del `Runner` o del entorno; el proveedor sigue siendo Gemini. Cualquier otro `default_engine` (una subclase o un motor personalizado) se usa sin cambios.
+6. **Motor de Fallback:** Utiliza `default_engine` cuando se proporcionó uno y ninguna regla anterior coincidió. Aplica a modelos Gemini y a modelos sin un prefijo de proveedor reconocido (por ejemplo `o4-mini`, que intencionalmente deriva al motor por defecto). Si `agent.api_key` está definida y `default_engine` es un [`GeminiEngine`](../../src/chatflow_agent/core/engines/gemini.py) estándar (como el que `Runner` crea cuando no se le pasa `engine`), se usa una copia de ese motor con la clave del agente en lugar de las credenciales del `Runner` o del entorno; el proveedor sigue siendo Gemini. Cualquier otro `default_engine` (una subclase o un motor personalizado) se usa sin cambios.
 7. **Valor por Defecto Final:** Instancia [`GeminiEngine`](../../src/chatflow_agent/core/engines/gemini.py).
 
 #### Implementaciones de Motores y Normalización entre Proveedores
@@ -318,6 +318,7 @@ Todos los errores propios del framework heredan de [`ChatFlowError`](../../src/c
 ```text
 Exception
  └── ChatFlowError
+      ├── ConfigurationError        (también hereda de ValueError; lanzada ante configuración inválida de agente/motor/proveedor)
       ├── ProviderError             (lanzada cuando falla la comunicación con un proveedor LLM)
       ├── DependencyError           (.feature, .extra_package; lanzada cuando falta un extra opcional)
       ├── ToolExecutionError        (.tool_name, .original_error; lanzada cuando una herramienta falla en ejecución)

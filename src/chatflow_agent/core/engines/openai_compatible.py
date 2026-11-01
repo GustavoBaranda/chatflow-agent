@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult, replacement_tool_call_id
-from chatflow_agent.exceptions import ProviderError
+from chatflow_agent.exceptions import ConfigurationError, ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
 
 logger = logging.getLogger("chatflow_agent.engine.openai")
@@ -97,7 +97,7 @@ def _resolve_api_key(
         return api_key
     if _is_official_endpoint(base_url, official_base_url):
         return os.environ.get(env_key)
-    raise ValueError(
+    raise ConfigurationError(
         f"A custom or unofficial base_url was provided ({_redact_url(base_url)!r}) without an explicit api_key. "
         f"{env_key} is only sent to its official endpoint ({official_base_url}), so it is not used here. "
         "Please provide api_key explicitly (or pass api_key='' if no authentication is required)."
@@ -198,15 +198,23 @@ class OpenAIEngine(BaseEngine):
         timeout: float = 60.0,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        preset = PROVIDER_PRESETS.get(provider.lower(), {})
-        self.provider = provider.lower()
+        provider_key = provider.lower().strip()
+        preset = PROVIDER_PRESETS.get(provider_key, {})
+        env_base_url = os.environ.get(f"{provider_key.upper()}_BASE_URL")
+        if provider_key not in PROVIDER_PRESETS and not base_url and not env_base_url:
+            supported_presets = ", ".join(sorted(PROVIDER_PRESETS.keys()))
+            raise ConfigurationError(
+                f"Unsupported OpenAI-compatible provider {provider!r} without an explicit base_url. "
+                f"Supported preset providers: {supported_presets}."
+            )
+        self.provider = provider_key
         self.base_url = (
             base_url
-            or os.environ.get(f"{provider.upper()}_BASE_URL")
+            or env_base_url
             or preset.get("base_url", "https://api.openai.com/v1")
         ).rstrip("/")
 
-        env_key_name = preset.get("env_key", "OPENAI_API_KEY")
+        env_key_name = preset.get("env_key", f"{provider_key.upper()}_API_KEY")
 
         self.api_key: str | None
         if api_key is None and _is_local_base_url(self.base_url):

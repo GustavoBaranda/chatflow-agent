@@ -1,6 +1,6 @@
 """Engine factory and dynamic resolver for multi-provider agent swarms."""
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from chatflow_agent.core.engines.anthropic import AnthropicEngine
 from chatflow_agent.core.engines.base import BaseEngine
@@ -10,9 +10,17 @@ from chatflow_agent.core.engines.openai_compatible import (
     OpenAIEngine,
     _is_official_endpoint,
 )
+from chatflow_agent.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
     from chatflow_agent.core.agent import Agent
+
+_GEMINI_PROVIDERS: frozenset[str] = frozenset({"gemini", "google"})
+_ANTHROPIC_PROVIDERS: frozenset[str] = frozenset({"anthropic", "claude"})
+_OPENAI_COMPATIBLE_PROVIDERS: frozenset[str] = frozenset(PROVIDER_PRESETS.keys())
+_ALL_SUPPORTED_PROVIDERS: frozenset[str] = (
+    _GEMINI_PROVIDERS | _ANTHROPIC_PROVIDERS | _OPENAI_COMPATIBLE_PROVIDERS
+)
 
 _OPENAI_COMPATIBLE_PREFIXES = (
     "gpt-", "o1", "o3", "chatgpt-", "text-embedding-", "dall-e"
@@ -82,22 +90,44 @@ def resolve_engine(
     """
     # 1. Custom engine explicitly on agent
     if hasattr(agent, "engine") and agent.engine is not None:
-        return cast(BaseEngine, agent.engine)
+        if not isinstance(agent.engine, BaseEngine):
+            raise ConfigurationError(
+                f"Agent 'engine' must be an instance of BaseEngine or None, got {type(agent.engine).__name__}."
+            )
+        return agent.engine
 
-    provider = (getattr(agent, "provider", None) or "").lower()
+    raw_provider = getattr(agent, "provider", None)
     api_key = getattr(agent, "api_key", None)
     base_url = getattr(agent, "base_url", None)
     model = (getattr(agent, "model", None) or "").lower()
 
-    # 2. Provider explicit match
-    if provider in ("gemini", "google"):
-        return GeminiEngine(api_key=api_key)
+    # 2. Provider explicit match or validation
+    if raw_provider is not None:
+        if not isinstance(raw_provider, str):
+            raise ConfigurationError(
+                f"Agent 'provider' must be a string or None, got {type(raw_provider).__name__}."
+            )
+        clean_provider = raw_provider.strip().lower()
+        if not clean_provider:
+            raise ConfigurationError("Agent 'provider' cannot be an empty or whitespace-only string.")
+        if clean_provider not in _ALL_SUPPORTED_PROVIDERS:
+            supported_list = ", ".join(sorted(_ALL_SUPPORTED_PROVIDERS))
+            raise ConfigurationError(
+                f"Unsupported provider {raw_provider!r}. Supported providers are: {supported_list}."
+            )
+        if clean_provider in _GEMINI_PROVIDERS:
+            if base_url:
+                raise ConfigurationError(
+                    f"Provider {raw_provider!r} does not support a custom 'base_url'. "
+                    "To configure a custom endpoint for Gemini, set the GOOGLE_GEMINI_BASE_URL environment variable."
+                )
+            return GeminiEngine(api_key=api_key)
 
-    if provider in ("anthropic", "claude"):
-        return AnthropicEngine(api_key=api_key, base_url=base_url or "https://api.anthropic.com/v1")
+        if clean_provider in _ANTHROPIC_PROVIDERS:
+            return AnthropicEngine(api_key=api_key, base_url=base_url or "https://api.anthropic.com/v1")
 
-    if provider in ("openai", "grok", "xai", "ollama", "gemma", "deepseek", "groq"):
-        return OpenAIEngine(api_key=api_key, base_url=base_url, provider=provider)
+        if clean_provider in _OPENAI_COMPATIBLE_PROVIDERS:
+            return OpenAIEngine(api_key=api_key, base_url=base_url, provider=clean_provider)
 
     # 3. Agent has custom base_url without provider. An official
     #    endpoint (e.g. DeepSeek's) selects its own provider and environment key;

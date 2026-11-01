@@ -6,6 +6,13 @@ class ChatFlowError(Exception):
     """Base exception for all chatflow-agent errors."""
 
 
+class ConfigurationError(ChatFlowError, ValueError):
+    """Raised when an invalid configuration is provided for an agent, engine, provider, or endpoint.
+
+    Subclasses ``ValueError`` for compatibility with code catching standard configuration errors.
+    """
+
+
 class DependencyError(ChatFlowError):
     """Raised when an optional channel or feature requires an uninstalled package."""
 
