@@ -56,6 +56,31 @@ def test_split_message_hard_fallback() -> None:
     assert "".join(chunks) == text
 
 
+def test_split_message_keeps_emoji_heavy_message_within_limit_in_one_chunk() -> None:
+    """An emoji-heavy message within the supported character limit stays whole.
+
+    The platforms' message limit is enforced in characters, not UTF-16
+    code units: a reply made of 4096 emoji occupies 8192 UTF-16 units,
+    yet the Telegram Bot API delivers it as a single message (verified
+    2026-10-30), so split_message() must not over-split it.
+    """
+    text = "🎉" * 4096
+    assert len(text) == 4096  # code points: the supported character limit
+
+    chunks = split_message(text, max_len=4096)
+
+    assert chunks == [text]
+    assert "".join(chunks) == text
+
+
+def test_split_message_progresses_on_an_astral_character_bigger_than_max_len() -> None:
+    """A single character larger than max_len still makes progress."""
+    text = "🎉" * 5
+    chunks = split_message(text, max_len=1)
+    assert chunks == ["🎉"] * 5
+    assert "".join(chunks) == text
+
+
 @pytest.mark.asyncio
 async def test_send_outbound_whatsapp_splits_chunks() -> None:
     """Outbound dispatcher must invoke single-chunk sender once per split chunk."""
