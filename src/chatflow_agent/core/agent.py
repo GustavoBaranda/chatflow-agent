@@ -6,7 +6,10 @@ import unicodedata
 from collections.abc import Callable
 from typing import Any
 
+from chatflow_agent.core.engines.base import BaseEngine
+from chatflow_agent.core.engines.factory import _ALL_SUPPORTED_PROVIDERS, _GEMINI_PROVIDERS
 from chatflow_agent.core.tools import Tool
+from chatflow_agent.exceptions import ConfigurationError
 from chatflow_agent.types import Handoff
 
 _MAX_TOOL_NAME_LEN = 60
@@ -74,6 +77,35 @@ class Agent:
     ) -> None:
         if not name or not name.strip():
             raise ValueError("Agent name must be a non-empty string.")
+        if engine is not None and not isinstance(engine, BaseEngine):
+            raise ConfigurationError(
+                f"Agent 'engine' must be an instance of BaseEngine or None, got {type(engine).__name__}."
+            )
+        if provider is not None:
+            if not isinstance(provider, str):
+                raise ConfigurationError(
+                    f"Agent 'provider' must be a string or None, got {type(provider).__name__}."
+                )
+            clean_provider = provider.strip().lower()
+            if not clean_provider:
+                raise ConfigurationError("Agent 'provider' cannot be an empty or whitespace-only string.")
+            if clean_provider not in _ALL_SUPPORTED_PROVIDERS:
+                supported_list = ", ".join(sorted(_ALL_SUPPORTED_PROVIDERS))
+                raise ConfigurationError(
+                    f"Unsupported provider {provider!r}. Supported providers are: {supported_list}."
+                )
+            if clean_provider in _GEMINI_PROVIDERS and base_url:
+                raise ConfigurationError(
+                    f"Provider {provider!r} does not support a custom 'base_url'. "
+                    "To configure a custom endpoint for Gemini, set the GOOGLE_GEMINI_BASE_URL environment variable."
+                )
+        if base_url is not None:
+            if not isinstance(base_url, str):
+                raise ConfigurationError(
+                    f"Agent 'base_url' must be a string or None, got {type(base_url).__name__}."
+                )
+            if not base_url.strip():
+                raise ConfigurationError("Agent 'base_url' cannot be an empty or whitespace-only string.")
         self.name = name
         self.instructions = instructions
         self.model = model

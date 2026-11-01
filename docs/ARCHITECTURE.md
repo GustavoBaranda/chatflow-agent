@@ -215,14 +215,14 @@ All LLM integrations implement [`BaseEngine`](../src/chatflow_agent/core/engines
 
 #### 7-Step Engine Resolution Precedence (`resolve_engine`)
 
-When `Runner` evaluates a turn for `current_agent`, [`resolve_engine()`](../src/chatflow_agent/core/engines/factory.py) selects the engine using the following strict order:
+When `Runner` evaluates a turn for `current_agent`, [`resolve_engine()`](../src/chatflow_agent/core/engines/factory.py) selects the engine using the following strict order, validated early at `Agent` and `Runner` initialization:
 
-1. **Explicit Agent Engine (`agent.engine`):** Uses the `BaseEngine` instance attached directly to the agent.
-2. **Explicit Provider Name (`agent.provider`):**
-   - `"gemini"`, `"google"` → [`GeminiEngine`](../src/chatflow_agent/core/engines/gemini.py)
+1. **Explicit Agent Engine (`agent.engine`):** Uses the `BaseEngine` instance attached directly to the agent (must be an instance of `BaseEngine`, otherwise raises [`ConfigurationError`](../src/chatflow_agent/exceptions.py)).
+2. **Explicit Provider Name (`agent.provider`):** Validated strictly against supported providers (`gemini`, `google`, `openai`, `grok`, `xai`, `deepseek`, `groq`, `ollama`, `gemma`, `anthropic`, `claude`). Unsupported providers raise [`ConfigurationError`](../src/chatflow_agent/exceptions.py) immediately and never fall through to model-prefix heuristics.
+   - `"gemini"`, `"google"` → [`GeminiEngine`](../src/chatflow_agent/core/engines/gemini.py). Combining with a custom `base_url` raises `ConfigurationError` (use `GOOGLE_GEMINI_BASE_URL` instead).
    - `"openai"`, `"grok"`, `"xai"`, `"deepseek"`, `"groq"`, `"ollama"`, `"gemma"` → [`OpenAIEngine`](../src/chatflow_agent/core/engines/openai_compatible.py)
    - `"anthropic"`, `"claude"` → [`AnthropicEngine`](../src/chatflow_agent/core/engines/anthropic.py)
-3. **Custom Base URL (`agent.base_url`):** When `provider` is omitted but `base_url` is set, routes to [`OpenAIEngine`](../src/chatflow_agent/core/engines/openai_compatible.py).
+3. **Custom Base URL (`agent.base_url`):** When `provider` is omitted but `base_url` is set, routes to [`OpenAIEngine`](../src/chatflow_agent/core/engines/openai_compatible.py). Non-local custom endpoints require an explicit `api_key` and raise `ConfigurationError` fast during Runner initialization if omitted.
 4. **Explicit Runner Default Engine (`Runner(engine=...)` with `prefer_default_engine=True`):** Overrides model-prefix heuristics when the agent did not specify an explicit `engine`, `provider`, or `base_url`.
 5. **Model Prefix Heuristics (`agent.model`):**
    - literal prefix `claude-` → [`AnthropicEngine`](../src/chatflow_agent/core/engines/anthropic.py)
@@ -230,7 +230,7 @@ When `Runner` evaluates a turn for `current_agent`, [`resolve_engine()`](../src/
    - `grok*` → [`OpenAIEngine`](../src/chatflow_agent/core/engines/openai_compatible.py) (`provider="grok"`)
    - literal prefix `deepseek-` → [`OpenAIEngine`](../src/chatflow_agent/core/engines/openai_compatible.py) (`provider="deepseek"`)
    - `gemma*`, `llama*`, `mistral*`, `qwen*`, `phi*` → [`OpenAIEngine`](../src/chatflow_agent/core/engines/openai_compatible.py) (`provider="ollama"`)
-6. **Fallback Engine:** Uses `default_engine` when one was supplied and no earlier rule matched. If `agent.api_key` is set and `default_engine` is a plain [`GeminiEngine`](../src/chatflow_agent/core/engines/gemini.py) (such as the one `Runner` builds when no `engine` is passed), a copy of it that uses the agent's key is used instead of the `Runner` or environment credentials; the provider stays Gemini. Any other `default_engine` (a subclass or a custom engine) is used unchanged.
+6. **Fallback Engine:** Uses `default_engine` when one was supplied and no earlier rule matched. Applies to Gemini models and to models without a recognized provider prefix (e.g. `o4-mini`, which intentionally falls back to the default engine). If `agent.api_key` is set and `default_engine` is a plain [`GeminiEngine`](../src/chatflow_agent/core/engines/gemini.py) (such as the one `Runner` builds when no `engine` is passed), a copy of it that uses the agent's key is used instead of the `Runner` or environment credentials; the provider stays Gemini. Any other `default_engine` (a subclass or a custom engine) is used unchanged.
 7. **Ultimate Default:** Instantiates [`GeminiEngine`](../src/chatflow_agent/core/engines/gemini.py).
 
 #### Engine Implementations & Cross-Provider Normalization
@@ -318,6 +318,7 @@ All custom framework errors inherit from [`ChatFlowError`](../src/chatflow_agent
 ```text
 Exception
  └── ChatFlowError
+      ├── ConfigurationError        (also subclasses ValueError; raised on invalid agent/engine/provider configuration)
       ├── ProviderError             (raised when communication with an LLM provider fails)
       ├── DependencyError           (.feature, .extra_package; raised when an optional extra is missing)
       ├── ToolExecutionError        (.tool_name, .original_error; raised when a tool fails at runtime)
