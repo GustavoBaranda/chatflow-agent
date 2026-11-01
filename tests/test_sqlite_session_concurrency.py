@@ -4,6 +4,7 @@ Interleavings are driven by asyncio/threading/multiprocessing events, never by s
 """
 
 import asyncio
+import contextvars
 import gc
 import logging
 import multiprocessing
@@ -812,17 +813,21 @@ async def test_delete_during_a_running_turn_leaves_no_rows(tmp_path: Path) -> No
     assert raw_rows(db) == [("user", "new"), ("model", "re:new")]
 
 
-# --- Nested turns of the same session (H-02) -----------------------------------------
+# --- Nested turns of the same session (H-02) -----------------------
 
 NO_PROGRESS = 10.0
 ABSOLUTE_CAP = 60.0
+_CANCEL_GRACE = 1.0
 
 
 class _SqliteProgress:
-    """Test-only activity clock for SQLite work offloaded via ``_run_blocking``.
+    """Per-monitor activity clock for SQLite work offloaded via ``_run_blocking``.
 
-    Both the start and the end of an offloaded call refresh ``activity``, so a
-    single slow disk operation that is still running does not look like a stall.
+    Each ``no_deadlock`` call owns its own instance (via a ContextVar) so
+    unrelated SQLite traffic cannot refresh another monitor's window.
+    ``begin``/``end`` bump ``activity``; the watchdog also treats ``inflight > 0``
+    as progress so a single healthy op longer than ``NO_PROGRESS`` does not
+    false-fail, while a permanently stuck op still hits ``ABSOLUTE_CAP``.
     """
 
     def __init__(self) -> None:
@@ -846,8 +851,16 @@ class _SqliteProgress:
         with self._lock:
             return self.activity, self.completed, self.inflight
 
+    def reset(self, when: float | None = None) -> None:
+        with self._lock:
+            self.activity = time.monotonic() if when is None else when
+            self.completed = 0
+            self.inflight = 0
 
-_sqlite_progress = _SqliteProgress()
+
+_active_sqlite_progress: contextvars.ContextVar[_SqliteProgress | None] = contextvars.ContextVar(
+    "chatflow_test_sqlite_progress", default=None
+)
 
 
 def _deadlock_diagnostics(task: asyncio.Future[Any]) -> str:
@@ -880,57 +893,73 @@ def _deadlock_diagnostics(task: asyncio.Future[Any]) -> str:
     return "\n".join(chunks)
 
 
-def _fail_deadlock(task: asyncio.Future[Any], reason: str) -> None:
+async def _cancel_monitored(task: asyncio.Future[Any]) -> None:
+    """Cancel the monitored task and wait briefly so it does not linger."""
+    if task.done():
+        return
+    task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=_CANCEL_GRACE)
+    except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+        # Best-effort finalize; the failure path must not hang unboundedly.
+        pass
+
+
+async def _fail_deadlock(task: asyncio.Future[Any], reason: str) -> None:
     detail = _deadlock_diagnostics(task)
-    if not task.done():
-        task.cancel()
+    await _cancel_monitored(task)
     pytest.fail(f"deadlock: {reason}\n{detail}")
 
 
 async def no_deadlock(awaitable: Any) -> Any:
     """Await with a progress-aware safety net.
 
-    A true stall (no SQLite ``_run_blocking`` activity for ``NO_PROGRESS`` seconds)
-    or an absolute ``ABSOLUTE_CAP`` fails the test. Slow but progressing SQLite I/O
-    refreshes the activity clock and must not false-fail.
+    A true stall (no SQLite ``_run_blocking`` activity for ``NO_PROGRESS`` seconds
+    while nothing is in flight) or an absolute ``ABSOLUTE_CAP`` fails the test.
+    Slow but progressing SQLite I/O — including a single in-flight op longer than
+    ``NO_PROGRESS`` — must not false-fail.
     """
+    progress = _SqliteProgress()
+    token = _active_sqlite_progress.set(progress)
     task = asyncio.ensure_future(awaitable)
     start = time.monotonic()
-    # Fresh window so a previous test's activity cannot mask a stall here.
-    with _sqlite_progress._lock:
-        _sqlite_progress.activity = start
-    while True:
-        now = time.monotonic()
-        remaining_cap = ABSOLUTE_CAP - (now - start)
-        if remaining_cap <= 0:
-            _fail_deadlock(task, "absolute safety cap exceeded")
-        activity, _, _ = _sqlite_progress.snapshot()
-        idle = now - activity
-        wait = min(max(0.05, NO_PROGRESS - idle), remaining_cap)
-        done, _ = await asyncio.wait({task}, timeout=wait)
-        if task in done:
-            return task.result()
-        now = time.monotonic()
-        if now - start >= ABSOLUTE_CAP:
-            _fail_deadlock(task, "absolute safety cap exceeded")
-        activity, _, _ = _sqlite_progress.snapshot()
-        if now - activity >= NO_PROGRESS:
-            _fail_deadlock(task, "no progress within the safety timeout")
+    progress.reset(start)
+    try:
+        while True:
+            now = time.monotonic()
+            remaining_cap = ABSOLUTE_CAP - (now - start)
+            if remaining_cap <= 0:
+                await _fail_deadlock(task, "absolute safety cap exceeded")
+            activity, _, inflight = progress.snapshot()
+            idle = 0.0 if inflight > 0 else (now - activity)
+            wait = min(max(0.05, NO_PROGRESS - idle), remaining_cap)
+            done, _ = await asyncio.wait({task}, timeout=wait)
+            if task in done:
+                return task.result()
+            now = time.monotonic()
+            if now - start >= ABSOLUTE_CAP:
+                await _fail_deadlock(task, "absolute safety cap exceeded")
+            activity, _, inflight = progress.snapshot()
+            if inflight == 0 and now - activity >= NO_PROGRESS:
+                await _fail_deadlock(task, "no progress within the safety timeout")
+    finally:
+        _active_sqlite_progress.reset(token)
 
 
 @pytest.fixture(autouse=True)
 def _instrument_sqlite_run_blocking(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Bump the test progress clock around offloaded SQLite ``_run_blocking`` calls."""
+    """Bump the *active* monitor's progress clock around offloaded SQLite calls."""
 
     async def tracked(store: object, call: Any, *, must_run: bool = False) -> Any:
         offload = memory_mod._offloads_blocking_io(store)
-        if offload:
-            _sqlite_progress.begin()
+        progress = _active_sqlite_progress.get()
+        if offload and progress is not None:
+            progress.begin()
         try:
             return await _memory_run_blocking(store, call, must_run=must_run)
         finally:
-            if offload:
-                _sqlite_progress.end()
+            if offload and progress is not None:
+                progress.end()
 
     monkeypatch.setattr(memory_mod, "_run_blocking", tracked)
     monkeypatch.setattr(runner_mod, "_run_blocking", tracked)
@@ -1278,19 +1307,30 @@ async def test_custom_store_gets_the_same_reentrancy_contract() -> None:
 async def test_no_deadlock_tolerates_slow_sqlite_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Artificial per-op delay that would exceed the old 10s wall clock must still pass."""
+    """Progressing SQLite work that exceeds the no-progress window must still pass.
+
+    Temporarily lowers ``NO_PROGRESS`` so a healthy per-op delay is longer than
+    the configured window; the watchdog must honour in-flight work and only trip
+    the absolute cap.
+    """
+    global NO_PROGRESS, ABSOLUTE_CAP
+    old_np, old_cap = NO_PROGRESS, ABSOLUTE_CAP
+    NO_PROGRESS = 0.25
+    ABSOLUTE_CAP = 30.0
     real = _memory_run_blocking
 
     async def slow(store: object, call: Any, *, must_run: bool = False) -> Any:
+        progress = _active_sqlite_progress.get()
         offload = memory_mod._offloads_blocking_io(store)
-        if offload:
-            _sqlite_progress.begin()
-            await asyncio.get_running_loop().run_in_executor(None, time.sleep, 0.35)
+        if offload and progress is not None:
+            progress.begin()
+            # Longer than NO_PROGRESS: proves in-flight work is not a stall.
+            await asyncio.get_running_loop().run_in_executor(None, time.sleep, 0.4)
         try:
             return await real(store, call, must_run=must_run)
         finally:
-            if offload:
-                _sqlite_progress.end()
+            if offload and progress is not None:
+                progress.end()
 
     monkeypatch.setattr(memory_mod, "_run_blocking", slow)
     monkeypatch.setattr(runner_mod, "_run_blocking", slow)
@@ -1332,6 +1372,7 @@ async def test_no_deadlock_tolerates_slow_sqlite_progress(
         assert result.content == "refused"
     finally:
         store.close()
+        NO_PROGRESS, ABSOLUTE_CAP = old_np, old_cap
 
 
 @pytest.mark.asyncio
@@ -1348,5 +1389,62 @@ async def test_no_deadlock_still_detects_a_true_stall() -> None:
     try:
         with pytest.raises(pytest.fail.Exception, match="no progress within the safety timeout"):
             await no_deadlock(never())
+    finally:
+        NO_PROGRESS, ABSOLUTE_CAP = old_np, old_cap
+
+
+@pytest.mark.asyncio
+async def test_no_deadlock_isolates_progress_per_monitor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unrelated SQLite activity must not refresh another monitor's idle window."""
+
+    async def never() -> None:
+        await asyncio.Event().wait()
+
+    async def unrelated_noise() -> None:
+        # Simulate foreign SQLite traffic on a *different* progress object.
+        foreign = _SqliteProgress()
+        for _ in range(20):
+            foreign.begin()
+            await asyncio.sleep(0.05)
+            foreign.end()
+
+    global NO_PROGRESS, ABSOLUTE_CAP
+    old_np, old_cap = NO_PROGRESS, ABSOLUTE_CAP
+    NO_PROGRESS = 0.3
+    ABSOLUTE_CAP = 5.0
+    noise = asyncio.create_task(unrelated_noise())
+    try:
+        with pytest.raises(pytest.fail.Exception, match="no progress within the safety timeout"):
+            await no_deadlock(never())
+    finally:
+        noise.cancel()
+        try:
+            await noise
+        except asyncio.CancelledError:
+            pass
+        NO_PROGRESS, ABSOLUTE_CAP = old_np, old_cap
+
+
+@pytest.mark.asyncio
+async def test_no_deadlock_absolute_cap_covers_stuck_inflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A permanently blocked in-flight op must still trip the absolute cap."""
+
+    async def stuck_inflight() -> None:
+        progress = _active_sqlite_progress.get()
+        assert progress is not None
+        progress.begin()
+        await asyncio.Event().wait()
+
+    global NO_PROGRESS, ABSOLUTE_CAP
+    old_np, old_cap = NO_PROGRESS, ABSOLUTE_CAP
+    NO_PROGRESS = 0.2
+    ABSOLUTE_CAP = 0.6
+    try:
+        with pytest.raises(pytest.fail.Exception, match="absolute safety cap exceeded"):
+            await no_deadlock(stuck_inflight())
     finally:
         NO_PROGRESS, ABSOLUTE_CAP = old_np, old_cap
