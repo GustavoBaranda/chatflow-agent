@@ -1,6 +1,5 @@
 """Abstract BaseChannel definition for chatflow-agent."""
 
-import bisect
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -13,56 +12,23 @@ class ChannelError(ChatFlowError):
     """Raised when an operation on a channel fails or runner is detached."""
 
 
-def _utf16_units(text: str) -> int:
-    """Length of ``text`` in UTF-16 code units, the unit platforms count text in.
-
-    A code point in the Basic Multilingual Plane is one unit; anything above it —
-    most emoji — is two (a surrogate pair). Telegram documents this for the MTProto
-    and Bot APIs: https://core.telegram.org/api/entities. The simple form is the
-    one Telegram's own docs suggest: encode as UTF-16 and halve the byte count.
-    """
-    return len(text.encode("utf-16-le")) // 2
-
-
 def split_message(text: str, max_len: int = 4096) -> list[str]:
     """Split long outbound text into sequential chunks within max_len.
 
     Splits progressively by paragraph (\n\n), line (\n), sentence (. ), or word ( )
     to preserve formatting and readability across messaging channels.
-
-    ``max_len`` is measured in UTF-16 code units, not Python code points: the
-    messaging platforms count a message's length in UTF-16 units, where a
-    character above the Basic Multilingual Plane (most emoji) is two. A chunk of
-    "🎉" * 4096 is 8192 units — a reply like that went out as one message, and
-    Telegram rejects it with "message is too long". Astral characters therefore
-    shorten every chunk, which can only keep chunks inside the limit.
     """
     if max_len <= 0:
         raise ValueError("max_len must be greater than 0")
 
-    if _utf16_units(text) <= max_len:
+    if len(text) <= max_len:
         return [text]
 
-    # UTF-16 unit length of every prefix of text: units[i] is the length of
-    # text[:i], so the chunk window can be moved without re-encoding anything.
-    units = [0]
-    for ch in text:
-        units.append(units[-1] + (2 if ord(ch) > 0xFFFF else 1))
-
     chunks: list[str] = []
-    start = 0  # code-point index into text
+    remaining = text
 
-    while units[-1] - units[start] > max_len:
-        # The longest prefix from `start` that fits: text[start:end] is at most
-        # max_len units. `units` is strictly increasing, so the bisect finds the
-        # exact boundary even with surrogate pairs in it.
-        end = bisect.bisect_right(units, units[start] + max_len) - 1
-        if end == start:
-            # One code point alone needs more units than max_len allows (an
-            # astral character with max_len == 1). Emit it on its own rather than
-            # looping forever, exactly as a code-point count always could.
-            end = start + 1
-        candidate = text[start:end]
+    while len(remaining) > max_len:
+        candidate = remaining[:max_len]
         split_idx = -1
 
         for sep in ("\n\n", "\n", ". ", " "):
@@ -72,17 +38,15 @@ def split_message(text: str, max_len: int = 4096) -> list[str]:
                 break
 
         if split_idx <= 0:
-            split_idx = end - start
+            split_idx = max_len
 
-        chunk = text[start : start + split_idx].rstrip()
+        chunk = remaining[:split_idx].rstrip()
         if chunk:
             chunks.append(chunk)
-        start += split_idx
-        while start < len(text) and text[start].isspace():
-            start += 1
+        remaining = remaining[split_idx:].lstrip()
 
-    if start < len(text):
-        chunks.append(text[start:])
+    if remaining:
+        chunks.append(remaining)
 
     return chunks
 

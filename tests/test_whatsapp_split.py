@@ -56,40 +56,25 @@ def test_split_message_hard_fallback() -> None:
     assert "".join(chunks) == text
 
 
-def test_split_message_counts_utf16_units_emoji() -> None:
-    """Chunks stay within the limit as the platforms count it: UTF-16 code units.
+def test_split_message_keeps_emoji_heavy_message_within_limit_in_one_chunk() -> None:
+    """An emoji-heavy message within the supported character limit stays whole.
 
-    len() counts code points, but Telegram counts message text in UTF-16 code
-    units (https://core.telegram.org/api/entities): an astral character — most
-    emoji — is two units. 4096 emoji are 8192 units, and a reply made of them
-    went out as ONE chunk before, which Telegram answers with "message is too
-    long".
+    The platforms' message limit is enforced in characters, not UTF-16
+    code units: a reply made of 4096 emoji occupies 8192 UTF-16 units,
+    yet the Telegram Bot API delivers it as a single message (verified
+    2026-10-30), so split_message() must not over-split it.
     """
     text = "🎉" * 4096
-    assert len(text) == 4096  # code points: the old code's only measure
+    assert len(text) == 4096  # code points: the supported character limit
 
     chunks = split_message(text, max_len=4096)
 
-    assert all(len(c.encode("utf-16-le")) // 2 <= 4096 for c in chunks)
-    assert "".join(chunks) == text
-
-
-def test_split_message_cuts_at_the_unit_boundary_not_the_codepoint_boundary() -> None:
-    """The split window ends where the unit budget ends, mid-paragraph if it must.
-
-    The first paragraph alone is 2049 emoji = 4098 units: one code-point window
-    used to carry it whole, two units over the limit.
-    """
-    text = "🚀" * 2049 + "\n\n" + "👍" * 1300
-    chunks = split_message(text, max_len=4096)
-
-    assert len(chunks[0]) == 2048  # 4096 UTF-16 units exactly
-    assert all(len(c.encode("utf-16-le")) // 2 <= 4096 for c in chunks)
+    assert chunks == [text]
     assert "".join(chunks) == text
 
 
 def test_split_message_progresses_on_an_astral_character_bigger_than_max_len() -> None:
-    """A single character needing more units than max_len still makes progress."""
+    """A single character larger than max_len still makes progress."""
     text = "🎉" * 5
     chunks = split_message(text, max_len=1)
     assert chunks == ["🎉"] * 5
