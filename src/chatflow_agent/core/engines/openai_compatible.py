@@ -444,12 +444,15 @@ class OpenAIEngine(BaseEngine):
                     f"{self.provider.upper()} returned a malformed response: "
                     "a tool call is not an object"
                 )
-            call_id = tc.get("id") or f"call_{idx}"
-            if not isinstance(call_id, str):
-                raise ProviderError(
-                    f"{self.provider.upper()} returned a malformed response: "
-                    "a tool call's id is not a string"
-                )
+            if "id" not in tc or tc["id"] is None:
+                call_id = f"call_{idx}"
+            else:
+                call_id = tc["id"]
+                if not isinstance(call_id, str):
+                    raise ProviderError(
+                        f"{self.provider.upper()} returned a malformed response: "
+                        "a tool call's id is not a string"
+                    )
             func_data = tc.get("function", {})
             if not isinstance(func_data, dict):
                 raise ProviderError(

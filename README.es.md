@@ -567,6 +567,9 @@ if __name__ == "__main__":
 
 ### Esquemas de parámetros de herramientas y `ToolSchemaError`
 
+**Resultados de herramientas y metadatos serializables en JSON.** Los valores devueltos por las herramientas y los metadatos de sesión deben ser compatibles con JSON. En los motores Gemini, OpenAI-compatible y Anthropic, `datetime`/`date`/`time` pasan a cadenas ISO-8601 y los modelos Pydantic usan `model_dump(mode="json")`. La persistencia de metadatos en SQLite es estricta: los objetos no soportados lanzan `JsonCodecError` en lugar de guardarse como cadenas. La codificación hacia el proveedor puede seguir convirtiendo hojas restantes con `str(...)`.
+
+
 `Tool` inspecciona las anotaciones de tipos de Python y genera esquemas compatibles con cada proveedor de forma automática:
 
 * **Tipos primitivos:** `str`, `int`, `float`, `bool`
@@ -598,6 +601,7 @@ La validación también se aplica cuando el código de la aplicación llama dire
 | `ReentrantTurnError` | `ChatFlowError`, `RuntimeError` | Lanzada cuando un turno intenta iniciar otro turno de la misma sesión en línea. |
 | `SessionDeletedError` | `ChatFlowError` | Lanzada cuando la sesión SQLite de un turno en curso se elimina concurrentemente. |
 | `DependencyError` | `ChatFlowError` | Lanzada cuando falta instalar un paquete opcional de proveedor o canal. |
+| `JsonCodecError` | `ChatFlowError` | Lanzada cuando la codificación JSON de metadatos de sesión u otros valores no puede completarse sin una coerción insegura. |
 
 ---
 

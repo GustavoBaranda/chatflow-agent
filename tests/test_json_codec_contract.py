@@ -10,12 +10,13 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
+import chatflow_agent
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import AnthropicEngine, BaseEngine, EngineTurnResult, OpenAIEngine
-from chatflow_agent.core.json_codec import encode_tool_content, to_jsonable
+from chatflow_agent.core.json_codec import dumps_json, encode_tool_content, to_jsonable
 from chatflow_agent.core.memory import SessionStore, SQLiteSessionStore
 from chatflow_agent.core.runner import Runner
-from chatflow_agent.exceptions import ProviderError
+from chatflow_agent.exceptions import JsonCodecError, ProviderError
 from chatflow_agent.types import Message, Role, ToolCall, ToolResult
 
 WHEN = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
@@ -89,9 +90,7 @@ async def test_engines_encode_datetime_tool_results(engine_name: str):
         ),
     ]
     if engine_name == "openai":
-        response = httpx.Response(
-            200, json={"choices": [{"message": {"content": "done"}}]}
-        )
+        response = httpx.Response(200, json={"choices": [{"message": {"content": "done"}}]})
         client, transport = _client(response)
         engine = OpenAIEngine(api_key="k", http_client=client)
         agent = Agent(name="A", instructions="x", model="gpt-4o-mini")
@@ -99,9 +98,7 @@ async def test_engines_encode_datetime_tool_results(engine_name: str):
             await engine.generate_turn_async(agent=agent, history=history)
             body = json.loads(transport.requests[-1].content.decode())
             tool_msg = next(m for m in body["messages"] if m.get("role") == "tool")
-            assert json.loads(tool_msg["content"]) == {
-                "when": "2026-01-02T03:04:05+00:00"
-            }
+            assert json.loads(tool_msg["content"]) == {"when": "2026-01-02T03:04:05+00:00"}
         finally:
             await client.aclose()
     else:
@@ -130,9 +127,7 @@ async def test_engines_encode_datetime_tool_results(engine_name: str):
                 if tool_block is not None:
                     break
             assert tool_block is not None
-            assert json.loads(tool_block["content"]) == {
-                "when": "2026-01-02T03:04:05+00:00"
-            }
+            assert json.loads(tool_block["content"]) == {"when": "2026-01-02T03:04:05+00:00"}
         finally:
             await client.aclose()
 
@@ -168,6 +163,69 @@ async def test_openai_non_string_tool_call_id_is_provider_error():
         await client.aclose()
 
 
+@pytest.mark.asyncio
+async def test_openai_falsy_invalid_tool_call_id_is_provider_error():
+    """Present-but-invalid ids (e.g. False) must not be replaced by call_{idx}."""
+    response = httpx.Response(
+        200,
+        json={
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": False,
+                                "function": {"name": "f", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+    client, _transport = _client(response)
+    engine = OpenAIEngine(api_key="k", http_client=client)
+    agent = Agent(name="A", instructions="x", model="gpt-4o-mini")
+    try:
+        with pytest.raises(ProviderError, match="tool call's id is not a string"):
+            await engine.generate_turn_async(
+                agent=agent, history=[Message(role=Role.USER, content="hi")]
+            )
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_openai_missing_tool_call_id_is_synthesized():
+    response = httpx.Response(
+        200,
+        json={
+            "choices": [
+                {
+                    "message": {
+                        "content": "done",
+                        "tool_calls": [
+                            {
+                                "function": {"name": "f", "arguments": "{}"},
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+    )
+    client, _transport = _client(response)
+    engine = OpenAIEngine(api_key="k", http_client=client)
+    agent = Agent(name="A", instructions="x", model="gpt-4o-mini")
+    try:
+        result = await engine.generate_turn_async(
+            agent=agent, history=[Message(role=Role.USER, content="hi")]
+        )
+        assert result.tool_calls[0].id == "call_0"
+    finally:
+        await client.aclose()
+
+
 class _EchoEngine(BaseEngine):
     async def generate_turn_async(self, agent: Agent, history: list[Message]) -> EngineTurnResult:
         return EngineTurnResult(text="ok")
@@ -199,9 +257,7 @@ async def test_metadata_datetime_works_across_stores(store_kind: str, tmp_path: 
 
 @pytest.mark.parametrize("store_kind", ["memory", "sqlite_file", "sqlite_memory"])
 @pytest.mark.asyncio
-async def test_tool_returning_datetime_and_object_across_stores(
-    store_kind: str, tmp_path: Path
-):
+async def test_tool_returning_datetime_and_object_across_stores(store_kind: str, tmp_path: Path):
     agent = Agent(name="A", instructions="x", model="gpt-4o-mini")
 
     @agent.tool
@@ -259,3 +315,25 @@ async def test_tool_returning_datetime_and_object_across_stores(
         close = getattr(store, "close", None)
         if close is not None:
             close()
+
+
+def test_dumps_json_rejects_unserializable_metadata():
+    with pytest.raises(JsonCodecError):
+        dumps_json({"invalid": object()}, what="Session metadata")
+
+
+def test_to_jsonable_wraps_circular_references():
+    cycle: dict = {}
+    cycle["self"] = cycle
+    with pytest.raises(JsonCodecError):
+        to_jsonable(cycle)
+
+
+def test_to_jsonable_wraps_non_string_mapping_keys():
+    with pytest.raises(JsonCodecError):
+        to_jsonable({object(): "x"}, coerce=False)
+
+
+def test_json_codec_error_is_public():
+    assert chatflow_agent.JsonCodecError is JsonCodecError
+    assert "JsonCodecError" in chatflow_agent.__all__
