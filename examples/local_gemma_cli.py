@@ -83,26 +83,30 @@ coordinator = Agent(
     handoffs=[code_specialist, sys_specialist],
 )
 
-# 4. Persistent Runner
-session_store = SQLiteSessionStore(
-    db_path="gemma_sessions.db",
-    default_max_turns=30,
-)
+def main() -> None:
+    # 4. Persistent Runner — created here, not at import time, so importing
+    # this example never creates the database; `with` closes the store on exit.
+    with SQLiteSessionStore(
+        db_path="gemma_sessions.db",
+        default_max_turns=30,
+    ) as session_store:
+        runner = Runner(
+            starting_agent=coordinator,
+            session_store=session_store,
+        )
 
-runner = Runner(
-    starting_agent=coordinator,
-    session_store=session_store,
-)
+        # 5. CLI Channel
+        cli = CLIChannel()
+        cli.attach(runner)
 
-# 5. CLI Channel
-cli = CLIChannel()
-cli.attach(runner)
+        print("=" * 60)
+        print("Local Google Gemma 2 Offline Multi-Agent CLI")
+        print("Provider: Ollama (http://localhost:11434/v1)")
+        print("Storage: gemma_sessions.db (SQLite)")
+        print("Type your message, or 'exit' / 'quit' to terminate.")
+        print("=" * 60)
+        cli.run()
+
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("Local Google Gemma 2 Offline Multi-Agent CLI")
-    print("Provider: Ollama (http://localhost:11434/v1)")
-    print("Storage: gemma_sessions.db (SQLite)")
-    print("Type your message, or 'exit' / 'quit' to terminate.")
-    print("=" * 60)
-    cli.run()
+    main()
