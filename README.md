@@ -9,13 +9,16 @@
 
 🌐 **Language:** **English** | [Español](README.es.md) · [Architecture](docs/ARCHITECTURE.md) · [Changelog](CHANGELOG.md) · [Contributing](#contributing) · [PyPI Package](https://pypi.org/project/chatflow-agent/) · [Report Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
 
-> **Build autonomous multi-agent swarms for WhatsApp, Telegram, Webhooks, and CLI in Python with a lightweight, provider-agnostic core.**
+> **Build autonomous multi-agent swarms for WhatsApp, Telegram, custom webhook applications, and CLI in Python with a lightweight, provider-agnostic core.**
 
 ```bash
-pip install chatflow-agent
+pip install --pre chatflow-agent
 ```
 
-`chatflow-agent` is an async-first Python framework for orchestrating multi-agent conversational workflows across real-world messaging channels. Inspired by lightweight agent handoff patterns, it combines provider-agnostic LLM engines with built-in concurrency locks, transactional turn rollbacks, SQLite persistence, and turnkey channel adapters for **WhatsApp (Meta Cloud API)**, **Telegram**, **FastAPI Webhooks**, and **CLI**.
+> [!NOTE]
+> The documentation currently describes the `0.4.0` prerelease. Until `0.4.0` is stable, use `--pre`; plain `pip install chatflow-agent` selects the latest stable `0.3.x` release, which does not include every API documented below.
+
+`chatflow-agent` is an async-first Python framework for orchestrating multi-agent conversational workflows across real-world messaging channels. Inspired by lightweight agent handoff patterns, it combines provider-agnostic LLM engines with built-in concurrency locks, transactional turn rollbacks, SQLite persistence, and turnkey channel adapters for **WhatsApp (Meta Cloud API)**, **Telegram**, and **CLI**, plus a custom webhook example application.
 
 ![chatflow-agent Architecture: Input Channels (WhatsApp, Telegram, Webhook, CLI) connected to Runner and Session Memory, orchestrating a Triage Agent and a Specialist Agent with autonomous peer handoff and @agent.tool actions](docs/images/architecture-en.png)
 
@@ -43,7 +46,7 @@ pip install chatflow-agent
 ## Key Features
 
 * **Ultra-Lightweight Core:** Only 2 core runtime dependencies (`pydantic>=2.6.0`, `httpx>=0.27.0`). All LLM engines (**Google Gemini**, **OpenAI**, **Anthropic Claude**, **xAI Grok**, **DeepSeek**, **Groq**, **Ollama**, and **vLLM**) work out of the box over native `httpx` REST without heavy SDK chains; optional channel dependencies are installed only when needed.
-* **Omnichannel Connectors:** Production-ready adapters for **WhatsApp (Meta Cloud API & generic webhooks)**, **Telegram**, **FastAPI Webhooks**, and interactive **CLI**.
+* **Omnichannel Connectors:** Built-in adapters for **WhatsApp (Meta Cloud API)**, **Telegram**, and interactive **CLI**, plus an example custom webhook application built with Starlette.
 * **Multi-Provider Freedom:** Run agents on **Google Gemini**, **OpenAI**, **Anthropic Claude**, **xAI Grok**, **DeepSeek**, **Groq**, or local models via **Ollama** (**Google Gemma**, Llama, Mistral, Qwen, Phi) and **vLLM**—even mixing different providers within the same multi-agent swarm.
 * **Autonomous Peer Handoffs:** Agents delegate conversations to specialist peers dynamically based on user intent, persisting the active specialist and session metadata across turns and server restarts.
 * **Production-Hardened Resilience:** Per-session `asyncio.Lock` serialization, non-blocking worker-thread offloading for file-backed SQLite stores, automatic history/agent/metadata rollback on mid-turn failures or timeouts, and an anti-500 webhook shield for Meta Cloud API.
@@ -59,19 +62,19 @@ Install only the extras your deployment requires:
 
 ```bash
 # Core framework (all LLM engines via HTTPX, SQLite & in-memory stores, CLI channel)
-pip install chatflow-agent
+pip install --pre chatflow-agent
 
 # With WhatsApp Webhook connector (FastAPI + Uvicorn)
-pip install "chatflow-agent[whatsapp]"
+pip install --pre "chatflow-agent[whatsapp]"
 
 # With Telegram Bot connector (python-telegram-bot)
-pip install "chatflow-agent[telegram]"
+pip install --pre "chatflow-agent[telegram]"
 
 # With custom FastAPI Webhook service dependencies (FastAPI + Uvicorn)
-pip install "chatflow-agent[webhook]"
+pip install --pre "chatflow-agent[webhook]"
 
 # Complete channel bundle (telegram, whatsapp, and webhook extras)
-pip install "chatflow-agent[all]"
+pip install --pre "chatflow-agent[all]"
 ```
 
 ---
@@ -395,7 +398,7 @@ load_dotenv()
 | **Ollama (Local)** | `OpenAIEngine` | *None required* | `provider="ollama"`, `model="gemma2:9b"` |
 | **vLLM / Local Server** | `OpenAIEngine` | *None on `localhost`* | `base_url="http://localhost:8000/v1"`, `model="..."` |
 
-* **Built-in HTTPX Engines:** All engines (`GeminiEngine`, `OpenAIEngine`, and `AnthropicEngine`) are included out of the box with `pip install chatflow-agent`—no extra provider SDKs required.
+* **Built-in HTTPX Engines:** All engines (`GeminiEngine`, `OpenAIEngine`, and `AnthropicEngine`) are included out of the box with `pip install --pre chatflow-agent`—no extra provider SDKs required.
 * **Additional Environment Variables:** `GeminiEngine` also accepts `GOOGLE_API_KEY` as a fallback and `GOOGLE_GEMINI_BASE_URL` for custom endpoints. `Ollama` optionally reads `OLLAMA_API_KEY`, and any `OpenAIEngine` preset honors `<PROVIDER>_BASE_URL` (e.g., `OPENAI_BASE_URL`, `OLLAMA_BASE_URL`).
 * **Model Prefix Auto-Detection:** When `provider` is omitted on `Agent`, `resolve_engine()` automatically selects the engine from `agent.model`:
   * **Google Gemini (`GeminiEngine`):** `gemini-*` (or default fallback)
@@ -471,7 +474,7 @@ if __name__ == "__main__":
 Run 100% locally on your machine with zero API costs and full data privacy using [Ollama](https://ollama.com):
 
 1. Start Ollama with Gemma: `ollama run gemma2:9b`
-2. Run the script below (works out of the box with `pip install chatflow-agent`):
+2. Run the script below (works out of the box with `pip install --pre chatflow-agent`):
 
 ```python
 import asyncio
@@ -572,6 +575,12 @@ if __name__ == "__main__":
 * **Advanced Annotations:** Supports `typing.Annotated[T, ...]`, postponed annotations (`from __future__ import annotations`), and variadic `*args` / `**kwargs` (excluded from the schema).
 * **Fail-Fast Validation (`ToolSchemaError`):** If a union or optional annotation contains a custom type that has no concrete JSON schema mapping (e.g., `CustomClass | None`), tool registration raises `ToolSchemaError` immediately instead of silently degrading to `STRING`.
 
+### Runtime Tool Argument Validation
+
+Tools validate model-provided arguments against their Python annotations by default (`validate_args=True`) before synchronous or asynchronous execution. Common numeric strings are coerced to `int` or `float`, numeric values are coerced to `str` for string parameters, and invalid booleans, collections, `NaN`, and infinities are rejected according to the target annotation. A rejected call raises `ToolArgumentValidationError` before the underlying function runs.
+
+Validation also applies when application code calls a decorated `Tool` directly, so tests and direct callers that previously expected a native `TypeError` may now receive `ToolArgumentValidationError`. Disable validation only for tools that intentionally accept raw values, using `@tool(validate_args=False)` or `agent.add_tool(function, validate_args=False)`.
+
 ### Runner Limits & Public Exceptions
 
 | Parameter / Exception | Default / Base | Description |
@@ -582,12 +591,12 @@ if __name__ == "__main__":
 | `ChatFlowError` | `Exception` | Base class for all custom exceptions in `chatflow_agent`. |
 | `ConfigurationError` | `ChatFlowError`, `ValueError` | Raised early on invalid agent, engine, provider, or endpoint configuration (e.g., unsupported provider, contradictory Gemini base_url, missing api_key for custom endpoint). |
 | `ProviderError` | `ChatFlowError` | Raised on LLM API errors, blocked responses, or malformed payloads (error excerpts capped at 1,000 chars). |
-| `ToolSchemaError` | `ChatFlowError`, `TypeError` | Raised at tool definition time when a union member cannot be mapped to a JSON schema type. |
+| `ToolSchemaError` | `ChatFlowError` | Raised at tool definition time when a union member cannot be mapped to a JSON schema type. |
 | `ToolExecutionError` | `ChatFlowError` | Raised when a tool call fails directly via `Tool.execute_async()`. |
 | `ToolArgumentValidationError` | `ToolExecutionError` | Raised when LLM-provided arguments fail schema validation prior to tool execution. |
 | `AgentHandoffError` | `ChatFlowError` | Raised when a handoff targets an unknown or unauthorized agent (not declared in `current_agent.handoffs`). |
 | `ReentrantTurnError` | `ChatFlowError`, `RuntimeError` | Raised when a turn attempts to start another turn for the same session inline. |
-| `SessionDeletedError` | `ChatFlowError`, `RuntimeError` | Raised when a running turn's session is deleted concurrently. |
+| `SessionDeletedError` | `ChatFlowError` | Raised when a running SQLite turn's session is deleted concurrently. |
 | `DependencyError` | `ChatFlowError` | Raised when an optional provider or channel package is not installed. |
 
 ---
@@ -642,7 +651,7 @@ finally:
 * **Per-Session Concurrency Lock (`asyncio.Lock`):** When a user sends multiple messages in rapid succession (e.g., three WhatsApp voice transcriptions or quick texts in 2 seconds), turns of the same session run one at a time, preventing race conditions, overlapping tool executions, or corrupted conversation histories. They run in the order they start waiting for the session (`asyncio.Lock` is fair); that is the order in which the channel starts the turns, which is usually, but not necessarily, the order the messages were sent. With `SQLiteSessionStore`, each queued turn reloads the history, active agent and metadata committed by the previous turn before it starts.
   * **Scope:** the guarantee holds within one process, one store instance and one running event loop (for example, one Uvicorn worker, a Telegram bot, or successive `Runner.run()` calls). Turns for the same session coming from several store instances on the same file, several processes, or several threads with their own event loops are **not** serialized.
   * **Turns started from inside a turn:** code started by a turn (a tool, or a task or thread the tool starts) cannot start another turn of the same session while that turn is running: `runner.run_async()` / `runner.run()` raise `ReentrantTurnError` (a `RuntimeError`) instead of waiting for a lock the current turn may be waiting on. To queue a follow-up turn for the same session, call `runner.spawn_turn(session_id, message)`: it returns an `asyncio.Task` that runs after the current turn ends. Never await that task inside the turn that spawned it; await it (or read its exception) afterwards. Turns of other sessions can be awaited from a tool normally.
-  * **Deleting a session:** `delete()` and `clear()` do not wait for running turns. A turn running when its session is deleted fails with `SessionDeletedError` and leaves nothing behind; a turn waiting for that session starts a new, empty one. Deleting erases a session's data; it does not block its id, so a new message creates the session again.
+  * **Deleting a SQLite session:** `SQLiteSessionStore.delete()` and `clear()` do not wait for running turns. A turn running against `SQLiteSessionStore` when its session is deleted fails with `SessionDeletedError` and leaves no session rows behind; a turn waiting for that session starts a new, empty one. Deleting erases the SQLite session's data; it does not block its id, so a new message creates the session again. This deletion guard is specific to `SQLiteSessionStore` and must not be inferred for the in-memory `SessionStore`.
   * **SQLite and the event loop:** with a file-backed `SQLiteSessionStore`, session reads and writes made by the `Runner`, the WhatsApp webhook and Telegram's `/reset` run in a pool of 4 worker threads owned by the store, so a slow disk or a database locked by another writer does not stop other requests, sessions or timeouts. A SQLite call that has started cannot be interrupted: a cancelled or timed-out turn waits for its running write, rolls back, and only then raises (the timeout is detected on time but reported once the rollback is stored, up to `busy_timeout`, 10 s, per write while the database is locked). The WhatsApp webhook still acknowledges after its deduplication write, and answers HTTP 500 if the lock outlasts `busy_timeout` (Meta then retries). `SessionStore`, `:memory:` SQLite stores, subclasses and custom stores keep running on the event loop. This does not make one SQLite file safe for several workers or processes.
   * **Turn time limit:** `await runner.run_async(session_id, message, turn_timeout=30)` limits the turn itself (keyword-only, seconds). The limit starts once the turn holds the session, so time spent waiting behind earlier turns of the same session does not count. When it expires the turn is cancelled, the session is restored to its state before the turn, and `TimeoutError` is raised. It must be a positive finite number; the default, `None`, sets no limit.
   * **Synchronous tools after a timeout:** a synchronous (`def`) tool runs in a worker thread, and Python cannot stop a callable that has already started. The timeout and conversational rollback are still reported without waiting for that callable indefinitely, but the session remains fenced until the callable really returns or raises. Later turns of that session do not start while it is running; for channels, this residual-work wait counts toward `queue_timeout_seconds`. Other sessions continue normally. If the callable never finishes, the affected session remains fenced (bounded channel requests receive their configured queue-timeout fallback); use timeouts in the tool's own I/O and design side effects to be idempotent. Async tools remain cancellable normally.
@@ -783,7 +792,7 @@ Record what each tool did outside the conversation history (the `operations` tab
 
 ### WhatsApp Channel (Meta Cloud API)
 
-Run a production webhook server compatible with the official Meta WhatsApp Business Cloud API (requires `pip install "chatflow-agent[whatsapp]"`):
+Run a production webhook server compatible with the official Meta WhatsApp Business Cloud API (requires `pip install --pre "chatflow-agent[whatsapp]"`):
 
 ```python
 from chatflow_agent import Agent, Runner, WhatsAppChannel
@@ -837,7 +846,7 @@ if __name__ == "__main__":
 
 ### Telegram Channel
 
-Connect your agent swarm to Telegram with async polling, typing indicators, automatic 4,096-character message splitting, and built-in `/start` and `/reset` commands (requires `pip install "chatflow-agent[telegram]"`):
+Connect your agent swarm to Telegram with async polling, typing indicators, automatic 4,096-character message splitting, and built-in `/start` and `/reset` commands (requires `pip install --pre "chatflow-agent[telegram]"`):
 
 ```python
 from chatflow_agent import Agent, Runner, TelegramChannel
@@ -885,7 +894,7 @@ Ready-to-run reference scripts are available in the [`examples/`](examples/) dir
 * **[`examples/whatsapp_service.py`](examples/whatsapp_service.py):** Minimal WhatsApp Business Cloud API webhook starter with custom tools and specialist handoffs.
 * **[`examples/telegram_persistent_bot.py`](examples/telegram_persistent_bot.py):** Telegram bot with SQLite state persistence across polling restarts.
 * **[`examples/telegram_triage.py`](examples/telegram_triage.py):** Multi-agent Telegram triage bot with order lookup and technical support tools.
-* **[`examples/webhook_api_service.py`](examples/webhook_api_service.py):** Custom FastAPI REST service exposing `/api/chat`, `/api/sessions/{session_id}`, and `/health` with SQLite persistence.
+* **[`examples/webhook_api_service.py`](examples/webhook_api_service.py):** Custom Starlette example application exposing `/api/chat`, `/api/sessions/{session_id}`, and `/health` with SQLite persistence; it is not a built-in webhook channel.
 * **[`examples/local_gemma_cli.py`](examples/local_gemma_cli.py):** 100% offline CLI assistant powered by Google Gemma 2 via Ollama with persistent SQLite sessions.
 * **[`examples/multi_provider_swarm.py`](examples/multi_provider_swarm.py):** Multi-provider swarm coordinating Gemini, local Gemma, Grok, and Claude in a single conversation.
 * **[`examples/cli_multiagent.py`](examples/cli_multiagent.py):** Interactive CLI swarm demonstrating autonomous handoffs between a receptionist, technical support, and billing agent.
