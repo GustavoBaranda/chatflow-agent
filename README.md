@@ -569,6 +569,8 @@ if __name__ == "__main__":
 
 `Tool` inspects Python type annotations and builds provider-compatible schemas automatically:
 
+**JSON-serializable tool results and metadata.** Return values from tools and values stored in session metadata must be JSON-friendly. Across Gemini, OpenAI-compatible and Anthropic engines, `datetime`/`date`/`time` become ISO-8601 strings, Pydantic models use `model_dump(mode="json")`, and other values fall back to `str(...)`. The same codec is used when SQLite persists metadata, so a value that works in memory works on disk. Values that cannot be coerced raise `JsonCodecError`.
+
 * **Primitives:** `str`, `int`, `float`, `bool`
 * **Containers:** `list[T]`, `tuple[T, ...]`, `set[T]`, `frozenset[T]`, `Sequence[T]` (mapped to `ARRAY` with `items` schema), `dict[K, V]`, `Mapping[K, V]` (mapped to `OBJECT`)
 * **Nullability & Unions:** `Optional[T]` / `T | None` preserves `nullable: True`; `int | float` widens to `NUMBER`; multi-type unions (`int | str`) emit `anyOf`.

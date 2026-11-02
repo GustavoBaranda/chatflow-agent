@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult, replacement_tool_call_id
+from chatflow_agent.core.json_codec import encode_tool_content
 from chatflow_agent.exceptions import ConfigurationError, ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
 
@@ -285,11 +286,7 @@ class OpenAIEngine(BaseEngine):
 
             elif msg.role == Role.TOOL and msg.tool_results:
                 for res in msg.tool_results:
-                    content_str = (
-                        json.dumps(res.content)
-                        if isinstance(res.content, (dict, list))
-                        else str(res.content)
-                    )
+                    content_str = encode_tool_content(res.content)
                     messages.append({
                         "role": "tool",
                         "tool_call_id": self._tool_call_id(res.tool_call_id),
@@ -448,6 +445,11 @@ class OpenAIEngine(BaseEngine):
                     "a tool call is not an object"
                 )
             call_id = tc.get("id") or f"call_{idx}"
+            if not isinstance(call_id, str):
+                raise ProviderError(
+                    f"{self.provider.upper()} returned a malformed response: "
+                    "a tool call's id is not a string"
+                )
             func_data = tc.get("function", {})
             if not isinstance(func_data, dict):
                 raise ProviderError(
