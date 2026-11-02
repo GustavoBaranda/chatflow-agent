@@ -19,7 +19,7 @@ import httpx
 
 from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult, system_prompt
 from chatflow_agent.core.engines.openai_compatible import _body_excerpt
-from chatflow_agent.core.json_codec import json_default as _json_default
+from chatflow_agent.core.json_codec import json_default_coercing as _json_default
 from chatflow_agent.exceptions import ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
 
