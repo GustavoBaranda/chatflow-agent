@@ -80,11 +80,10 @@ jobs:
           python -m venv "$VENV"
           if [ -x "$VENV/Scripts/python" ]; then
             PY="$VENV/Scripts/python"
-            PIP="$VENV/Scripts/pip"
           else
             PY="$VENV/bin/python"
-            PIP="$VENV/bin/pip"
           fi
-          "$PIP" install --upgrade pip
-          "$PIP" install dist/*.whl
+          # Invoke pip via the venv Python so Windows can replace/upgrade without
+          # locking Scripts/pip.exe; upgrade itself is optional for this smoke.
+          "$PY" -m pip install dist/*.whl
           "$PY" scripts/smoke_core_wheel.py
