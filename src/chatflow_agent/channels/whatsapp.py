@@ -346,7 +346,8 @@ class WhatsAppChannel(BaseChannel):
             return JSONResponse(
                 content={
                     "status": "success",
-                    "sender": first_sender,
+                    # Mask like logs: response bodies can be captured by proxies/APM (#175).
+                    "sender": _mask_phone(first_sender),
                     "messages_queued": queued_count,
                 }
             )
