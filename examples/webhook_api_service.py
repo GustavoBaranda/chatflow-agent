@@ -1,9 +1,20 @@
-"""Production REST Webhook and API Service for web and mobile frontends.
+"""Local demo REST API service for web and mobile frontends. NOT production-ready.
 
-Provides a clean JSON API endpoint compatible with any frontend (React, Next.js, Vue, mobile apps).
-Uses native SQLiteSessionStore for cross-request session persistence and autonomous multi-agent handoffs.
+Provides a clean JSON API (Starlette + Uvicorn) compatible with any frontend
+(React, Next.js, Vue, mobile apps), backed by SQLiteSessionStore for
+cross-request session persistence and autonomous multi-agent handoffs.
+
+Before putting anything like this on a network, it needs at minimum:
+- authentication on every endpoint (today anyone may POST /api/chat);
+- CORS narrowed from the current wildcard allowlist;
+- protection (or removal) of GET /api/sessions/{session_id}, which returns any
+  session's full history and metadata to any caller;
+- validation of client-supplied metadata (it is stored untyped today);
+- mapping provider errors to a 4xx/5xx with a safe message (today a provider
+  failure surfaces as an HTTP 500).
 """
 
+import contextlib
 import os
 import sys
 
@@ -141,10 +152,19 @@ middleware = [
     )
 ]
 
-app = Starlette(routes=routes, middleware=middleware)
+@contextlib.asynccontextmanager
+async def lifespan(app):
+    # Mirror the old on_shutdown hook: close the SQLite session store
+    # when the application shuts down.
+    yield
+    session_store.close()
+
+
+app = Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
 
 if __name__ == "__main__":
-    print("Starting Webhook API Service on http://0.0.0.0:8000...")
+    print("Starting LOCAL DEMO Webhook API Service on http://0.0.0.0:8000...")
+    print("WARNING: no authentication and wildcard CORS. Do not expose this demo to a network.")
     print("POST /api/chat - Execute agent turn")
     print("GET  /api/sessions/{session_id} - Inspect persisted session")
     print("GET  /health - Liveness check")

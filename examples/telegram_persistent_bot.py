@@ -64,26 +64,29 @@ triage_agent = Agent(
     handoffs=[support_agent, billing_agent],
 )
 
-# 4. Persistent Runner
-session_store = SQLiteSessionStore(
-    db_path="telegram_sessions.db",
-    default_max_turns=25,
-)
+def main() -> None:
+    # 4. Persistent Runner — `with` closes the store when the bot stops.
+    with SQLiteSessionStore(
+        db_path="telegram_sessions.db",
+        default_max_turns=25,
+    ) as session_store:
+        runner = Runner(
+            starting_agent=triage_agent,
+            session_store=session_store,
+        )
 
-runner = Runner(
-    starting_agent=triage_agent,
-    session_store=session_store,
-)
+        # 5. Telegram Channel
+        telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+        channel = TelegramChannel(
+            token=telegram_token,
+            start_message="Welcome. How can we assist you today?",
+        )
+        channel.attach(runner)
 
-# 5. Telegram Channel
-telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-channel = TelegramChannel(
-    token=telegram_token,
-    start_message="Welcome. How can we assist you today?",
-)
-channel.attach(runner)
+        print("Starting Telegram bot polling with SQLite persistence...")
+        print("Database: telegram_sessions.db")
+        channel.run()
+
 
 if __name__ == "__main__":
-    print("Starting Telegram bot polling with SQLite persistence...")
-    print("Database: telegram_sessions.db")
-    channel.run()
+    main()

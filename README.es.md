@@ -20,7 +20,7 @@ pip install --pre chatflow-agent
 
 `chatflow-agent` es un framework asíncrono de Python diseñado para orquestar flujos conversacionales multi-agente en canales de mensajería reales. Inspirado en patrones ligeros de transferencia entre agentes (handoffs), combina motores LLM multi-proveedor con candados de concurrencia por sesión, reversión transaccional ante fallos (rollback), persistencia en SQLite y conectores integrados para **WhatsApp (Meta Cloud API)**, **Telegram** y **CLI**, además de una aplicación de ejemplo para webhooks personalizados.
 
-![Arquitectura de chatflow-agent: Canales de Entrada (WhatsApp, Telegram, Webhook, CLI) conectados a Runner y Memoria de Sesión, orquestando un Agente Triage y un Especialista con handoff autónomo entre pares y herramientas @agent.tool](docs/images/architecture-es.png)
+![Arquitectura de chatflow-agent: Canales de Entrada (WhatsApp, Telegram, Webhook, CLI) conectados a Runner y Memoria de Sesión, orquestando un Agente Triage y un Especialista con handoff autónomo entre pares y herramientas @agent.tool](https://raw.githubusercontent.com/GustavoBaranda/chatflow-agent/main/docs/images/architecture-es.png)
 
 ---
 
@@ -899,9 +899,9 @@ En el directorio [`examples/`](examples/) encontrarás scripts de referencia lis
 * **[`examples/whatsapp_service.py`](examples/whatsapp_service.py):** Servicio base de webhook para WhatsApp Business Cloud API con herramientas personalizadas y handoffs a especialistas.
 * **[`examples/telegram_persistent_bot.py`](examples/telegram_persistent_bot.py):** Bot de Telegram con persistencia de estado en SQLite entre reinicios de polling.
 * **[`examples/telegram_triage.py`](examples/telegram_triage.py):** Bot multi-agente de clasificación (triage) para Telegram con herramientas de seguimiento de pedidos y soporte técnico.
-* **[`examples/webhook_api_service.py`](examples/webhook_api_service.py):** Aplicación de ejemplo personalizada construida con Starlette que expone `/api/chat`, `/api/sessions/{session_id}` y `/health` con persistencia SQLite; no es un canal de webhook integrado.
+* **[`examples/webhook_api_service.py`](examples/webhook_api_service.py):** Aplicación de ejemplo personalizada construida con Starlette que expone `/api/chat`, `/api/sessions/{session_id}` y `/health` con persistencia SQLite; no es un canal de webhook integrado (demo local, sin autenticación; no lista para producción).
 * **[`examples/local_gemma_cli.py`](examples/local_gemma_cli.py):** Asistente de terminal 100% offline e impulsado por Google Gemma 2 vía Ollama con sesiones persistentes en SQLite.
-* **[`examples/multi_provider_swarm.py`](examples/multi_provider_swarm.py):** Enjambre multi-proveedor que coordina Gemini, Gemma local, Grok y Claude en un único flujo conversacional.
+* **[`examples/multi_provider_swarm.py`](examples/multi_provider_swarm.py):** Enjambre multi-proveedor que conecta Gemini, Gemma local, Grok y Claude en un grafo de handoffs y ejecuta una conversación demo corta con credenciales.
 * **[`examples/cli_multiagent.py`](examples/cli_multiagent.py):** Enjambre interactivo en consola que demuestra handoffs autónomos entre recepción, soporte técnico y facturación.
 
 ---
