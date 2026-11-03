@@ -14,6 +14,7 @@ Before putting anything like this on a network, it needs at minimum:
   failure surfaces as an HTTP 500).
 """
 
+import contextlib
 import os
 import sys
 
@@ -151,7 +152,15 @@ middleware = [
     )
 ]
 
-app = Starlette(routes=routes, middleware=middleware, on_shutdown=[session_store.close])
+@contextlib.asynccontextmanager
+async def lifespan(app):
+    # Mirror the old on_shutdown hook: close the SQLite session store
+    # when the application shuts down.
+    yield
+    session_store.close()
+
+
+app = Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
 
 if __name__ == "__main__":
     print("Starting LOCAL DEMO Webhook API Service on http://0.0.0.0:8000...")
