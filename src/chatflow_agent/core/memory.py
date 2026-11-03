@@ -487,6 +487,14 @@ class SQLiteSessionContext(SessionContext):
         self._turn_written_agent = None
         self._turn_written_metadata = None
 
+    def _start_turn_from_loaded_state(self) -> None:
+        """Activate the turn journal using the checkpoint state loaded by ``get_or_create()``."""
+        self._journal_active = True
+        self._turn_inserted_ids = []
+        self._turn_pruned_rows = {}
+        self._turn_written_agent = None
+        self._turn_written_metadata = None
+
     @contextmanager
     def _db(self) -> Generator[sqlite3.Connection, None, None]:
         """Open a DB connection via the owning store when bound, else a direct path connect."""
@@ -1073,9 +1081,9 @@ class SQLiteSessionStore(BaseSessionStore):
     ) -> SessionContext:
         """Retrieve existing session from SQLite or atomically insert and initialize a new one."""
         self._ensure_open()
+        meta_json = dumps_json(metadata or {}, what="Session metadata")
         with self._connection() as conn:
-            meta_json = dumps_json(metadata or {}, what="Session metadata")
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO chatflow_sessions (session_id, active_agent_name, metadata_json)
                 VALUES (?, ?, ?)
@@ -1083,6 +1091,12 @@ class SQLiteSessionStore(BaseSessionStore):
                 """,
                 (session_id, default_agent.name, meta_json),
             )
+            if cursor.rowcount == 1:
+                conn.execute(
+                    "DELETE FROM chatflow_messages WHERE session_id = ?",
+                    (session_id,),
+                )
+
             row = conn.execute(
                 "SELECT active_agent_name, metadata_json FROM chatflow_sessions WHERE session_id = ?",
                 (session_id,),
@@ -1097,12 +1111,12 @@ class SQLiteSessionStore(BaseSessionStore):
                     active_agent = resolved
 
             msg_rows = conn.execute(
-                "SELECT message_json FROM chatflow_messages WHERE session_id = ? ORDER BY id ASC",
+                "SELECT id, message_json FROM chatflow_messages WHERE session_id = ? ORDER BY id ASC",
                 (session_id,),
             ).fetchall()
             history = [Message.model_validate_json(r["message_json"]) for r in msg_rows]
 
-            return SQLiteSessionContext(
+            context = SQLiteSessionContext(
                 session_id=session_id,
                 initial_agent=active_agent,
                 db_path=self._conn_path,
@@ -1114,17 +1128,28 @@ class SQLiteSessionStore(BaseSessionStore):
                 owner=self,
                 default_agent=default_agent,
             )
+            context._checkpoint_agent_name = agent_name
+            context._checkpoint_metadata_json = row["metadata_json"]
+            context._checkpoint_row_ids = {r["id"] for r in msg_rows}
+            return context
 
     def get(self, session_id: str) -> SessionContext | None:
         """Fetch session by ID if it exists in SQLite."""
         self._ensure_open()
         with self._connection() as conn:
+            conn.execute("BEGIN")
             row = conn.execute(
-                "SELECT active_agent_name FROM chatflow_sessions WHERE session_id = ?", (session_id,)
+                "SELECT active_agent_name, metadata_json FROM chatflow_sessions WHERE session_id = ?",
+                (session_id,),
             ).fetchone()
             if row is None:
                 return None
             agent_name = row["active_agent_name"]
+            meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+            msg_rows = conn.execute(
+                "SELECT message_json FROM chatflow_messages WHERE session_id = ? ORDER BY id ASC",
+                (session_id,),
+            ).fetchall()
 
         active_agent = None
         if self._agent_resolver:
@@ -1132,7 +1157,19 @@ class SQLiteSessionStore(BaseSessionStore):
         if active_agent is None:
             active_agent = Agent(name=agent_name, instructions="", model="gemini-2.5-flash")
 
-        return self.get_or_create(session_id, default_agent=active_agent)
+        history = [Message.model_validate_json(r["message_json"]) for r in msg_rows]
+        return SQLiteSessionContext(
+            session_id=session_id,
+            initial_agent=active_agent,
+            db_path=self._conn_path,
+            max_turns=self.default_max_turns,
+            metadata=meta,
+            preloaded_history=history,
+            # Bind only in-memory contexts: disk contexts keep independent file access.
+            store=self if self._in_memory else None,
+            owner=self,
+            default_agent=active_agent,
+        )
 
     def delete(self, session_id: str) -> bool:
         """Remove a session and its message history from SQLite."""

@@ -684,11 +684,15 @@ class Runner:
                         metadata=metadata,
                     ),
                 )
-            # Reload the state committed by turns that held the lock before this one.
-            # Before the turn's checkpoint: nothing has changed yet if it fails.
-            refresh = getattr(session, "refresh", None)
-            if callable(refresh):
-                await _run_blocking(store, refresh)
+                start_journal = getattr(session, "_start_turn_from_loaded_state", None)
+                if callable(start_journal):
+                    start_journal()
+            else:
+                # Reload the state committed by turns that held the lock before this one.
+                # Before the turn's checkpoint: nothing has changed yet if it fails.
+                refresh = getattr(session, "refresh", None)
+                if callable(refresh):
+                    await _run_blocking(store, refresh)
             with _track_sync_work(store, session_id):
                 return await _within(
                     turn_timeout, self._execute_turn(session, user_message, metadata), _TurnTimeout

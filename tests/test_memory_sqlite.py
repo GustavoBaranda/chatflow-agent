@@ -1,6 +1,7 @@
 """Tests for chatflow-agent persistent SQLiteSessionStore."""
 
 import sqlite3
+import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -615,3 +616,309 @@ def test_sqlite_in_memory_context_fails_after_store_close(
         ctx.update_metadata({"x": 1})
     with pytest.raises(RuntimeError, match="closed"):
         ctx.clear_history()
+
+
+@pytest.mark.asyncio
+async def test_runner_turn_on_file_sqlite_coalesces_get_or_create_and_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, test_agents: tuple[Agent, Agent]
+) -> None:
+    """File-backed Runner turns load and start the turn journal in one connection (#174)."""
+    triage, _ = test_agents
+    db_path = tmp_path / "coalesced_turn.db"
+    with SQLiteSessionStore(db_path=db_path) as store:
+        engine = MockEngine(
+            [
+                EngineTurnResult(text="reply 1"),
+                EngineTurnResult(text="reply 2"),
+                EngineTurnResult(text="reply 3"),
+            ]
+        )
+        runner = Runner(starting_agent=triage, session_store=store, engine=engine)
+
+        # Warm up session so it already exists in chatflow_sessions
+        await runner.run_async("s1", "warmup")
+
+        real_connect = sqlite3.connect
+        connect_sql: list[list[str]] = []
+
+        def tracing_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+            conn = real_connect(*args, **kwargs)  # type: ignore[arg-type]
+            stmts: list[str] = []
+            connect_sql.append(stmts)
+            conn.set_trace_callback(lambda sql: stmts.append(" ".join(sql.split())))
+            return conn
+
+        def forbid_refresh(self: SQLiteSessionContext) -> None:
+            raise AssertionError("refresh() must not run after in-lock get_or_create()")
+
+        monkeypatch.setattr("chatflow_agent.core.memory.sqlite3.connect", tracing_connect)
+        monkeypatch.setattr(SQLiteSessionContext, "refresh", forbid_refresh)
+
+        # Turn without metadata: 1 (get_or_create) + 1 (user msg) + 1 (model msg) = 3 connections
+        res_no_meta = await runner.run_async("s1", "hello")
+        assert res_no_meta.content == "reply 2"
+        assert len(connect_sql) == 3
+        # Connection #1 opens a write transaction with INSERT ... ON CONFLICT DO NOTHING before SELECTs
+        assert any(s.upper().startswith("INSERT INTO CHATFLOW_SESSIONS") for s in connect_sql[0])
+
+        # Turn with metadata: 1 (get_or_create) + 1 (update_metadata) + 1 (user) + 1 (model) = 4
+        connect_sql.clear()
+        res_meta = await runner.run_async("s1", "world", metadata={"channel": "tg"})
+        assert res_meta.content == "reply 3"
+        assert len(connect_sql) == 4
+
+    with SQLiteSessionStore(db_path=db_path) as check_store:
+        loaded = check_store.get("s1")
+        assert loaded is not None
+        assert loaded.metadata == {"channel": "tg"}
+        assert [m.content for m in loaded.history] == [
+            "warmup",
+            "reply 1",
+            "hello",
+            "reply 2",
+            "world",
+            "reply 3",
+        ]
+
+
+@pytest.mark.asyncio
+async def test_runner_turn_on_in_memory_and_subclass_sqlite_still_calls_refresh(
+    tmp_path: Path, test_agents: tuple[Agent, Agent]
+) -> None:
+    """Stores that call get_or_create before the lock must still refresh inside the lock."""
+    triage, _ = test_agents
+
+    class SubclassSQLiteStore(SQLiteSessionStore):
+        pass
+
+    orig_refresh = SQLiteSessionContext.refresh
+    for store in (
+        SQLiteSessionStore(":memory:"),
+        SubclassSQLiteStore(tmp_path / "sub.db"),
+    ):
+        try:
+            refresh_calls = 0
+
+            def counting_refresh(self: SQLiteSessionContext) -> None:
+                nonlocal refresh_calls
+                refresh_calls += 1
+                orig_refresh(self)
+
+            SQLiteSessionContext.refresh = counting_refresh  # type: ignore[method-assign]
+            try:
+                runner = Runner(
+                    starting_agent=triage,
+                    session_store=store,
+                    engine=MockEngine([EngineTurnResult(text="ok")]),
+                )
+                await runner.run_async("s1", "hi")
+                assert refresh_calls == 1
+            finally:
+                SQLiteSessionContext.refresh = orig_refresh  # type: ignore[method-assign]
+        finally:
+            store.close()
+
+
+def test_get_or_create_discards_orphaned_messages_and_keeps_journal_inactive_outside_turn(
+    tmp_path: Path, test_agents: tuple[Agent, Agent]
+) -> None:
+    """get_or_create() purges orphaned messages on new sessions and leaves _journal_active False."""
+    triage, _ = test_agents
+    db_path = tmp_path / "orphan.db"
+    with SQLiteSessionStore(db_path=db_path) as store:
+        with store._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO chatflow_messages (session_id, role, content, message_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    "s_orphan",
+                    Role.USER.value,
+                    "stale",
+                    Message(role=Role.USER, content="stale").model_dump_json(),
+                ),
+            )
+
+        ctx = store.get_or_create("s_orphan", default_agent=triage)
+        assert isinstance(ctx, SQLiteSessionContext)
+        assert ctx.history == []
+        assert ctx._checkpoint_row_ids == set()
+        assert ctx._journal_active is False
+
+
+def test_get_or_create_holds_write_transaction_snapshot_and_handles_concurrent_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, test_agents: tuple[Agent, Agent]
+) -> None:
+    """get_or_create() holds a write transaction across both tables and handles concurrent creation."""
+    triage, billing = test_agents
+    db_path = tmp_path / "atomic_goc.db"
+    with SQLiteSessionStore(db_path=db_path) as store:
+        store._agent_resolver = lambda name: {"Triage": triage, "Billing": billing}.get(name)
+        ctx = store.get_or_create("s1", default_agent=triage, metadata={"v": 1})
+        ctx.add_message(Message(role=Role.USER, content="initial"))
+
+        real_connect = sqlite3.connect
+        observed_in_tx: list[bool] = []
+        writer_blocked: list[bool] = []
+
+        def hooking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+            conn = real_connect(*args, **kwargs)  # type: ignore[arg-type]
+
+            def on_sql(sql: str) -> None:
+                normalized = " ".join(sql.split()).upper()
+                if "SELECT ID, MESSAGE_JSON FROM CHATFLOW_MESSAGES" in normalized:
+                    observed_in_tx.append(conn.in_transaction)
+                    other = real_connect(str(db_path), timeout=0.0)
+                    try:
+                        other.execute("PRAGMA busy_timeout = 0")
+                        try:
+                            other.execute(
+                                "DELETE FROM chatflow_sessions WHERE session_id = 's1'"
+                            )
+                            writer_blocked.append(False)
+                        except sqlite3.OperationalError:
+                            writer_blocked.append(True)
+                    finally:
+                        other.close()
+
+            conn.set_trace_callback(on_sql)
+            return conn
+
+        monkeypatch.setattr("chatflow_agent.core.memory.sqlite3.connect", hooking_connect)
+        loaded = store.get_or_create("s1", default_agent=triage)
+        assert observed_in_tx == [True]
+        assert writer_blocked == [True]
+        assert [m.content for m in loaded.history] == ["initial"]
+
+    monkeypatch.setattr("chatflow_agent.core.memory.sqlite3.connect", real_connect)
+
+    # Concurrent creation across two separate stores with pre-existing orphaned messages
+    with SQLiteSessionStore(db_path=db_path) as store_a, SQLiteSessionStore(
+        db_path=db_path
+    ) as store_b:
+        with store_a._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO chatflow_messages (session_id, role, content, message_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    "s_concurrent",
+                    Role.USER.value,
+                    "stale-orphan",
+                    Message(role=Role.USER, content="stale-orphan").model_dump_json(),
+                ),
+            )
+
+        barrier = threading.Barrier(2)
+        results: list[SQLiteSessionContext] = []
+        errors: list[BaseException] = []
+
+        def worker(s: SQLiteSessionStore) -> None:
+            try:
+                barrier.wait(timeout=5.0)
+                c = s.get_or_create("s_concurrent", default_agent=triage, metadata={"ok": True})
+                assert isinstance(c, SQLiteSessionContext)
+                results.append(c)
+            except BaseException as exc:  # pragma: no cover
+                errors.append(exc)
+
+        t1 = threading.Thread(target=worker, args=(store_a,))
+        t2 = threading.Thread(target=worker, args=(store_b,))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10.0)
+        t2.join(timeout=10.0)
+
+        assert errors == []
+        assert len(results) == 2
+        for res in results:
+            assert res.history == []
+            assert res.metadata == {"ok": True}
+            assert res._checkpoint_row_ids == set()
+
+
+@pytest.mark.asyncio
+async def test_runner_file_sqlite_coalesced_turn_surgical_rollback_preserves_external_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, test_agents: tuple[Agent, Agent]
+) -> None:
+    """Coalesced file-SQLite turn initializes journal for surgical rollback under external writes."""
+    triage, billing = test_agents
+    db_path = tmp_path / "surgical_coalesced.db"
+    with SQLiteSessionStore(db_path=db_path, default_max_turns=2) as store:
+        # Seed 2 complete turns (4 messages) so the next turn triggers max_turns pruning
+        warmup_engine = MockEngine(
+            [EngineTurnResult(text="m1"), EngineTurnResult(text="m2")]
+        )
+        warmup_runner = Runner(starting_agent=triage, session_store=store, engine=warmup_engine)
+        await warmup_runner.run_async("s1", "u1", metadata={"base": 1})
+        await warmup_runner.run_async("s1", "u2")
+
+        def forbid_refresh(self: SQLiteSessionContext) -> None:
+            raise AssertionError("refresh() must not be called on coalesced file-SQLite turn")
+
+        monkeypatch.setattr(SQLiteSessionContext, "refresh", forbid_refresh)
+
+        @triage.tool
+        def transfer_to_billing() -> Handoff:
+            # During the turn, an external writer appends a message to s1
+            with sqlite3.connect(str(db_path)) as ext_conn:
+                ext_conn.execute(
+                    """
+                    INSERT INTO chatflow_messages (session_id, role, content, message_json)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        "s1",
+                        Role.USER.value,
+                        "external-msg",
+                        Message(role=Role.USER, content="external-msg").model_dump_json(),
+                    ),
+                )
+                ext_conn.commit()
+            return Handoff(
+                target_agent_name=billing.name,
+                context_updates={"routed": True},
+            )
+
+        class FailingAfterExternalWriteEngine(GeminiEngine):
+            def __init__(self) -> None:
+                super().__init__()
+                self.calls = 0
+
+            async def generate_turn_async(
+                self, agent: Agent, history: list[Message]
+            ) -> EngineTurnResult:
+                self.calls += 1
+                if self.calls == 1:
+                    return EngineTurnResult(
+                        tool_calls=[
+                            ToolCall(id="call_handoff", name="transfer_to_billing", args={})
+                        ]
+                    )
+                raise RuntimeError("boom on second step")
+
+        runner = Runner(
+            starting_agent=triage,
+            session_store=store,
+            engine=FailingAfterExternalWriteEngine(),
+        )
+        with pytest.raises(RuntimeError, match="boom on second step"):
+            await runner.run_async("s1", "u3-failing", metadata={"turn_meta": "discard"})
+
+    with SQLiteSessionStore(db_path=db_path) as check_store:
+        check_store._agent_resolver = lambda name: {"Triage": triage, "Billing": billing}.get(name)
+        restored = check_store.get("s1")
+        assert restored is not None
+        assert restored.active_agent is triage
+        assert restored.metadata == {"base": 1}
+        assert [m.content for m in restored.history] == [
+            "u1",
+            "m1",
+            "u2",
+            "m2",
+            "external-msg",
+        ]
+
+
