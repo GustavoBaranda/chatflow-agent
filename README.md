@@ -860,6 +860,7 @@ runner = Runner(starting_agent=agent)
 channel = TelegramChannel(
     token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",  # From @BotFather
     fallback_message="Sorry, a temporary issue occurred. Please retry in a few moments.",
+    concurrent_updates=True,  # Optional (False by default): process distinct chats concurrently
 )
 
 channel.attach(runner)
