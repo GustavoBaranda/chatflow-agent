@@ -18,6 +18,7 @@ from types import TracebackType
 from typing import Any, TypeVar, cast
 
 from chatflow_agent.core.agent import Agent
+from chatflow_agent.core.json_codec import dumps_json
 from chatflow_agent.exceptions import SessionDeletedError
 from chatflow_agent.types import Message, Role
 
@@ -621,7 +622,7 @@ class SQLiteSessionContext(SessionContext):
         restored_metadata = (
             copy.deepcopy(metadata) if metadata is not None else dict(self.metadata)
         )
-        metadata_json = json.dumps(restored_metadata)
+        metadata_json = dumps_json(restored_metadata, what="Session metadata")
         with self._db() as conn:
             if not self._journal_active:
                 self._write_snapshot(conn, history, restored_agent.name, metadata_json)
@@ -764,7 +765,7 @@ class SQLiteSessionContext(SessionContext):
         if not updates:
             return
         updated_metadata = {**self.metadata, **updates}
-        metadata_json = json.dumps(updated_metadata)
+        metadata_json = dumps_json(updated_metadata, what="Session metadata")
         with self._db() as conn:
             conn.execute(
                 """
@@ -787,7 +788,7 @@ class SQLiteSessionContext(SessionContext):
         updated_metadata = dict(self.metadata)
         if context_updates:
             updated_metadata.update(context_updates)
-        metadata_json = json.dumps(updated_metadata)
+        metadata_json = dumps_json(updated_metadata, what="Session metadata")
         with self._db() as conn:
             conn.execute(
                 """
@@ -1073,7 +1074,7 @@ class SQLiteSessionStore(BaseSessionStore):
         """Retrieve existing session from SQLite or atomically insert and initialize a new one."""
         self._ensure_open()
         with self._connection() as conn:
-            meta_json = json.dumps(metadata or {})
+            meta_json = dumps_json(metadata or {}, what="Session metadata")
             conn.execute(
                 """
                 INSERT INTO chatflow_sessions (session_id, active_agent_name, metadata_json)

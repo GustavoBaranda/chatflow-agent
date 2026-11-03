@@ -22,6 +22,7 @@ from chatflow_agent.core._sync_work import (
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import BaseEngine, GeminiEngine, resolve_engine
 from chatflow_agent.core.engines.gemini import _ClientPool, _lent_pool
+from chatflow_agent.core.json_codec import to_jsonable
 from chatflow_agent.core.memory import (
     BaseSessionStore,
     SessionContext,
@@ -822,7 +823,7 @@ class Runner:
                                 ToolResult(
                                     tool_call_id=call.id,
                                     name=call.name,
-                                    content=raw_output,
+                                    content=to_jsonable(raw_output),
                                 )
                             )
 

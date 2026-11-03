@@ -2,7 +2,6 @@
 
 import asyncio
 import contextvars
-import dataclasses
 import datetime
 import email.utils
 import http.cookiejar
@@ -17,10 +16,10 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, quote_plus, urlsplit
 
 import httpx
-from pydantic import BaseModel
 
 from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult, system_prompt
 from chatflow_agent.core.engines.openai_compatible import _body_excerpt
+from chatflow_agent.core.json_codec import json_default_coercing as _json_default
 from chatflow_agent.exceptions import ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
 
@@ -243,17 +242,6 @@ def _retry_after_seconds(value: str) -> float:
     if when.tzinfo is None:
         when = when.replace(tzinfo=datetime.timezone.utc)
     return max(0.0, (when - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
-
-
-def _json_default(value: Any) -> Any:
-    """Encode what json cannot: structurally where possible, as google-genai did, else as text."""
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return dataclasses.asdict(value)
-    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
-        return value.isoformat()
-    return str(value)
 
 
 class GeminiEngine(BaseEngine):

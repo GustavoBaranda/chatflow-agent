@@ -569,6 +569,8 @@ if __name__ == "__main__":
 
 `Tool` inspects Python type annotations and builds provider-compatible schemas automatically:
 
+**JSON-serializable tool results and metadata.** Return values from tools and values stored in session metadata must be JSON-friendly. Across Gemini, OpenAI-compatible and Anthropic engines, `datetime`/`date`/`time` become ISO-8601 strings and Pydantic models use `model_dump(mode="json")`. SQLite metadata persistence is strict: unsupported objects raise `JsonCodecError` instead of being stored as strings. Tool wire encoding may still coerce remaining leaf values with `str(...)`.
+
 * **Primitives:** `str`, `int`, `float`, `bool`
 * **Containers:** `list[T]`, `tuple[T, ...]`, `set[T]`, `frozenset[T]`, `Sequence[T]` (mapped to `ARRAY` with `items` schema), `dict[K, V]`, `Mapping[K, V]` (mapped to `OBJECT`)
 * **Nullability & Unions:** `Optional[T]` / `T | None` preserves `nullable: True`; `int | float` widens to `NUMBER`; multi-type unions (`int | str`) emit `anyOf`.
@@ -598,6 +600,7 @@ Validation also applies when application code calls a decorated `Tool` directly,
 | `ReentrantTurnError` | `ChatFlowError`, `RuntimeError` | Raised when a turn attempts to start another turn for the same session inline. |
 | `SessionDeletedError` | `ChatFlowError` | Raised when a running SQLite turn's session is deleted concurrently. |
 | `DependencyError` | `ChatFlowError` | Raised when an optional provider or channel package is not installed. |
+| `JsonCodecError` | `ChatFlowError` | Raised when session metadata or other JSON encoding cannot be completed without unsafe coercion. |
 
 ---
 

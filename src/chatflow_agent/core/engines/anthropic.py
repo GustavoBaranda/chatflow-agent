@@ -1,7 +1,6 @@
 """Anthropic Claude engine for chatflow-agent."""
 
 import asyncio
-import json
 import logging
 import random
 import re
@@ -20,6 +19,7 @@ from chatflow_agent.core.engines.openai_compatible import (
     _lowercase_schema_types,
     _resolve_api_key,
 )
+from chatflow_agent.core.json_codec import encode_tool_content
 from chatflow_agent.exceptions import ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
 
@@ -92,11 +92,7 @@ class AnthropicEngine(BaseEngine):
             elif msg.role == Role.TOOL and msg.tool_results:
                 content_blocks = []
                 for res in msg.tool_results:
-                    content_str = (
-                        json.dumps(res.content)
-                        if isinstance(res.content, (dict, list))
-                        else str(res.content)
-                    )
+                    content_str = encode_tool_content(res.content)
                     content_blocks.append({
                         "type": "tool_result",
                         "tool_use_id": _tool_use_id(res.tool_call_id),
