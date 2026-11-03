@@ -1,7 +1,10 @@
 """Tests for TelegramChannel adapter and event handlers."""
 
+import asyncio
 import sys
 from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,9 +12,11 @@ import pytest
 from chatflow_agent.channels.telegram import TelegramChannel
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engine import EngineTurnResult, GeminiEngine
+from chatflow_agent.core.engines import BaseEngine
+from chatflow_agent.core.memory import SessionStore, SQLiteSessionStore
 from chatflow_agent.core.runner import Runner
-from chatflow_agent.exceptions import DependencyError
-from chatflow_agent.types import AgentResponse
+from chatflow_agent.exceptions import ConfigurationError, DependencyError, ReentrantTurnError
+from chatflow_agent.types import AgentResponse, Message, Role
 
 
 class MockEngine(GeminiEngine):
@@ -415,3 +420,407 @@ async def test_telegram_multi_chat_session_isolation(
     assert "message from chat B" in user_contents_b
     assert "message from chat A" not in user_contents_b
     assert "message from chat B" not in user_contents_a
+
+
+class GatedEngine(BaseEngine):
+    """Deterministic engine controlled by per-message asyncio.Events."""
+
+    def __init__(self) -> None:
+        self.entered: dict[str, asyncio.Event] = {}
+        self.gates: dict[str, asyncio.Event] = {}
+        self.fail_messages: set[str] = set()
+        self.call_order: list[tuple[str, list[str | None]]] = []
+
+    def entered_event(self, text: str) -> asyncio.Event:
+        return self.entered.setdefault(text, asyncio.Event())
+
+    async def generate_turn_async(self, agent: Agent, history: list[Message]) -> EngineTurnResult:
+        user_text = next((m.content for m in reversed(history) if m.role == Role.USER), "") or ""
+        self.call_order.append((user_text, [m.content for m in history]))
+        self.entered_event(user_text).set()
+        gate = self.gates.get(user_text)
+        if gate is not None:
+            await gate.wait()
+        if user_text in self.fail_messages:
+            raise RuntimeError(f"Simulated provider failure for {user_text}")
+        return EngineTurnResult(text=f"reply:{user_text}")
+
+
+def _build_text_update(chat_id: int, text: str, username: str = "user") -> tuple[Any, Any]:
+    update = MagicMock()
+    update.effective_chat = MagicMock(id=chat_id, type="private")
+    update.effective_user = MagicMock(id=chat_id + 1000, username=username)
+    update.message = AsyncMock(text=text)
+    context = MagicMock()
+    context.bot = AsyncMock()
+    return update, context
+
+
+def _build_reset_update(
+    chat_id: int,
+    *,
+    chat_type: str = "private",
+    user_id: int = 10,
+    member_status: str | Exception = "administrator",
+) -> tuple[Any, Any]:
+    update = MagicMock()
+    update.effective_chat = MagicMock(id=chat_id, type=chat_type)
+    update.effective_user = MagicMock(id=user_id, username=f"user_{user_id}")
+    update.message = AsyncMock()
+    context = MagicMock()
+    context.bot = AsyncMock()
+    if isinstance(member_status, Exception):
+        context.bot.get_chat_member = AsyncMock(side_effect=member_status)
+    else:
+        context.bot.get_chat_member = AsyncMock(return_value=MagicMock(status=member_status))
+    return update, context
+
+
+def test_telegram_default_constructor_backward_compatibility() -> None:
+    """Default constructor remains sequential (max_concurrent_updates == 1) and compatible (#170)."""
+    token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+    channel = TelegramChannel(token, "Custom start", "Custom fallback", ["message"])
+    assert channel.token == token
+    assert channel.start_message == "Custom start"
+    assert channel.fallback_message == "Custom fallback"
+    assert channel.allowed_updates == ["message"]
+    assert channel.concurrent_updates is False
+    assert channel.app.update_processor.max_concurrent_updates == 1
+
+
+def test_telegram_concurrent_updates_configuration() -> None:
+    """concurrent_updates is keyword-only and configures PTB's update processor (#170)."""
+    from telegram.ext import SimpleUpdateProcessor
+
+    token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+
+    channel_true = TelegramChannel(token=token, concurrent_updates=True)
+    assert channel_true.concurrent_updates is True
+    assert channel_true.app.update_processor.max_concurrent_updates == 256
+
+    channel_int = TelegramChannel(token=token, concurrent_updates=8)
+    assert channel_int.concurrent_updates == 8
+    assert channel_int.app.update_processor.max_concurrent_updates == 8
+
+    custom_processor = SimpleUpdateProcessor(4)
+    channel_custom = TelegramChannel(token=token, concurrent_updates=custom_processor)
+    assert channel_custom.concurrent_updates is custom_processor
+    assert channel_custom.app.update_processor is custom_processor
+
+    # Positional 5th argument must be rejected because concurrent_updates is keyword-only
+    with pytest.raises(TypeError):
+        TelegramChannel(token, "start", "fallback", ["message"], True)  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("invalid_value", [0, -1, -100, "true", None, 1.5, object()])
+def test_telegram_invalid_concurrent_updates_raises_configuration_error(
+    invalid_value: Any,
+) -> None:
+    """Invalid concurrent_updates values fail fast with ConfigurationError (a ValueError) (#170)."""
+    token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+    with pytest.raises(ConfigurationError):
+        TelegramChannel(token=token, concurrent_updates=invalid_value)
+
+
+@pytest.mark.asyncio
+async def test_telegram_slow_turn_in_chat_a_does_not_block_chat_b() -> None:
+    """When updates run concurrently, a slow turn in chat A does not block chat B (#170)."""
+    engine = GatedEngine()
+    engine.gates["slow-A"] = asyncio.Event()
+    runner = Runner(starting_agent=Agent(name="Bot", instructions="x"), engine=engine)
+    channel = TelegramChannel(
+        token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        concurrent_updates=True,
+    )
+    channel.attach(runner)
+
+    update_a, context_a = _build_text_update(1001, "slow-A")
+    update_b, context_b = _build_text_update(2002, "fast-B")
+
+    task_a = asyncio.create_task(channel._handle_message(update_a, context_a))
+    await asyncio.wait_for(engine.entered_event("slow-A").wait(), timeout=2.0)
+    assert not task_a.done()
+
+    # Chat B must complete while Chat A is still blocked on its gate
+    await asyncio.wait_for(channel._handle_message(update_b, context_b), timeout=2.0)
+    update_b.message.reply_text.assert_called_once_with("reply:fast-B")
+    assert not task_a.done()
+
+    engine.gates["slow-A"].set()
+    await asyncio.wait_for(task_a, timeout=2.0)
+    update_a.message.reply_text.assert_called_once_with("reply:slow-A")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_sqlite", [False, True])
+async def test_telegram_same_chat_turns_remain_serialized(
+    use_sqlite: bool, tmp_path: Path
+) -> None:
+    """Two concurrent updates in the same chat remain serialized by Runner's session lock (#170)."""
+    engine = GatedEngine()
+    engine.gates["first"] = asyncio.Event()
+    store = SQLiteSessionStore(tmp_path / "tg_serial.db") if use_sqlite else SessionStore()
+    try:
+        runner = Runner(
+            starting_agent=Agent(name="Bot", instructions="x"),
+            session_store=store,
+            engine=engine,
+        )
+        channel = TelegramChannel(
+            token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+            concurrent_updates=True,
+        )
+        channel.attach(runner)
+
+        update_1, context_1 = _build_text_update(777, "first")
+        update_2, context_2 = _build_text_update(777, "second")
+
+        task_1 = asyncio.create_task(channel._handle_message(update_1, context_1))
+        await asyncio.wait_for(engine.entered_event("first").wait(), timeout=2.0)
+
+        task_2 = asyncio.create_task(channel._handle_message(update_2, context_2))
+        await asyncio.sleep(0.05)
+
+        # Second turn must not enter the engine until the first turn finishes
+        assert not engine.entered_event("second").is_set()
+        assert not task_2.done()
+
+        engine.gates["first"].set()
+        await asyncio.wait_for(asyncio.gather(task_1, task_2), timeout=2.0)
+
+        assert [call[0] for call in engine.call_order] == ["first", "second"]
+        assert engine.call_order[1][1] == ["first", "reply:first", "second"]
+    finally:
+        if isinstance(store, SQLiteSessionStore):
+            store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_sqlite", [False, True])
+async def test_telegram_reset_waits_for_in_flight_turn_in_same_session(
+    use_sqlite: bool, tmp_path: Path
+) -> None:
+    """/reset waits for an in-flight turn of the same session and does not block other chats (#170)."""
+    engine = GatedEngine()
+    engine.gates["in-flight"] = asyncio.Event()
+    store = SQLiteSessionStore(tmp_path / "tg_reset_wait.db") if use_sqlite else SessionStore()
+    try:
+        runner = Runner(
+            starting_agent=Agent(name="Bot", instructions="x"),
+            session_store=store,
+            engine=engine,
+        )
+        channel = TelegramChannel(
+            token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+            concurrent_updates=True,
+        )
+        channel.attach(runner)
+
+        await runner.run_async("555", "seed")
+
+        update_msg, context_msg = _build_text_update(555, "in-flight")
+        turn_task = asyncio.create_task(channel._handle_message(update_msg, context_msg))
+        await asyncio.wait_for(engine.entered_event("in-flight").wait(), timeout=2.0)
+
+        update_reset, context_reset = _build_reset_update(555)
+        reset_task = asyncio.create_task(channel._handle_reset(update_reset, context_reset))
+        await asyncio.sleep(0.05)
+
+        # /reset must wait while the turn holds the session lock
+        assert not reset_task.done()
+        update_reset.message.reply_text.assert_not_called()
+
+        # Meanwhile, another chat can still run and reset freely
+        update_other, context_other = _build_text_update(999, "other-chat")
+        await asyncio.wait_for(channel._handle_message(update_other, context_other), timeout=2.0)
+        update_other.message.reply_text.assert_called_once_with("reply:other-chat")
+
+        # Release the in-flight turn; turn completes first, then reset clears history
+        engine.gates["in-flight"].set()
+        await asyncio.wait_for(turn_task, timeout=2.0)
+        await asyncio.wait_for(reset_task, timeout=2.0)
+
+        update_msg.message.reply_text.assert_called_once_with("reply:in-flight")
+        update_reset.message.reply_text.assert_called_once_with(
+            "Conversation memory has been reset."
+        )
+        session = runner.get_session("555")
+        assert session is not None
+        assert session.history == []
+    finally:
+        if isinstance(store, SQLiteSessionStore):
+            store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_sqlite", [False, True])
+async def test_telegram_reset_cannot_corrupt_failed_turn_rollback(
+    use_sqlite: bool, tmp_path: Path
+) -> None:
+    """A /reset queued during a failing turn waits for rollback and then clears cleanly;
+    a failing turn queued after /reset rolls back to the post-reset empty state (#170)."""
+    engine = GatedEngine()
+    engine.gates["boom"] = asyncio.Event()
+    engine.fail_messages.add("boom")
+    engine.fail_messages.add("boom-after-reset")
+    store = SQLiteSessionStore(tmp_path / "tg_rollback.db") if use_sqlite else SessionStore()
+    try:
+        runner = Runner(
+            starting_agent=Agent(name="Bot", instructions="x"),
+            session_store=store,
+            engine=engine,
+        )
+        channel = TelegramChannel(
+            token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+            concurrent_updates=True,
+        )
+        channel.attach(runner)
+
+        await runner.run_async("888", "initial")
+
+        # Case A: /reset arrives while a turn is in flight and that turn subsequently fails
+        update_msg, context_msg = _build_text_update(888, "boom")
+        turn_task = asyncio.create_task(channel._handle_message(update_msg, context_msg))
+        await asyncio.wait_for(engine.entered_event("boom").wait(), timeout=2.0)
+
+        update_reset, context_reset = _build_reset_update(888)
+        reset_task = asyncio.create_task(channel._handle_reset(update_reset, context_reset))
+        await asyncio.sleep(0.05)
+        assert not reset_task.done()
+
+        # Before releasing the failing turn, history still has initial + boom user message
+        session_during = runner.get_session("888")
+        assert session_during is not None
+        assert [m.content for m in session_during.history] == ["initial", "reply:initial", "boom"]
+
+        engine.gates["boom"].set()
+        await asyncio.wait_for(turn_task, timeout=2.0)
+        await asyncio.wait_for(reset_task, timeout=2.0)
+
+        update_msg.message.reply_text.assert_called_once_with(channel.fallback_message)
+        update_reset.message.reply_text.assert_called_once_with(
+            "Conversation memory has been reset."
+        )
+        session_after = runner.get_session("888")
+        assert session_after is not None
+        assert session_after.history == []
+
+        # Case B: A subsequent failing turn after /reset must roll back to empty history
+        # (never resurrecting pre-reset messages)
+        await runner.run_async("888", "before-second-reset")
+        assert await runner.reset_session_async("888") is True
+        with pytest.raises(RuntimeError, match="Simulated provider failure"):
+            await runner.run_async("888", "boom-after-reset")
+        session_final = runner.get_session("888")
+        assert session_final is not None
+        assert session_final.history == []
+    finally:
+        if isinstance(store, SQLiteSessionStore):
+            store.close()
+
+
+@pytest.mark.asyncio
+async def test_telegram_group_reset_authorization_stays_fail_closed_under_concurrency() -> None:
+    """Unauthorized or failed group /reset checks return before waiting on or touching the session (#170)."""
+    engine = GatedEngine()
+    engine.gates["group-turn"] = asyncio.Event()
+    runner = Runner(starting_agent=Agent(name="Bot", instructions="x"), engine=engine)
+    channel = TelegramChannel(
+        token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        concurrent_updates=True,
+    )
+    channel.attach(runner)
+
+    chat_id = -100777888
+    await runner.run_async(str(chat_id), "preserved")
+
+    update_msg, context_msg = _build_text_update(chat_id, "group-turn")
+    turn_task = asyncio.create_task(channel._handle_message(update_msg, context_msg))
+    await asyncio.wait_for(engine.entered_event("group-turn").wait(), timeout=2.0)
+
+    # 1. Non-admin member attempt completes immediately without waiting for the in-flight turn
+    update_member, ctx_member = _build_reset_update(
+        chat_id, chat_type="supergroup", user_id=50, member_status="member"
+    )
+    await asyncio.wait_for(channel._handle_reset(update_member, ctx_member), timeout=2.0)
+    update_member.message.reply_text.assert_called_once_with(
+        "Only group admins can reset the conversation."
+    )
+
+    # 2. API error during get_chat_member also fails closed immediately
+    update_err, ctx_err = _build_reset_update(
+        chat_id,
+        chat_type="group",
+        user_id=51,
+        member_status=RuntimeError("API down"),
+    )
+    await asyncio.wait_for(channel._handle_reset(update_err, ctx_err), timeout=2.0)
+    update_err.message.reply_text.assert_called_once_with(
+        "Only group admins can reset the conversation."
+    )
+
+    engine.gates["group-turn"].set()
+    await asyncio.wait_for(turn_task, timeout=2.0)
+
+    session = runner.get_session(str(chat_id))
+    assert session is not None
+    assert [m.content for m in session.history] == [
+        "preserved",
+        "reply:preserved",
+        "group-turn",
+        "reply:group-turn",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runner_reset_session_reentrancy_and_missing_session() -> None:
+    """Runner.reset_session_async refuses same-session reentrant calls and returns False when absent (#170)."""
+    agent = Agent(name="ToolBot", instructions="x")
+    runner_holder: list[Runner] = []
+    caught_reentrant: list[ReentrantTurnError] = []
+
+    @agent.tool
+    async def attempt_self_reset() -> str:
+        try:
+            await runner_holder[0].reset_session_async("self-session")
+        except ReentrantTurnError as err:
+            caught_reentrant.append(err)
+            raise
+        return "unreachable"
+
+    class ToolCallingEngine(BaseEngine):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_turn_async(
+            self, agent: Agent, history: list[Message]
+        ) -> EngineTurnResult:
+            self.calls += 1
+            if self.calls == 1:
+                from chatflow_agent.types import ToolCall
+
+                return EngineTurnResult(
+                    tool_calls=[ToolCall(id="call_1", name="attempt_self_reset", args={})]
+                )
+            tool_msg = history[-1]
+            assert tool_msg.tool_results[0].is_error is True
+            return EngineTurnResult(text="handled reentrant error")
+
+    runner = Runner(starting_agent=agent, engine=ToolCallingEngine())
+    runner_holder.append(runner)
+
+    # Non-existent session returns False without creating a session
+    assert await runner.reset_session_async("missing-session") is False
+    assert runner.get_session("missing-session") is None
+
+    # Direct reentrant check via _turn_lineage inside tool execution
+    response = await runner.run_async("self-session", "try reset")
+    assert response.content == "handled reentrant error"
+    assert len(caught_reentrant) == 1
+    session = runner.get_session("self-session")
+    assert session is not None
+    assert len(session.history) > 0
+
+    # Sync wrapper rejects calls from a running event loop
+    with pytest.raises(RuntimeError, match="Runner.reset_session\\(\\) cannot be called"):
+        runner.reset_session("self-session")

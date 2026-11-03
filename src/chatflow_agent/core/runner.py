@@ -551,6 +551,47 @@ class Runner:
         """Fetch session context by session_id."""
         return self.session_store.get(session_id)
 
+    async def reset_session_async(self, session_id: str) -> bool:
+        """Clear a session's conversation history while coordinated with its turn lock.
+
+        Waits for any active turn (and any residual synchronous tool work) on
+        ``session_id`` before clearing its history, and holds the session lock
+        until ``clear_history()`` completes so a subsequent turn cannot start
+        mid-reset. Calling this method for a session from code started by a
+        running turn of that same session raises ``ReentrantTurnError``.
+
+        Returns ``True`` if an existing session was cleared, or ``False`` if
+        no session existed for ``session_id``.
+        """
+        _refuse_nested_turn(self.session_store, session_id)
+        store = self.session_store
+        if isinstance(store, SQLiteSessionStore):
+            lock = store._session_lock(session_id)
+        else:
+            session = store.get(session_id)
+            if session is None:
+                return False
+            lock = session.lock
+
+        async with _hold_session_lock(store, session_id, lock):
+            await _wait_for_sync_work(store, session_id)
+            session = await _run_blocking(store, functools.partial(self.get_session, session_id))
+            if session is None:
+                return False
+            await _run_blocking(store, session.clear_history)
+            return True
+
+    def reset_session(self, session_id: str) -> bool:
+        """Synchronous convenience wrapper for ``reset_session_async``."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.reset_session_async(session_id))
+        raise RuntimeError(
+            "Runner.reset_session() cannot be called from a running event loop. "
+            "Use `await runner.reset_session_async(...)` instead."
+        )
+
     async def run_async(
         self,
         session_id: str,

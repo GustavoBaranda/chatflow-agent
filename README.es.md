@@ -862,6 +862,7 @@ canal_telegram = TelegramChannel(
     token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",  # Token provisto por @BotFather
     fallback_message="Disculpa, ocurrió un inconveniente temporal. Por favor reintenta en breve.",
     start_message="Bienvenido al bot. ¿En qué podemos ayudarte hoy?",
+    concurrent_updates=True,  # Opcional (False por defecto): procesa distintos chats en paralelo
 )
 
 canal_telegram.attach(runner)

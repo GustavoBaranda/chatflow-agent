@@ -2,13 +2,11 @@
 
 import asyncio
 import contextlib
-import functools
 import logging
 from typing import Any
 
 from chatflow_agent.channels.base import BaseChannel, split_message
-from chatflow_agent.core.memory import _run_blocking
-from chatflow_agent.exceptions import DependencyError
+from chatflow_agent.exceptions import ConfigurationError, DependencyError
 from chatflow_agent.types import AgentResponse
 
 logger = logging.getLogger("chatflow_agent.telegram")
@@ -26,30 +24,52 @@ class TelegramChannel(BaseChannel):
             "Por favor intenta nuevamente en unos momentos."
         ),
         allowed_updates: list[str] | None = None,
+        *,
+        concurrent_updates: bool | int | Any = False,
     ) -> None:
         super().__init__()
         self.token = token
         self.start_message = start_message
         self.fallback_message = fallback_message
         self.allowed_updates = allowed_updates
+        self.concurrent_updates = concurrent_updates
 
         # Verify optional dependencies
         try:
             from telegram import Update
             from telegram.constants import ChatAction
-            from telegram.ext import Application, filters
+            from telegram.ext import Application, BaseUpdateProcessor, filters
         except ImportError as err:
             raise DependencyError(
                 feature="TelegramChannel",
                 extra_package="telegram",
             ) from err
 
+        if isinstance(concurrent_updates, bool):
+            pass
+        elif isinstance(concurrent_updates, int):
+            if concurrent_updates < 1:
+                raise ConfigurationError(
+                    "TelegramChannel 'concurrent_updates' must be a positive integer, "
+                    f"a boolean, or a BaseUpdateProcessor instance, got {concurrent_updates!r}."
+                )
+        elif not isinstance(concurrent_updates, BaseUpdateProcessor):
+            raise ConfigurationError(
+                "TelegramChannel 'concurrent_updates' must be a boolean, a positive integer, "
+                f"or a BaseUpdateProcessor instance, got {type(concurrent_updates).__name__}."
+            )
+
         self._update_cls = Update
         self._action_cls = ChatAction
         self._filters = filters
 
         # Initialize python-telegram-bot application
-        self.app = Application.builder().token(self.token).build()
+        self.app = (
+            Application.builder()
+            .token(self.token)
+            .concurrent_updates(self.concurrent_updates)
+            .build()
+        )
         self._setup_handlers()
 
     def _setup_handlers(self) -> None:
@@ -91,13 +111,7 @@ class TelegramChannel(BaseChannel):
 
         chat_id = str(update.effective_chat.id)
         if self.runner:
-            # With a file-backed SQLiteSessionStore these run in worker threads, so a slow
-            # or locked database does not stop the bot's event loop.
-            runner = self.runner
-            store = runner.session_store
-            session = await _run_blocking(store, functools.partial(runner.get_session, chat_id))
-            if session:
-                await _run_blocking(store, session.clear_history)
+            await self.runner.reset_session_async(chat_id)
         await update.message.reply_text("Conversation memory has been reset.")
 
     async def _handle_message(self, update: Any, context: Any) -> None:

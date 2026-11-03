@@ -1,8 +1,8 @@
 """Telegram /reset with a file-backed SQLiteSessionStore under SQLite contention (F-c, test 13).
 
 /reset loads the session and clears its history in worker threads: a locked database no
-longer stops the bot's event loop. Its interaction with a running turn is unchanged (not
-coordinated, as documented under "Reset and Delete During a Turn").
+longer stops the bot's event loop, and /reset coordinates with running turns via the
+per-session lock (#170).
 """
 
 import asyncio
@@ -168,8 +168,8 @@ async def test_13_reset_cancelled_while_clearing_finishes_the_clear_and_does_not
 
 @pytest.mark.asyncio
 async def test_13_reset_during_a_running_turn_behaves_as_before(db: Path) -> None:
-    """Not coordinated with the running turn (documented Known Issue): the reset clears
-    what is stored so far and the turn then stores its reply. Same outcome as before F-c."""
+    """Coordinated with the running turn (#170): /reset waits for the active turn of the
+    same session to release its session lock, then clears the stored history."""
     engine = Engine()
     engine.gates["A"] = asyncio.Event()
     channel, runner = build(db, engine)
@@ -177,8 +177,12 @@ async def test_13_reset_during_a_running_turn_behaves_as_before(db: Path) -> Non
     turn = asyncio.ensure_future(runner.run_async(str(CHAT), "A"))
     await asyncio.wait_for(engine.entered_event("A").wait(), SAFETY)
     update, context = reset_update()
-    await asyncio.wait_for(channel._handle_reset(update, context), SAFETY)
-    assert rows(db, str(CHAT)) == []
+    reset = asyncio.ensure_future(channel._handle_reset(update, context))
+    await asyncio.sleep(0.05)
+    assert not reset.done(), "/reset must wait while the turn holds the session lock"
+    assert rows(db, str(CHAT)) == ["before", "re:before", "A"]
     engine.gates["A"].set()
     assert (await asyncio.wait_for(turn, SAFETY)).content == "re:A"
-    assert rows(db, str(CHAT)) == ["re:A"]
+    await asyncio.wait_for(reset, SAFETY)
+    assert rows(db, str(CHAT)) == []
+    update.message.reply_text.assert_called_once_with("Conversation memory has been reset.")
