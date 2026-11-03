@@ -359,7 +359,7 @@ asyncio.run(demo_new_features())
 ### 3.2. Compatible Behavior Changes & Fail-Closed Validations
 
 * **Fail-Fast Re-Entrant Same-Session Detection (`ReentrantTurnError`):** Calling `runner.run_async(session, ...)` recursively from inside a tool executing on the **same** `session_id` now immediately raises `ReentrantTurnError` instead of deadlocking forever on the per-session lock (PR #120).
-* **Fail-Closed Tool Schema Validation (`ToolSchemaError`):** Registering a `@tool` function with an unmappable parameter type annotation (such as an arbitrary custom class, `object`, `callable`, or bare `tuple`) now raises `ToolSchemaError` at decoration/registration time instead of silently coercing the parameter to `"type": "string"` (PRs #118, #136).
+* **Fail-Closed Tool Schema Validation (`ToolSchemaError`):** Registering a `@tool` function whose union annotation contains an unmappable member (for example, `CustomClass | None`) now raises `ToolSchemaError` at decoration/registration time instead of silently coercing that union member to `"type": "string"` (PRs #118, #136). Unsupported non-union annotations retain the backward-compatible `STRING` fallback, and a bare `tuple` maps to an array schema.
 * **Deleted Session Guard (`SessionDeletedError`):** If a `SQLiteSessionContext` is deleted via `store.delete(session_id)` while a turn is queued or executing, the running turn fails with `SessionDeletedError` and rolls back without leaving rows behind, and a queued turn then starts a new, empty session (PR #120).
 * **`WhatsAppChannel` Structured Timeout Warnings:** Timeout log messages in `WhatsAppChannel` were refined to distinguish queue lock contention (`"Session busy for %s after %ss; skipping turn."`), turn execution timeouts (`"Turn timed out for %s after %ss."`), and backstop expiration (`"Dispatch backstop expired for %s after %ss"` / `"TimeoutError raised while dispatching message from %s"`) (PR #131).
 * **`Runner.run()` Inside an Active Event Loop:** Calling the synchronous helper `Runner.run()` from inside an already running `asyncio` event loop now raises a clear `RuntimeError("Runner.run() cannot be called from a running event loop. Use `await runner.run_async(...)` instead.")` (PR #57).
@@ -372,7 +372,7 @@ asyncio.run(demo_new_features())
 
 ### 3.3. Runtime Tool Argument Validation
 
-* **Validation Enabled by Default (`validate_args=True`):** In `0.4.0`, arguments provided by LLMs are validated and coerced against the tool parameter type annotations before invoking the underlying Python function (both synchronous and asynchronous).
+* **Validation Enabled by Default (`validate_args=True`):** In `0.4.0`, arguments provided by LLMs are validated and coerced against the tool parameter type annotations before invoking the underlying Python function (both synchronous and asynchronous). The same validation applies when application or test code calls a decorated `Tool` directly; invalid direct calls now raise `ToolArgumentValidationError` (a `ToolExecutionError`) rather than the native `TypeError` callers may have received previously.
 * **String Coercion Policy:**
   * LLM providers sometimes output unquoted integers or floats for string-annotated fields (such as `order_id` or `code`). These numeric values are automatically coerced to `str` (e.g., `12345` -> `"12345"`).
   * Booleans (`True`, `False`) and collection types (`list`, `dict`) are **strictly rejected** for `str` annotations and are never silently stringified.

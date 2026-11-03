@@ -9,13 +9,16 @@
 
 🌐 **Idioma:** [English](README.md) | **Español** · [Arquitectura](docs/es/ARCHITECTURE.md) · [Changelog](CHANGELOG.md) · [Contribuciones](#contribuciones) · [Paquete en PyPI](https://pypi.org/project/chatflow-agent/) · [Reportar Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
 
-> **Construye equipos de agentes autónomos para WhatsApp, Telegram, Webhooks y CLI en Python con un núcleo ligero y agnóstico al proveedor.**
+> **Construye equipos de agentes autónomos para WhatsApp, Telegram, aplicaciones de webhook personalizadas y CLI en Python con un núcleo ligero y agnóstico al proveedor.**
 
 ```bash
-pip install chatflow-agent
+pip install --pre chatflow-agent
 ```
 
-`chatflow-agent` es un framework asíncrono de Python diseñado para orquestar flujos conversacionales multi-agente en canales de mensajería reales. Inspirado en patrones ligeros de transferencia entre agentes (handoffs), combina motores LLM multi-proveedor con candados de concurrencia por sesión, reversión transaccional ante fallos (rollback), persistencia en SQLite y conectores listos para producción en **WhatsApp (Meta Cloud API)**, **Telegram**, **Webhooks con FastAPI** y **CLI**.
+> [!NOTE]
+> La documentación describe actualmente la versión preliminar `0.4.0`. Hasta que `0.4.0` sea estable, usa `--pre`; `pip install chatflow-agent` sin esa opción selecciona la versión estable `0.3.x` más reciente, que no incluye todas las APIs documentadas abajo.
+
+`chatflow-agent` es un framework asíncrono de Python diseñado para orquestar flujos conversacionales multi-agente en canales de mensajería reales. Inspirado en patrones ligeros de transferencia entre agentes (handoffs), combina motores LLM multi-proveedor con candados de concurrencia por sesión, reversión transaccional ante fallos (rollback), persistencia en SQLite y conectores integrados para **WhatsApp (Meta Cloud API)**, **Telegram** y **CLI**, además de una aplicación de ejemplo para webhooks personalizados.
 
 ![Arquitectura de chatflow-agent: Canales de Entrada (WhatsApp, Telegram, Webhook, CLI) conectados a Runner y Memoria de Sesión, orquestando un Agente Triage y un Especialista con handoff autónomo entre pares y herramientas @agent.tool](https://raw.githubusercontent.com/GustavoBaranda/chatflow-agent/main/docs/images/architecture-es.png)
 
@@ -43,7 +46,7 @@ pip install chatflow-agent
 ## Características principales
 
 * **Núcleo ultraligero:** Solo 2 dependencias de ejecución en el núcleo (`pydantic>=2.6.0`, `httpx>=0.27.0`). Todos los motores LLM (**Google Gemini**, **OpenAI**, **Anthropic Claude**, **xAI Grok**, **DeepSeek**, **Groq**, **Ollama** y **vLLM**) funcionan de serie mediante cliente REST `httpx` nativo sin cadenas pesadas de SDKs; las dependencias opcionales de los canales se instalan únicamente cuando se necesitan.
-* **Conectores omnicanal:** Adaptadores listos para producción para **WhatsApp (Meta Cloud API oficial y webhooks genéricos)**, **Telegram**, **Webhooks con FastAPI** y **CLI** interactiva.
+* **Conectores omnicanal:** Adaptadores integrados para **WhatsApp (Meta Cloud API)**, **Telegram** y **CLI** interactiva, además de una aplicación de ejemplo para webhooks personalizados construida con Starlette.
 * **Libertad multi-proveedor:** Ejecuta agentes sobre **Google Gemini**, **OpenAI**, **Anthropic Claude**, **xAI Grok**, **DeepSeek**, **Groq** o modelos locales mediante **Ollama** (**Google Gemma**, Llama, Mistral, Qwen, Phi) y **vLLM**, incluso combinando distintos proveedores en un mismo enjambre.
 * **Handoffs autónomos entre pares:** Los agentes delegan conversaciones dinámicamente a especialistas según la intención del usuario, conservando el agente activo y los metadatos de la sesión entre turnos y reinicios del servidor.
 * **Resiliencia en producción:** Serialización por sesión mediante `asyncio.Lock`, ejecución en pool de hilos de trabajo para bases `SQLiteSessionStore` en disco sin bloquear el event loop, rollback automático de historial/agente/metadatos ante errores o timeouts a mitad de turno y escudo anti-500 para webhooks de Meta Cloud API.
@@ -59,19 +62,19 @@ Instala únicamente los extras que tu despliegue requiera:
 
 ```bash
 # Núcleo base (todos los motores LLM vía HTTPX, almacenes SQLite y en memoria, canal CLI)
-pip install chatflow-agent
+pip install --pre chatflow-agent
 
 # Con conector de Webhooks para WhatsApp (FastAPI + Uvicorn)
-pip install "chatflow-agent[whatsapp]"
+pip install --pre "chatflow-agent[whatsapp]"
 
 # Con conector de Bot para Telegram (python-telegram-bot)
-pip install "chatflow-agent[telegram]"
+pip install --pre "chatflow-agent[telegram]"
 
 # Con dependencias para servicio Webhook FastAPI personalizado (FastAPI + Uvicorn)
-pip install "chatflow-agent[webhook]"
+pip install --pre "chatflow-agent[webhook]"
 
 # Paquete completo de canales (extras telegram, whatsapp y webhook)
-pip install "chatflow-agent[all]"
+pip install --pre "chatflow-agent[all]"
 ```
 
 ---
@@ -395,7 +398,7 @@ load_dotenv()
 | **Ollama (Local)** | `OpenAIEngine` | *No requiere clave* | `provider="ollama"`, `model="gemma2:9b"` |
 | **vLLM / Servidor Local** | `OpenAIEngine` | *No requiere en `localhost`* | `base_url="http://localhost:8000/v1"`, `model="..."` |
 
-* **Motores HTTPX integrados:** Todos los motores (`GeminiEngine`, `OpenAIEngine` y `AnthropicEngine`) vienen incluidos de serie con `pip install chatflow-agent`, sin necesidad de instalar SDKs adicionales por proveedor.
+* **Motores HTTPX integrados:** Todos los motores (`GeminiEngine`, `OpenAIEngine` y `AnthropicEngine`) vienen incluidos de serie con `pip install --pre chatflow-agent`, sin necesidad de instalar SDKs adicionales por proveedor.
 * **Variables de entorno adicionales:** `GeminiEngine` también acepta `GOOGLE_API_KEY` como alternativa y `GOOGLE_GEMINI_BASE_URL` para endpoints personalizados. `Ollama` lee opcionalmente `OLLAMA_API_KEY`, y cualquier preset de `OpenAIEngine` respeta `<PROVEEDOR>_BASE_URL` (por ejemplo, `OPENAI_BASE_URL`, `OLLAMA_BASE_URL`).
 * **Autodetección por prefijo de modelo:** Cuando se omite `provider` en `Agent`, `resolve_engine()` selecciona automáticamente el motor según el prefijo de `agent.model`:
   * **Google Gemini (`GeminiEngine`):** `gemini-*` (o motor por defecto)
@@ -471,7 +474,7 @@ if __name__ == "__main__":
 Ejecuta agentes de forma 100% local en tu equipo, sin costos de API y con privacidad total de datos utilizando [Ollama](https://ollama.com):
 
 1. Inicia Ollama con Gemma: `ollama run gemma2:9b` (o `gemma2:2b`)
-2. Ejecuta este script (funciona de serie con `pip install chatflow-agent`):
+2. Ejecuta este script (funciona de serie con `pip install --pre chatflow-agent`):
 
 ```python
 import asyncio
@@ -564,6 +567,9 @@ if __name__ == "__main__":
 
 ### Esquemas de parámetros de herramientas y `ToolSchemaError`
 
+**Resultados de herramientas y metadatos serializables en JSON.** Los valores devueltos por las herramientas y los metadatos de sesión deben ser compatibles con JSON. En los motores Gemini, OpenAI-compatible y Anthropic, `datetime`/`date`/`time` pasan a cadenas ISO-8601 y los modelos Pydantic usan `model_dump(mode="json")`. La persistencia de metadatos en SQLite es estricta: los objetos no soportados lanzan `JsonCodecError` en lugar de guardarse como cadenas. La codificación hacia el proveedor puede seguir convirtiendo hojas restantes con `str(...)`.
+
+
 `Tool` inspecciona las anotaciones de tipos de Python y genera esquemas compatibles con cada proveedor de forma automática:
 
 * **Tipos primitivos:** `str`, `int`, `float`, `bool`
@@ -571,6 +577,12 @@ if __name__ == "__main__":
 * **Nulabilidad y uniones:** `Optional[T]` / `T | None` conserva `nullable: True`; `int | float` se amplía a `NUMBER`; las uniones de múltiples tipos (`int | str`) generan `anyOf`.
 * **Anotaciones avanzadas:** Soporta `typing.Annotated[T, ...]`, anotaciones pospuestas (`from __future__ import annotations`) y argumentos variádicos `*args` / `**kwargs` (excluidos del esquema).
 * **Validación fail-fast (`ToolSchemaError`):** Si una unión o tipo opcional contiene una clase personalizada sin mapeo concreto a JSON Schema (por ejemplo, `MiClase | None`), el registro de la herramienta lanza `ToolSchemaError` inmediatamente en lugar de degradarse silenciosamente a `STRING`.
+
+### Validación de argumentos de tools en tiempo de ejecución
+
+Las tools validan por defecto (`validate_args=True`) los argumentos provistos por el modelo conforme a sus anotaciones de Python antes de una ejecución síncrona o asíncrona. Las cadenas numéricas habituales se convierten a `int` o `float`, los valores numéricos se convierten a `str` para parámetros de cadena y los booleanos, contenedores, `NaN` e infinitos no válidos se rechazan según la anotación de destino. Una llamada rechazada lanza `ToolArgumentValidationError` antes de ejecutar la función subyacente.
+
+La validación también se aplica cuando el código de la aplicación llama directamente a una `Tool` decorada, por lo que las pruebas y los llamadores directos que antes esperaban un `TypeError` nativo ahora pueden recibir `ToolArgumentValidationError`. Desactiva la validación solo para tools que acepten valores sin procesar intencionalmente, mediante `@tool(validate_args=False)` o `agent.add_tool(funcion, validate_args=False)`.
 
 ### Límites del Runner y excepciones públicas
 
@@ -582,13 +594,14 @@ if __name__ == "__main__":
 | `ChatFlowError` | `Exception` | Clase base de todas las excepciones públicas de `chatflow_agent`. |
 | `ConfigurationError` | `ChatFlowError`, `ValueError` | Lanzada tempranamente ante configuración inválida de agente, motor, proveedor o endpoint (p. ej., proveedor no soportado, base_url contradictorio en Gemini, api_key faltante en endpoint personalizado). |
 | `ProviderError` | `ChatFlowError` | Lanzada ante errores de API del proveedor LLM, respuestas bloqueadas o payloads malformados (extractos acotados a 1.000 caracteres). |
-| `ToolSchemaError` | `ChatFlowError`, `TypeError` | Lanzada al registrar una herramienta cuando un miembro de una unión no puede mapearse a JSON Schema. |
+| `ToolSchemaError` | `ChatFlowError` | Lanzada al registrar una herramienta cuando un miembro de una unión no puede mapearse a JSON Schema. |
 | `ToolExecutionError` | `ChatFlowError` | Lanzada cuando falla la ejecución directa de una herramienta mediante `Tool.execute_async()`. |
 | `ToolArgumentValidationError` | `ToolExecutionError` | Lanzada cuando los argumentos provistos por el LLM no superan la validación de esquema antes de ejecutar la herramienta. |
 | `AgentHandoffError` | `ChatFlowError` | Lanzada cuando un handoff apunta a un agente destino desconocido o no autorizado (no declarado en `current_agent.handoffs`). |
 | `ReentrantTurnError` | `ChatFlowError`, `RuntimeError` | Lanzada cuando un turno intenta iniciar otro turno de la misma sesión en línea. |
-| `SessionDeletedError` | `ChatFlowError`, `RuntimeError` | Lanzada cuando la sesión de un turno en curso se elimina concurrentemente. |
+| `SessionDeletedError` | `ChatFlowError` | Lanzada cuando la sesión SQLite de un turno en curso se elimina concurrentemente. |
 | `DependencyError` | `ChatFlowError` | Lanzada cuando falta instalar un paquete opcional de proveedor o canal. |
+| `JsonCodecError` | `ChatFlowError` | Lanzada cuando la codificación JSON de metadatos de sesión u otros valores no puede completarse sin una coerción insegura. |
 
 ---
 
@@ -642,7 +655,7 @@ finally:
 * **Candado de concurrencia por sesión (`asyncio.Lock`):** Si un usuario envía varios mensajes consecutivos en pocos segundos (mensajes rápidos o transcripciones de notas de voz), los turnos de una misma sesión se ejecutan de a uno. Esto evita condiciones de carrera, ejecuciones cruzadas de herramientas y corrupción de historiales. Se ejecutan en el orden en que empiezan a esperar la sesión (`asyncio.Lock` es justo); ese es el orden en que el canal inicia los turnos, que normalmente, aunque no siempre, coincide con el orden en que se enviaron los mensajes. Con `SQLiteSessionStore`, cada turno en espera vuelve a leer el historial, el agente activo y la metadata confirmados por el turno anterior antes de empezar.
   * **Alcance:** la garantía vale dentro de un proceso, una instancia del store y un event loop en ejecución (por ejemplo, un worker de Uvicorn, un bot de Telegram o llamadas sucesivas a `Runner.run()`). **No** se serializan los turnos de una misma sesión que provienen de varias instancias del store sobre el mismo archivo, de varios procesos o de varios threads con su propio event loop.
   * **Turnos iniciados desde un turno:** el código que inicia un turno (una tool, o una tarea o thread que la tool inicia) no puede iniciar otro turno de la misma sesión mientras ese turno se ejecuta: `runner.run_async()` / `runner.run()` lanzan `ReentrantTurnError` (un `RuntimeError`) en lugar de esperar un cerrojo que el turno actual podría estar esperando. Para encolar un turno posterior de la misma sesión, usa `runner.spawn_turn(session_id, mensaje)`: devuelve una `asyncio.Task` que se ejecuta cuando termina el turno actual. Nunca esperes esa tarea dentro del turno que la creó; espérala (o lee su excepción) después. Los turnos de otras sesiones pueden esperarse desde una tool normalmente.
-  * **Borrar una sesión:** `delete()` y `clear()` no esperan a los turnos en curso. Un turno que se está ejecutando cuando se borra su sesión falla con `SessionDeletedError` sin dejar nada guardado; un turno que esperaba esa sesión inicia una sesión nueva y vacía. Borrar elimina los datos de la sesión; no bloquea su id, por lo que un mensaje nuevo vuelve a crearla.
+  * **Borrar una sesión SQLite:** `SQLiteSessionStore.delete()` y `clear()` no esperan a los turnos en curso. Un turno que se ejecuta contra `SQLiteSessionStore` cuando se borra su sesión falla con `SessionDeletedError` sin dejar filas de sesión; un turno que esperaba esa sesión inicia una sesión nueva y vacía. Borrar elimina los datos de la sesión SQLite; no bloquea su id, por lo que un mensaje nuevo vuelve a crearla. Esta protección ante eliminaciones es específica de `SQLiteSessionStore` y no debe inferirse para el almacén en memoria `SessionStore`.
   * **SQLite y el event loop:** con un `SQLiteSessionStore` en archivo, las lecturas y escrituras de sesión del `Runner`, del webhook de WhatsApp y del `/reset` de Telegram se ejecutan en un pool de 4 hilos propio del store, por lo que un disco lento o una base bloqueada por otro escritor no detiene otras solicitudes, sesiones ni timeouts. Una llamada SQLite ya iniciada no se puede interrumpir: un turno cancelado o vencido espera su escritura en curso, se revierte y recién entonces lanza la excepción (el timeout se detecta a tiempo, pero se informa cuando el rollback quedó guardado, hasta `busy_timeout`, 10 s, por escritura mientras la base está bloqueada). El webhook de WhatsApp sigue confirmando después de su escritura de deduplicación, y responde HTTP 500 si el bloqueo dura más que `busy_timeout` (Meta reintenta). `SessionStore`, los stores SQLite `:memory:`, las subclases y los stores personalizados siguen ejecutándose en el event loop. Esto no hace seguro un mismo archivo SQLite para varios workers o procesos.
   * **Límite de tiempo del turno:** `await runner.run_async(session_id, mensaje, turn_timeout=30)` limita el turno en sí (solo por nombre, en segundos). El límite empieza cuando el turno tiene la sesión, por lo que el tiempo que espera detrás de turnos anteriores de la misma sesión no cuenta. Al vencer, el turno se cancela, la sesión vuelve al estado previo al turno y se lanza `TimeoutError`. Debe ser un número positivo y finito; el valor por defecto, `None`, no pone límite.
   * **Tools síncronas después de un timeout:** una tool síncrona (`def`) se ejecuta en un thread de trabajo, y Python no puede detener un callable que ya comenzó. El timeout y el rollback conversacional se informan sin esperar indefinidamente ese callable, pero la sesión permanece protegida hasta que realmente retorna o lanza una excepción. Los turnos posteriores de esa sesión no comienzan mientras siga ejecutándose; para los canales, esta espera por trabajo residual cuenta dentro de `queue_timeout_seconds`. Las demás sesiones continúan normalmente. Si el callable nunca termina, la sesión afectada permanece protegida (las solicitudes de canal acotadas reciben el fallback configurado por timeout de cola); configura timeouts en el I/O de la propia tool y diseña efectos secundarios idempotentes. Las tools asíncronas conservan su cancelación normal.
@@ -783,7 +796,7 @@ Registra lo que hizo cada tool fuera del historial de la conversación (la tabla
 
 ### Canal de WhatsApp (Meta Cloud API)
 
-Ejecuta un servidor de webhook listo para producción, compatible con la API oficial de WhatsApp Business en Meta Cloud (requiere `pip install "chatflow-agent[whatsapp]"`):
+Ejecuta un servidor de webhook listo para producción, compatible con la API oficial de WhatsApp Business en Meta Cloud (requiere `pip install --pre "chatflow-agent[whatsapp]"`):
 
 ```python
 from chatflow_agent import Agent, Runner, WhatsAppChannel
@@ -837,7 +850,7 @@ if __name__ == "__main__":
 
 ### Canal de Telegram
 
-Conecta tu enjambre de agentes a Telegram con polling asíncrono, indicadores de escritura, fragmentación automática de mensajes a 4.096 caracteres y soporte nativo de los comandos `/start` y `/reset` (requiere `pip install "chatflow-agent[telegram]"`):
+Conecta tu enjambre de agentes a Telegram con polling asíncrono, indicadores de escritura, fragmentación automática de mensajes a 4.096 caracteres y soporte nativo de los comandos `/start` y `/reset` (requiere `pip install --pre "chatflow-agent[telegram]"`):
 
 ```python
 from chatflow_agent import Agent, Runner, TelegramChannel
@@ -886,7 +899,7 @@ En el directorio [`examples/`](examples/) encontrarás scripts de referencia lis
 * **[`examples/whatsapp_service.py`](examples/whatsapp_service.py):** Servicio base de webhook para WhatsApp Business Cloud API con herramientas personalizadas y handoffs a especialistas.
 * **[`examples/telegram_persistent_bot.py`](examples/telegram_persistent_bot.py):** Bot de Telegram con persistencia de estado en SQLite entre reinicios de polling.
 * **[`examples/telegram_triage.py`](examples/telegram_triage.py):** Bot multi-agente de clasificación (triage) para Telegram con herramientas de seguimiento de pedidos y soporte técnico.
-* **[`examples/webhook_api_service.py`](examples/webhook_api_service.py):** Servicio REST API local-demo (Starlette, sin autenticación) que expone `/api/chat`, `/api/sessions/{session_id}` y `/health` con persistencia SQLite.
+* **[`examples/webhook_api_service.py`](examples/webhook_api_service.py):** Aplicación de ejemplo personalizada construida con Starlette que expone `/api/chat`, `/api/sessions/{session_id}` y `/health` con persistencia SQLite; no es un canal de webhook integrado (demo local, sin autenticación; no lista para producción).
 * **[`examples/local_gemma_cli.py`](examples/local_gemma_cli.py):** Asistente de terminal 100% offline e impulsado por Google Gemma 2 vía Ollama con sesiones persistentes en SQLite.
 * **[`examples/multi_provider_swarm.py`](examples/multi_provider_swarm.py):** Enjambre multi-proveedor que conecta Gemini, Gemma local, Grok y Claude en un grafo de handoffs y ejecuta una conversación demo corta con credenciales.
 * **[`examples/cli_multiagent.py`](examples/cli_multiagent.py):** Enjambre interactivo en consola que demuestra handoffs autónomos entre recepción, soporte técnico y facturación.

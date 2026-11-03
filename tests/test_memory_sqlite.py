@@ -17,6 +17,7 @@ from chatflow_agent import (
 from chatflow_agent.core import memory
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engines import EngineTurnResult, GeminiEngine
+from chatflow_agent.exceptions import JsonCodecError
 from chatflow_agent.memory import SQLiteSessionStore as SQLiteStoreFromMemory
 from chatflow_agent.types import Handoff, Message, Role, ToolCall
 
@@ -41,7 +42,9 @@ class MockEngine(GeminiEngine):
 @pytest.fixture
 def test_agents() -> tuple[Agent, Agent]:
     billing = Agent(name="Billing", instructions="You handle invoices and billing inquiries.")
-    triage = Agent(name="Triage", instructions="You route users to specialists.", handoffs=[billing])
+    triage = Agent(
+        name="Triage", instructions="You route users to specialists.", handoffs=[billing]
+    )
     return triage, billing
 
 
@@ -56,7 +59,9 @@ def test_sqlite_context_initialization(tmp_path: Path, test_agents: tuple[Agent,
     db_path = tmp_path / "sessions.db"
     store = SQLiteSessionStore(db_path=db_path, default_max_turns=5)
 
-    ctx = store.get_or_create(session_id="user_123", default_agent=triage, metadata={"channel": "whatsapp"})
+    ctx = store.get_or_create(
+        session_id="user_123", default_agent=triage, metadata={"channel": "whatsapp"}
+    )
 
     assert ctx.session_id == "user_123"
     assert ctx.active_agent.name == "Triage"
@@ -65,7 +70,9 @@ def test_sqlite_context_initialization(tmp_path: Path, test_agents: tuple[Agent,
     assert "user_123" in store.list_sessions()
 
 
-def test_sqlite_messages_persistence_and_reload(tmp_path: Path, test_agents: tuple[Agent, Agent]) -> None:
+def test_sqlite_messages_persistence_and_reload(
+    tmp_path: Path, test_agents: tuple[Agent, Agent]
+) -> None:
     triage, _ = test_agents
     db_path = tmp_path / "sessions.db"
 
@@ -112,7 +119,9 @@ def test_sqlite_sliding_window_pruning(tmp_path: Path, test_agents: tuple[Agent,
     assert reloaded_ctx.history[-1].content == "Message 5"
 
 
-def test_sqlite_active_agent_switch_persistence(tmp_path: Path, test_agents: tuple[Agent, Agent]) -> None:
+def test_sqlite_active_agent_switch_persistence(
+    tmp_path: Path, test_agents: tuple[Agent, Agent]
+) -> None:
     triage, billing = test_agents
     db_path = tmp_path / "sessions.db"
 
@@ -145,7 +154,7 @@ def test_sqlite_handoff_state_is_unchanged_when_context_cannot_be_serialized(
         metadata={"customer_tier": "standard"},
     )
 
-    with pytest.raises(TypeError, match="not JSON serializable"):
+    with pytest.raises(JsonCodecError):
         session.set_active_agent(billing, {"invalid": object()})
 
     assert session.active_agent.name == "Triage"
@@ -153,9 +162,7 @@ def test_sqlite_handoff_state_is_unchanged_when_context_cannot_be_serialized(
 
     reloaded_store = SQLiteSessionStore(db_path=db_path)
     reloaded_store.set_agent_resolver(lambda name: {"Triage": triage, "Billing": billing}.get(name))
-    reloaded_session = reloaded_store.get_or_create(
-        "user_invalid_context", default_agent=triage
-    )
+    reloaded_session = reloaded_store.get_or_create("user_invalid_context", default_agent=triage)
     assert reloaded_session.active_agent.name == "Triage"
     assert reloaded_session.metadata == {"customer_tier": "standard"}
 
@@ -169,7 +176,7 @@ def test_sqlite_metadata_update_rejects_unserializable_values_without_changing_s
         "session", triage, metadata={"customer_tier": "standard"}
     )
 
-    with pytest.raises(TypeError, match="not JSON serializable"):
+    with pytest.raises(JsonCodecError):
         session.update_metadata({"customer_tier": "VIP", "invalid": object()})
 
     assert session.metadata == {"customer_tier": "standard"}
@@ -182,8 +189,10 @@ def test_sqlite_metadata_update_rejects_unserializable_values_without_changing_s
 
 @pytest.mark.parametrize("failure", ["statement", "commit"])
 def test_sqlite_metadata_update_preserves_state_when_persistence_fails(
-    tmp_path: Path, test_agents: tuple[Agent, Agent],
-    monkeypatch: pytest.MonkeyPatch, failure: str,
+    tmp_path: Path,
+    test_agents: tuple[Agent, Agent],
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
 ) -> None:
     triage, _ = test_agents
     db_path = tmp_path / "metadata.db"
@@ -193,15 +202,18 @@ def test_sqlite_metadata_update_preserves_state_when_persistence_fails(
     connect = memory._get_sqlite_connection
 
     def authorize(
-        action: int, operation: str | None, _column: str | None,
-        _database: str | None, _source: str | None,
+        action: int,
+        operation: str | None,
+        _column: str | None,
+        _database: str | None,
+        _source: str | None,
     ) -> int:
         denied = (
-            failure == "statement" and action == sqlite3.SQLITE_UPDATE
+            failure == "statement"
+            and action == sqlite3.SQLITE_UPDATE
             and operation == "chatflow_sessions"
         ) or (
-            failure == "commit" and action == sqlite3.SQLITE_TRANSACTION
-            and operation == "COMMIT"
+            failure == "commit" and action == sqlite3.SQLITE_TRANSACTION and operation == "COMMIT"
         )
         return sqlite3.SQLITE_DENY if denied else sqlite3.SQLITE_OK
 
@@ -251,15 +263,17 @@ async def test_sqlite_handoff_context_updates_reach_tools_and_survive_restart(
         observed_context.update(context)
         return context
 
-    mock_engine = MockEngine([
-        EngineTurnResult(
-            tool_calls=[ToolCall(id="call_handoff", name="transfer_with_context", args={})]
-        ),
-        EngineTurnResult(
-            tool_calls=[ToolCall(id="call_context", name="get_customer_context", args={})]
-        ),
-        EngineTurnResult(text="Billing context received."),
-    ])
+    mock_engine = MockEngine(
+        [
+            EngineTurnResult(
+                tool_calls=[ToolCall(id="call_handoff", name="transfer_with_context", args={})]
+            ),
+            EngineTurnResult(
+                tool_calls=[ToolCall(id="call_context", name="get_customer_context", args={})]
+            ),
+            EngineTurnResult(text="Billing context received."),
+        ]
+    )
     runner1 = Runner(starting_agent=triage, session_store=store1, engine=mock_engine)
 
     response = await runner1.run_async(
@@ -314,23 +328,27 @@ def test_sqlite_delete_and_clear_history(tmp_path: Path, test_agents: tuple[Agen
 
 
 @pytest.mark.asyncio
-async def test_sqlite_runner_survives_reboot(tmp_path: Path, test_agents: tuple[Agent, Agent]) -> None:
+async def test_sqlite_runner_survives_reboot(
+    tmp_path: Path, test_agents: tuple[Agent, Agent]
+) -> None:
     triage, billing = test_agents
     db_path = tmp_path / "runner_sessions.db"
 
     # Server Instance 1: Runner runs turn with handoff to Billing
-    mock_engine1 = MockEngine([
-        EngineTurnResult(
-            tool_calls=[
-                ToolCall(
-                    id="call_h1",
-                    name="transfer_to_billing",
-                    args={"reason": "Customer invoice query"},
-                )
-            ]
-        ),
-        EngineTurnResult(text="Hello, I am Billing. What invoice do you need?"),
-    ])
+    mock_engine1 = MockEngine(
+        [
+            EngineTurnResult(
+                tool_calls=[
+                    ToolCall(
+                        id="call_h1",
+                        name="transfer_to_billing",
+                        args={"reason": "Customer invoice query"},
+                    )
+                ]
+            ),
+            EngineTurnResult(text="Hello, I am Billing. What invoice do you need?"),
+        ]
+    )
     store1 = SQLiteSessionStore(db_path=db_path)
     runner1 = Runner(starting_agent=triage, session_store=store1, engine=mock_engine1)
 
@@ -339,9 +357,11 @@ async def test_sqlite_runner_survives_reboot(tmp_path: Path, test_agents: tuple[
     assert res1.content == "Hello, I am Billing. What invoice do you need?"
 
     # Server Instance 2 (Simulated reboot with fresh Runner pointing to same DB)
-    mock_engine2 = MockEngine([
-        EngineTurnResult(text="Here is invoice #12345 for $500."),
-    ])
+    mock_engine2 = MockEngine(
+        [
+            EngineTurnResult(text="Here is invoice #12345 for $500."),
+        ]
+    )
     store2 = SQLiteSessionStore(db_path=db_path)
     runner2 = Runner(starting_agent=triage, session_store=store2, engine=mock_engine2)
 
@@ -397,7 +417,9 @@ def test_sqlite_deduplication_by_wamid_with_ttl(tmp_path: Path) -> None:
     assert store.is_message_processed("wamid_def") is True
 
 
-def test_sqlite_atomic_message_and_agent_update(tmp_path: Path, test_agents: tuple[Agent, Agent]) -> None:
+def test_sqlite_atomic_message_and_agent_update(
+    tmp_path: Path, test_agents: tuple[Agent, Agent]
+) -> None:
     """Verify active_agent_name is updated atomically when messages are appended."""
     triage, billing = test_agents
     db_path = tmp_path / "atomic.db"
@@ -418,9 +440,12 @@ def test_sqlite_atomic_message_and_agent_update(tmp_path: Path, test_agents: tup
     assert reloaded.active_agent.name == "Billing"
 
 
-def test_sqlite_concurrency_writes_no_lock_error(tmp_path: Path, test_agents: tuple[Agent, Agent]) -> None:
+def test_sqlite_concurrency_writes_no_lock_error(
+    tmp_path: Path, test_agents: tuple[Agent, Agent]
+) -> None:
     """Verify concurrent writes across threads do not fail with database locked."""
     import concurrent.futures
+
     triage, _ = test_agents
     db_path = tmp_path / "concurrent.db"
     store = SQLiteSessionStore(db_path=db_path)
@@ -434,6 +459,7 @@ def test_sqlite_concurrency_writes_no_lock_error(tmp_path: Path, test_agents: tu
         futures = [executor.submit(worker, wid) for wid in range(15)]
         for f in concurrent.futures.as_completed(futures):
             f.result()  # Should not raise sqlite3.OperationalError: database is locked
+
 
 @pytest.mark.parametrize("limit", [0, -1, -10])
 def test_sqlite_store_rejects_invalid_default_max_turns(tmp_path: Path, limit: int) -> None:
@@ -558,9 +584,7 @@ def test_sqlite_in_memory_concurrent_distinct_sessions(test_agents: tuple[Agent,
         def worker(session_idx: int) -> None:
             ctx = store.get_or_create(f"mem_concurrent_{session_idx}", default_agent=triage)
             for i in range(5):
-                ctx.add_message(
-                    Message(role=Role.USER, content=f"session {session_idx} msg {i}")
-                )
+                ctx.add_message(Message(role=Role.USER, content=f"session {session_idx} msg {i}"))
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
             futures = [executor.submit(worker, idx) for idx in range(12)]

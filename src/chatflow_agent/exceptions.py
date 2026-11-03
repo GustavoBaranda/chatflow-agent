@@ -1,7 +1,6 @@
 """Exception hierarchy for chatflow-agent."""
 
 
-
 class ChatFlowError(Exception):
     """Base exception for all chatflow-agent errors."""
 
@@ -16,7 +15,9 @@ class ConfigurationError(ChatFlowError, ValueError):
 class DependencyError(ChatFlowError):
     """Raised when an optional channel or feature requires an uninstalled package."""
 
-    def __init__(self, feature: str, extra_package: str, install_command: str | None = None) -> None:
+    def __init__(
+        self, feature: str, extra_package: str, install_command: str | None = None
+    ) -> None:
         cmd = install_command or f'pip install "chatflow-agent[{extra_package}]"'
         message = (
             f"The feature '{feature}' requires optional dependencies from '{extra_package}'. "
@@ -81,3 +82,14 @@ class ReentrantTurnError(ChatFlowError, RuntimeError):
 
 class SessionDeletedError(ChatFlowError):
     """Raised when a turn tries to store a message in a session that was deleted meanwhile."""
+
+
+class JsonCodecError(ChatFlowError):
+    """Raised when a value cannot be prepared for JSON encoding."""
+
+    def __init__(self, what: str) -> None:
+        super().__init__(
+            f"{what} is not JSON-serializable and could not be coerced. "
+            "Use JSON-native types, or datetime/date/time (encoded as ISO-8601)."
+        )
+        self.what = what
