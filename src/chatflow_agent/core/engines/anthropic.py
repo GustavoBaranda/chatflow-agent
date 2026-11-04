@@ -20,7 +20,7 @@ from chatflow_agent.core.engines.openai_compatible import (
     _resolve_api_key,
 )
 from chatflow_agent.core.json_codec import encode_tool_content
-from chatflow_agent.exceptions import ProviderError
+from chatflow_agent.exceptions import ConfigurationError, ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
 
 logger = logging.getLogger("chatflow_agent.engine.anthropic")
@@ -49,6 +49,8 @@ class AnthropicEngine(BaseEngine):
         anthropic_version: str = "2023-06-01",
         timeout: float = 60.0,
         http_client: httpx.AsyncClient | None = None,
+        *,
+        max_tokens: int = 4096,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         # ANTHROPIC_API_KEY goes only to the official endpoint; proxies, gateways
@@ -61,6 +63,11 @@ class AnthropicEngine(BaseEngine):
         )
         self.anthropic_version = anthropic_version
         self.timeout = timeout
+        if type(max_tokens) is not int or max_tokens < 1:
+            raise ConfigurationError(
+                f"AnthropicEngine max_tokens must be a positive int, got {max_tokens!r}."
+            )
+        self.max_tokens = max_tokens
         self.max_retries = 3
         self.base_delay = 1.0
         self.max_delay = 10.0
@@ -80,12 +87,14 @@ class AnthropicEngine(BaseEngine):
                     content_blocks.append({"type": "text", "text": msg.content})
                 if msg.tool_calls:
                     for call in msg.tool_calls:
-                        content_blocks.append({
-                            "type": "tool_use",
-                            "id": _tool_use_id(call.id),
-                            "name": call.name,
-                            "input": call.args,
-                        })
+                        content_blocks.append(
+                            {
+                                "type": "tool_use",
+                                "id": _tool_use_id(call.id),
+                                "name": call.name,
+                                "input": call.args,
+                            }
+                        )
                 if content_blocks:
                     messages.append({"role": "assistant", "content": content_blocks})
 
@@ -93,12 +102,14 @@ class AnthropicEngine(BaseEngine):
                 content_blocks = []
                 for res in msg.tool_results:
                     content_str = encode_tool_content(res.content)
-                    content_blocks.append({
-                        "type": "tool_result",
-                        "tool_use_id": _tool_use_id(res.tool_call_id),
-                        "content": content_str,
-                        "is_error": res.is_error,
-                    })
+                    content_blocks.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": _tool_use_id(res.tool_call_id),
+                            "content": content_str,
+                            "is_error": res.is_error,
+                        }
+                    )
                 if content_blocks:
                     messages.append({"role": "user", "content": content_blocks})
 
@@ -122,7 +133,7 @@ class AnthropicEngine(BaseEngine):
 
         payload: dict[str, Any] = {
             "model": agent.model,
-            "max_tokens": 4096,
+            "max_tokens": self.max_tokens,
             "messages": messages,
         }
 
@@ -133,11 +144,13 @@ class AnthropicEngine(BaseEngine):
         if all_tools:
             anthropic_tools = []
             for t in all_tools:
-                anthropic_tools.append({
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": _lowercase_schema_types(t.to_openai_parameters()),
-                })
+                anthropic_tools.append(
+                    {
+                        "name": t.name,
+                        "description": t.description,
+                        "input_schema": _lowercase_schema_types(t.to_openai_parameters()),
+                    }
+                )
             payload["tools"] = anthropic_tools
 
         headers = {
@@ -155,9 +168,7 @@ class AnthropicEngine(BaseEngine):
             try:
                 # Never follow redirects, even on an injected client configured to:
                 # httpx keeps x-api-key on cross-origin redirects.
-                resp = await client.post(
-                    url, json=payload, headers=headers, follow_redirects=False
-                )
+                resp = await client.post(url, json=payload, headers=headers, follow_redirects=False)
                 if 300 <= resp.status_code < 400:
                     raise ProviderError(
                         f"Anthropic API request was redirected (HTTP {resp.status_code}). "
@@ -173,7 +184,11 @@ class AnthropicEngine(BaseEngine):
                             except (ValueError, TypeError):
                                 parsed_delay = None
 
-                        base = parsed_delay if parsed_delay is not None else self.base_delay * (2 ** retries)
+                        base = (
+                            parsed_delay
+                            if parsed_delay is not None
+                            else self.base_delay * (2**retries)
+                        )
                         delay = min(self.max_delay, base + random.uniform(0.0, 0.25 * base))
                         logger.warning(
                             f"Anthropic returned HTTP {resp.status_code}. Retrying in {delay:.2f}s (attempt {retries + 1}/{self.max_retries})..."
@@ -193,13 +208,11 @@ class AnthropicEngine(BaseEngine):
                 try:
                     data = resp.json()
                 except ValueError as err:
-                    raise ProviderError(
-                        f"Anthropic returned a malformed response: {err}"
-                    ) from err
+                    raise ProviderError(f"Anthropic returned a malformed response: {err}") from err
                 break
             except (httpx.ConnectError, httpx.ConnectTimeout) as net_err:
                 if retries < self.max_retries:
-                    base = self.base_delay * (2 ** retries)
+                    base = self.base_delay * (2**retries)
                     delay = min(self.max_delay, base + random.uniform(0.0, 0.25 * base))
                     logger.warning(
                         f"Anthropic connect error: {net_err}. Retrying in {delay:.2f}s..."
@@ -221,8 +234,14 @@ class AnthropicEngine(BaseEngine):
             )
         content = data.get("content", [])
         if not isinstance(content, list):
-            raise ProviderError(
-                "Anthropic returned a malformed response: 'content' is not a list"
+            raise ProviderError("Anthropic returned a malformed response: 'content' is not a list")
+
+        stop_reason = data.get("stop_reason")
+        if stop_reason == "max_tokens":
+            logger.warning(
+                "Anthropic response stopped because max_tokens=%s was reached; "
+                "output may be truncated.",
+                self.max_tokens,
             )
 
         text_chunks: list[str] = []
@@ -231,16 +250,14 @@ class AnthropicEngine(BaseEngine):
         for block in content:
             if not isinstance(block, dict):
                 raise ProviderError(
-                    "Anthropic returned a malformed response: "
-                    "a content block is not an object"
+                    "Anthropic returned a malformed response: a content block is not an object"
                 )
             b_type = block.get("type")
             if b_type == "text":
                 text = block.get("text", "")
                 if not isinstance(text, str):
                     raise ProviderError(
-                        "Anthropic returned a malformed response: "
-                        "'text' is not a string"
+                        "Anthropic returned a malformed response: 'text' is not a string"
                     )
                 text_chunks.append(text)
             elif b_type == "tool_use":
@@ -254,12 +271,9 @@ class AnthropicEngine(BaseEngine):
                 tool_input = block.get("input", {})
                 if not isinstance(tool_input, dict):
                     raise ProviderError(
-                        "Anthropic returned a malformed response: "
-                        "'tool_use.input' is not an object"
+                        "Anthropic returned a malformed response: 'tool_use.input' is not an object"
                     )
-                extracted_calls.append(
-                    ToolCall(id=tool_id, name=tool_name, args=tool_input)
-                )
+                extracted_calls.append(ToolCall(id=tool_id, name=tool_name, args=tool_input))
 
         return EngineTurnResult(
             text="".join(text_chunks) if text_chunks else None,
