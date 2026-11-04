@@ -266,7 +266,12 @@ def test_tool_array_parameters_include_items_and_keep_defaults() -> None:
         "matrix": {"type": "ARRAY", "items": {"type": "ARRAY", "items": {"type": "INTEGER"}}},
         "pair": {"type": "ARRAY", "items": {"type": "NUMBER"}},
         "labels": {"type": "ARRAY", "items": {"type": "STRING"}, "default": None, "nullable": True},
-        "limits": {"type": "ARRAY", "items": {"type": "INTEGER"}, "default": None, "nullable": True},
+        "limits": {
+            "type": "ARRAY",
+            "items": {"type": "INTEGER"},
+            "default": None,
+            "nullable": True,
+        },
     }
     assert schema["required"] == ["tags", "matrix", "pair"]
 
@@ -430,6 +435,188 @@ def test_partial_function_tool() -> None:
     assert t.execute(name="Alice") == "Hello, Alice!"
 
 
+def test_plain_function_keeps_self_and_cls_parameter_names() -> None:
+    """#176: plain functions may name parameters ``self`` or ``cls``.
+
+    Unbound methods also expose their receiver as an ordinary schema parameter.
+    Prefer bound methods when wrapping instance/class methods.
+    """
+
+    def tag(cls: str, n: int) -> str:
+        return f"{cls}:{n}"
+
+    def identify(self: str) -> str:
+        return self.upper()
+
+    tagged = Tool(tag)
+    assert set(tagged.parameters_schema["properties"]) == {"cls", "n"}
+    assert tagged.parameters_schema["required"] == ["cls", "n"]
+    assert tagged.validate_arguments({"cls": "sku", "n": 2}) == {"cls": "sku", "n": 2}
+    assert tagged.execute(cls="sku", n=2) == "sku:2"
+    assert tagged(cls="sku", n=3) == "sku:3"
+
+    identified = Tool(identify)
+    assert set(identified.parameters_schema["properties"]) == {"self"}
+    assert identified.validate_arguments({"self": "abc"}) == {"self": "abc"}
+    # Tool.execute / execute_async / __call__ use a positional-only receiver so a
+    # plain-function parameter named ``self`` can be passed as a keyword.
+    assert identified.execute(self="abc") == "ABC"
+    assert identified(self="abc") == "ABC"
+
+    class CounterService:
+        def increment(self, step: int) -> str:
+            return f"incremented by {step}"
+
+    # Explicit contract: unbound methods keep ``self`` in the schema. Callers that
+    # want the receiver omitted should pass a bound method instead.
+    unbound = Tool(CounterService.increment)
+    assert set(unbound.parameters_schema["properties"]) == {"self", "step"}
+    bound = Tool(CounterService().increment)
+    assert set(bound.parameters_schema["properties"]) == {"step"}
+    assert bound.execute(step=2) == "incremented by 2"
+
+
+@pytest.mark.asyncio
+async def test_plain_function_self_param_execute_async_and_runner() -> None:
+    """#176: sync/async Tool paths and Runner accept plain-fn ``self``."""
+    from chatflow_agent.core.agent import Agent
+    from chatflow_agent.core.engine import EngineTurnResult, GeminiEngine
+    from chatflow_agent.core.runner import Runner
+    from chatflow_agent.types import Message, ToolCall
+
+    def identify(self: str) -> str:
+        return self.upper()
+
+    async def identify_async(self: str) -> str:
+        return self.lower()
+
+    sync_tool = Tool(identify)
+    async_tool = Tool(identify_async)
+    assert await sync_tool.execute_async(self="AbC") == "ABC"
+    assert await async_tool.execute_async(self="AbC") == "abc"
+
+    agent = Agent(
+        name="Identity", instructions="Echo identity tools.", tools=[sync_tool, async_tool]
+    )
+
+    class MockEngine(GeminiEngine):
+        def __init__(self) -> None:
+            super().__init__()
+            self.turn_count = 0
+
+        async def generate_turn_async(
+            self, agent: Agent, history: list[Message]
+        ) -> EngineTurnResult:
+            self.turn_count += 1
+            if self.turn_count == 1:
+                return EngineTurnResult(
+                    tool_calls=[
+                        ToolCall(id="call_sync", name="identify", args={"self": "MiXeD"}),
+                        ToolCall(id="call_async", name="identify_async", args={"self": "MiXeD"}),
+                    ]
+                )
+            return EngineTurnResult(text="done")
+
+    runner = Runner(starting_agent=agent, engine=MockEngine())
+    response = await runner.run_async(session_id="self-param", user_message="id")
+    assert response.content == "done"
+    assert "identify" in response.tool_calls_executed
+    assert "identify_async" in response.tool_calls_executed
+
+
+def test_bound_method_keeps_legitimate_self_or_cls_parameters() -> None:
+    """#176: bound methods keep real parameters named ``self`` or ``cls``."""
+
+    class Labeler:
+        def tag(self, cls: str) -> str:
+            return f"{type(self).__name__}:{cls}"
+
+        @classmethod
+        def from_self(cls, self: str) -> str:
+            return f"{cls.__name__}:{self}"
+
+    bound = Tool(Labeler().tag)
+    assert set(bound.parameters_schema["properties"]) == {"cls"}
+    assert bound.execute(cls="sku") == "Labeler:sku"
+    assert bound(cls="sku") == "Labeler:sku"
+
+    bound_cm = Tool(Labeler.from_self)
+    assert set(bound_cm.parameters_schema["properties"]) == {"self"}
+    assert bound_cm.execute(self="abc") == "Labeler:abc"
+    assert bound_cm(self="abc") == "Labeler:abc"
+
+
+def test_self_cls_contract_for_nested_static_class_and_callable() -> None:
+    """#176: keep ``self``/``cls``; prefer bound methods for real receivers."""
+
+    def outer() -> object:
+        def identify(self: str) -> str:
+            return self
+
+        return identify
+
+    nested = outer()
+    nested_tool = Tool(nested)  # type: ignore[arg-type]
+    assert set(nested_tool.parameters_schema["properties"]) == {"self"}
+    assert nested_tool.execute(self="nested") == "nested"
+
+    class Outer:
+        def Factory(self) -> object:  # noqa: N802
+            def identify(self: str) -> str:
+                return self
+
+            return identify
+
+    nested_cap = Outer().Factory()
+    nested_cap_tool = Tool(nested_cap)  # type: ignore[arg-type]
+    assert set(nested_cap_tool.parameters_schema["properties"]) == {"self"}
+    assert nested_cap_tool.execute(self="cap") == "cap"
+
+    class lower_service:  # noqa: N801
+        def bump(self, step: int) -> int:
+            return step + 1
+
+    lower_unbound = Tool(lower_service.bump)
+    assert set(lower_unbound.parameters_schema["properties"]) == {"self", "step"}
+    lower_bound = Tool(lower_service().bump)
+    assert set(lower_bound.parameters_schema["properties"]) == {"step"}
+    assert lower_bound.execute(step=1) == 2
+
+    class Caps:
+        @staticmethod
+        def stamp(self: str) -> str:
+            return self.upper()
+
+        @classmethod
+        def build(cls, n: int) -> str:
+            return f"{cls.__name__}:{n}"
+
+    static_tool = Tool(Caps.stamp)
+    assert set(static_tool.parameters_schema["properties"]) == {"self"}
+    assert static_tool.execute(self="hi") == "HI"
+
+    # Caps.build is already bound to the class; ``cls`` is not in the schema.
+    class_tool = Tool(Caps.build)
+    assert set(class_tool.parameters_schema["properties"]) == {"n"}
+    assert class_tool.execute(n=3) == "Caps:3"
+
+    class Greeter:
+        def __call__(self, self_label: str) -> str:
+            return f"hi:{self_label}"
+
+    callable_tool = Tool(Greeter())
+    assert set(callable_tool.parameters_schema["properties"]) == {"self_label"}
+    assert callable_tool.execute(self_label="x") == "hi:x"
+
+    class SelfCallable:
+        def __call__(this, self: str) -> str:  # noqa: N805
+            return self.upper()
+
+    self_callable = Tool(SelfCallable())
+    assert set(self_callable.parameters_schema["properties"]) == {"self"}
+    assert self_callable.execute(self="zz") == "ZZ"
+
+
 def test_callable_instance_tool() -> None:
     """Tool works with class instances implementing __call__ without __name__."""
 
@@ -496,7 +683,6 @@ async def test_nested_partial_async_callable_instance_tool() -> None:
     t = Tool(wrapped)
     assert t.is_async is True
     assert await t.execute_async(b=2) == 6
-
 
 
 @pytest.mark.asyncio
@@ -572,12 +758,17 @@ def test_nullable_without_default_is_required_and_nullable() -> None:
     assert "default" not in x
 
 
-@pytest.mark.parametrize(("annotation", "expected"), [
-    (list[int] | None, {"type": "ARRAY", "items": {"type": "INTEGER"}, "nullable": True}),
-    (dict[str, int] | None, {"type": "OBJECT", "nullable": True}),
-    (tuple[int, ...] | None, {"type": "ARRAY", "items": {"type": "INTEGER"}, "nullable": True}),
-])
-def test_optional_collections_keep_nullable_flag(annotation: object, expected: dict[str, object]) -> None:
+@pytest.mark.parametrize(
+    ("annotation", "expected"),
+    [
+        (list[int] | None, {"type": "ARRAY", "items": {"type": "INTEGER"}, "nullable": True}),
+        (dict[str, int] | None, {"type": "OBJECT", "nullable": True}),
+        (tuple[int, ...] | None, {"type": "ARRAY", "items": {"type": "INTEGER"}, "nullable": True}),
+    ],
+)
+def test_optional_collections_keep_nullable_flag(
+    annotation: object, expected: dict[str, object]
+) -> None:
     assert _python_type_to_schema(annotation) == expected
 
 
