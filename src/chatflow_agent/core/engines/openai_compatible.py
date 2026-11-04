@@ -8,6 +8,7 @@ vLLM, LM Studio, Groq, and any endpoint adhering to the OpenAI /chat/completions
 import asyncio
 import json
 import logging
+import math
 import os
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -354,6 +355,9 @@ class OpenAIEngine(BaseEngine):
                                 parsed_delay = float(retry_after_str)
                             except (ValueError, TypeError):
                                 parsed_delay = None
+                            else:
+                                if not math.isfinite(parsed_delay) or parsed_delay < 0:
+                                    parsed_delay = None
 
                         import random
                         base = parsed_delay if parsed_delay is not None else self.base_delay * (2 ** retries)

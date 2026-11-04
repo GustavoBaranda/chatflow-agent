@@ -74,7 +74,10 @@ async def test_outbound_retry_respects_retry_after_header() -> None:
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(side_effect=[resp_429, resp_200])
 
-    with patch("httpx.AsyncClient") as mock_cls, patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+    with (
+        patch("httpx.AsyncClient") as mock_cls,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+    ):
         mock_cls.return_value.__aenter__.return_value = mock_client
         await channel._send_single_outbound_whatsapp("5491100000000", "Hello!")
 
@@ -83,6 +86,43 @@ async def test_outbound_retry_respects_retry_after_header() -> None:
         # First retry sleep delay should be >= 0.02 (parsed Retry-After)
         slept = mock_sleep.call_args[0][0]
         assert slept >= 0.02, f"Expected sleep >= 0.02s from Retry-After, got {slept}"
+
+
+@pytest.mark.asyncio
+async def test_outbound_negative_retry_after_falls_back_to_exponential() -> None:
+    """Negative Retry-After is invalid; fall back to exponential outbound backoff."""
+    channel = WhatsAppChannel(
+        verify_token="tok",
+        access_token="test_token",
+        phone_number_id="12345",
+        verify_signature=False,
+        max_outbound_retries=2,
+        outbound_base_delay=1.0,
+        outbound_max_delay=10.0,
+    )
+
+    resp_429 = httpx.Response(
+        status_code=429,
+        text="Rate limit",
+        headers={"Retry-After": "-5"},
+    )
+    resp_200 = httpx.Response(status_code=200, json={"messages": [{"id": "ok"}]})
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(side_effect=[resp_429, resp_200])
+
+    with (
+        patch("httpx.AsyncClient") as mock_cls,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+    ):
+        mock_cls.return_value.__aenter__.return_value = mock_client
+        await channel._send_single_outbound_whatsapp("5491100000000", "Hello!")
+
+        assert mock_client.post.call_count == 2
+        assert mock_sleep.call_count == 1
+        slept = mock_sleep.call_args[0][0]
+        # outbound_base_delay * 2**0 = 1.0, plus up to 0.25 jitter => [1.0, 1.25]
+        assert 1.0 <= slept <= 1.25
 
 
 @pytest.mark.asyncio
@@ -100,9 +140,7 @@ async def test_outbound_retry_on_network_connect_error() -> None:
     resp_200 = httpx.Response(status_code=200, json={"messages": [{"id": "wamid_sent"}]})
 
     mock_client = AsyncMock()
-    mock_client.post = AsyncMock(
-        side_effect=[httpx.ConnectError("Connection reset"), resp_200]
-    )
+    mock_client.post = AsyncMock(side_effect=[httpx.ConnectError("Connection reset"), resp_200])
 
     with patch("httpx.AsyncClient") as mock_cls:
         mock_cls.return_value.__aenter__.return_value = mock_client
@@ -124,7 +162,9 @@ async def test_outbound_no_retry_on_read_timeout() -> None:
     )
 
     mock_client = AsyncMock()
-    mock_client.post = AsyncMock(side_effect=httpx.ReadTimeout("Read timed out waiting for Meta response"))
+    mock_client.post = AsyncMock(
+        side_effect=httpx.ReadTimeout("Read timed out waiting for Meta response")
+    )
 
     with patch("httpx.AsyncClient") as mock_cls:
         mock_cls.return_value.__aenter__.return_value = mock_client
@@ -192,6 +232,7 @@ async def test_24h_window_expired_error_code_131047() -> None:
 @pytest.mark.asyncio
 async def test_24h_window_hook_exception_does_not_crash() -> None:
     """If on_24h_window_expired raises an exception, it must be caught safely."""
+
     def failing_hook(phone: str) -> None:
         raise RuntimeError("Hook crashed unexpectedly!")
 

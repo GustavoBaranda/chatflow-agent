@@ -582,6 +582,9 @@ class WhatsAppChannel(BaseChannel):
                                     parsed_retry_after = float(retry_after_str)
                                 except (ValueError, TypeError):
                                     parsed_retry_after = None
+                                else:
+                                    if not math.isfinite(parsed_retry_after) or parsed_retry_after < 0:
+                                        parsed_retry_after = None
 
                             if parsed_retry_after is not None:
                                 base_delay = parsed_retry_after

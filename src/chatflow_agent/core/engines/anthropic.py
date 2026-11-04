@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 import random
 import re
 from typing import TYPE_CHECKING, Any
@@ -183,6 +184,9 @@ class AnthropicEngine(BaseEngine):
                                 parsed_delay = float(retry_after_str)
                             except (ValueError, TypeError):
                                 parsed_delay = None
+                            else:
+                                if not math.isfinite(parsed_delay) or parsed_delay < 0:
+                                    parsed_delay = None
 
                         base = (
                             parsed_delay
