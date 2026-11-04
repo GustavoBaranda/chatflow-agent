@@ -584,7 +584,16 @@ class _ValidationConfig:
 
 
 class Tool:
-    """Encapsulates a callable tool with introspection for LLM function calling."""
+    """Encapsulates a callable tool with introspection for LLM function calling.
+
+    Parameter names ``self`` and ``cls`` are treated as ordinary arguments in the
+    tool schema and validator. To wrap an instance or class method, pass a bound
+    method (for example ``instance.method`` or ``Cls.class_method``) so the
+    receiver is already applied and does not appear in the schema. ``execute``,
+    ``execute_async``, and ``__call__`` use a positional-only Tool receiver so a
+    keyword named ``self`` reaches the wrapped callable rather than colliding with
+    the Tool instance.
+    """
 
     def __init__(
         self,
@@ -722,7 +731,10 @@ class Tool:
         required: list[str] = []
 
         for param_name, param in self.signature.parameters.items():
-            if param_name in ("self", "cls") or param.kind in (
+            # Keep ``self``/``cls`` as ordinary parameter names. Tools that wrap
+            # instance/class methods should pass a bound method so the receiver is
+            # already applied and absent from the schema.
+            if param.kind in (
                 inspect.Parameter.VAR_POSITIONAL,
                 inspect.Parameter.VAR_KEYWORD,
             ):
@@ -784,8 +796,6 @@ class Tool:
         has_var_keyword = False
 
         for i, (param_name, param) in enumerate(self.signature.parameters.items()):
-            if param_name in ("self", "cls"):
-                continue
             if param.kind == inspect.Parameter.VAR_KEYWORD:
                 has_var_keyword = True
                 continue
@@ -855,7 +865,7 @@ class Tool:
 
         return result
 
-    async def execute_async(self, **kwargs: Any) -> Any:
+    async def execute_async(self, /, **kwargs: Any) -> Any:
         """Execute the tool asynchronously with error handling.
 
         This is the recommended execution method in all asynchronous contexts
@@ -879,7 +889,7 @@ class Tool:
         except Exception as err:
             raise ToolExecutionError(tool_name=self.name, original_error=err) from err
 
-    def execute(self, **kwargs: Any) -> Any:
+    def execute(self, /, **kwargs: Any) -> Any:
         """Execute the tool synchronously.
 
         Note:
@@ -915,7 +925,7 @@ class Tool:
         except Exception as err:
             raise ToolExecutionError(tool_name=self.name, original_error=err) from err
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+    def __call__(self, /, *args: Any, **kwargs: Any) -> Any:
         """Call the tool callable directly.
 
         When validate_args is True, binds arguments against the signature,
@@ -944,13 +954,11 @@ class Tool:
             )
 
         # Filter declared parameters for validation, excluding:
-        # 1. Receiver instance/class parameters ("self", "cls") for unbound methods
-        # 2. Var-positional (*args)
-        # 3. Var-keyword (**kwargs)
+        # 1. Var-positional (*args)
+        # 2. Var-keyword (**kwargs)
+        # ``self``/``cls`` stay ordinary parameters; prefer bound methods for receivers.
         to_validate: dict[str, Any] = {}
         for name, param in self.signature.parameters.items():
-            if name in ("self", "cls"):
-                continue
             if param.kind in (
                 inspect.Parameter.VAR_POSITIONAL,
                 inspect.Parameter.VAR_KEYWORD,
