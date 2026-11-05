@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-full-dark.svg">
+    <img src="docs/assets/logo-full-light.svg" alt="Chatflow-Agent" width="520">
+  </picture>
+</p>
+
 # chatflow-agent
 
 [![CI](https://github.com/GustavoBaranda/chatflow-agent/actions/workflows/test.yml/badge.svg)](https://github.com/GustavoBaranda/chatflow-agent/actions/workflows/test.yml)
@@ -7,7 +14,7 @@
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Checked with mypy](https://img.shields.io/badge/mypy-checked-blue.svg)](https://mypy-lang.org/)
 
-🌐 **Language:** **English** | [Español](README.es.md) · [Architecture](docs/ARCHITECTURE.md) · [Changelog](CHANGELOG.md) · [Contributing](#contributing) · [PyPI Package](https://pypi.org/project/chatflow-agent/) · [Report Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
+🌐 **Language:** **English** | [Español](README.es.md) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Changelog](CHANGELOG.md) · [Contributing](#-contributing) · [PyPI Package](https://pypi.org/project/chatflow-agent/) · [Report Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
 
 > **Build autonomous multi-agent swarms for WhatsApp, Telegram, custom webhook applications, and CLI in Python with a lightweight, provider-agnostic core.**
 
@@ -37,8 +44,8 @@ pip install --pre chatflow-agent
 9. [Available Channels](#available-channels)
 10. [Usage Examples](#usage-examples)
 11. [Technical Documentation](#technical-documentation)
-12. [Contributing](#contributing)
-13. [Support the Project](#support-the-project)
+12. [Contributing](#-contributing)
+13. [Support the Project](#-support-the-project)
 14. [License](#license)
 
 ---
@@ -322,12 +329,24 @@ print(f"[{response.active_agent_name}]: {response.content}")
           <sub><b>@madhavidayma21</b></sub>
         </a>
       </td>
+      <td align="center" valign="top" width="16.66%">
+        <a href="https://github.com/dannyward630">
+          <img src="https://github.com/dannyward630.png?size=64" width="64" height="64" alt="@dannyward630" /><br />
+          <sub><b>@dannyward630</b></sub>
+        </a>
+      </td>
+      <td align="center" valign="top" width="16.66%">
+        <a href="https://github.com/IENVYshanks">
+          <img src="https://github.com/IENVYshanks.png?size=64" width="64" height="64" alt="@IENVYshanks" /><br />
+          <sub><b>@IENVYshanks</b></sub>
+        </a>
+      </td>
     </tr>
   </tbody>
 </table>
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 
-See the [full contributor graph on GitHub](https://github.com/GustavoBaranda/chatflow-agent/graphs/contributors) or check the [Contributing](#contributing) section to join the project.
+See the [full contributor graph on GitHub](https://github.com/GustavoBaranda/chatflow-agent/graphs/contributors) or check the [Contributing](#-contributing) section to join the project.
 
 ---
 
@@ -417,7 +436,7 @@ When executing a turn for an `Agent`, the `Runner` resolves the LLM engine in th
 2. **Explicit Agent provider (`agent.provider`):** Resolved when `agent.provider` is set (`gemini`/`google`, `anthropic`/`claude`, `openai`, `grok`/`xai`, `ollama`/`gemma`, `deepseek`, or `groq`).
 3. **Custom Agent endpoint (`agent.base_url`):** If `agent.base_url` is set without an explicit `provider`, routes to `OpenAIEngine` (matching the official provider preset if the URL matches an official endpoint, or requiring an explicit `api_key` unless targeting `localhost`).
 4. **Explicit Runner engine (`Runner(engine=...)`):** If a custom `engine` was explicitly passed to `Runner`, it takes precedence over model-name prefix heuristics.
-5. **Agent model prefix heuristics (`agent.model`):** Auto-detects `claude-*`, `gpt-*`/`o1*`/`o3*`/`chatgpt-*`, `grok*`, `deepseek-*`, and `gemma*`/`llama*`/`mistral*`/`qwen*`/`phi*`.
+5. **Agent model prefix heuristics (`agent.model`):** Auto-detects `claude-*`, `gpt-*`/`o1*`/`o3*`/`chatgpt-*`, `grok*`, `deepseek-*`, and `gemma*`/`llama*`/`mistral*`/`qwen*`/`phi*`. The `text-embedding-*` and `dall-e*` prefixes also route to `OpenAIEngine`; they match OpenAI model families that are not necessarily conversational models.
 6. **Default Runner engine / Gemini fallback:** Uses the runner's default `GeminiEngine` (configured with `Runner(api_key=...)`) or falls back to `GeminiEngine(api_key=agent.api_key)`. If the agent sets its own `api_key`, the runner's default `GeminiEngine` is used with that key instead of the runner's key; the provider stays Gemini. An engine passed explicitly to `Agent(engine=...)` or `Runner(engine=...)` is never changed.
 
 > [!IMPORTANT]
@@ -623,7 +642,7 @@ runner = Runner(
 
 ### Persistent & In-Memory SQLite Storage (`SQLiteSessionStore`)
 
-Built on Python's standard `sqlite3` module with Write-Ahead Logging (`WAL`), atomic transactions, sliding-window turn pruning, and persistent webhook message deduplication (`dedup_ttl_hours=192`):
+Built on Python's standard `sqlite3` module with atomic transactions, sliding-window turn pruning, and webhook message deduplication (`dedup_ttl_hours=192`). File-backed stores use Write-Ahead Logging (`WAL`) and persist across restarts; `":memory:"` stores use a shared-cache in-memory database without WAL, and their data is lost when the store is closed:
 
 ```python
 from chatflow_agent import Runner, SQLiteSessionStore
@@ -909,6 +928,7 @@ Ready-to-run reference scripts are available in the [`examples/`](examples/) dir
 
 * **[Architecture Guide](docs/ARCHITECTURE.md):** Deep dive into the internal execution loop, message schemas, engine adapters, and session persistence.
 * **[Migration Guide (0.3.4 → 0.4.0)](docs/MIGRATION_0.4.md):** Upgrade instructions, breaking changes, and new features in `0.4.0`.
+* **[Troubleshooting](docs/TROUBLESHOOTING.md):** Common errors and how to fix them (API keys, prerelease installs, optional extras, WhatsApp signatures, timeouts, SQLite locks).
 * **[Changelog](CHANGELOG.md):** Release history, new features, security advisories, and breaking changes.
 * **[Security Policy](SECURITY.md):** Supported versions and vulnerability reporting instructions.
 * **[Code of Conduct](CODE_OF_CONDUCT.md):** Community standards and expectations.

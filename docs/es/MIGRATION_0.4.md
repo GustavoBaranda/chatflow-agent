@@ -431,7 +431,7 @@ except ToolArgumentValidationError as exc:
 * **Rollback atómico del turno ante errores y cancelación:**
   * Cuando un turno falla con una excepción no controlada, expira su timeout (`turn_timeout`) o es cancelado (`asyncio.CancelledError`), `Runner` restaura atómicamente el checkpoint completo previo al turno: historial de mensajes (incluyendo mensajes antiguos podados por `SessionContext.max_turns`), `session.active_agent` y una copia profunda de `session.metadata` (PRs #34, #52, #69).
 * **Normalización determinista de IDs de llamadas a herramientas entre proveedores:**
-  * `replacement_tool_call_id(index, seed)` genera IDs alfanuméricos deterministas al normalizar llamadas a herramientas entre proveedores, evitando colisiones durante handoffs multi-proveedor (PR #130).
+  * `replacement_tool_call_id(call_id)` devuelve `"call_"` seguido de los primeros 24 dígitos hexadecimales del SHA-256 de `call_id`. Se usa cuando un proveedor rechazaría un ID de llamada a herramienta emitido por otro proveedor tras un handoff; el mismo ID siempre produce el mismo reemplazo, de modo que una llamada y su resultado siguen coincidiendo, y `session.history` conserva el ID original (PR #130).
 * **Reenvío de mensajes `Role.SYSTEM` del historial:**
   * Los mensajes `Role.SYSTEM` almacenados en mitad del historial de sesión ahora se fusionan y reenvían junto con `system_prompt` en `GeminiEngine`, `OpenAIEngine` y `AnthropicEngine` en lugar de ser descartados silenciosamente (PR #100).
 * **Encapsulamiento resiliente en `ProviderError` ante respuestas malformadas del proveedor:**
@@ -441,7 +441,7 @@ except ToolArgumentValidationError as exc:
 * **Desambiguación de nombres de handoff y registro dinámico:**
   * Los nombres de agentes no ASCII (por ejemplo, `"Política"`, `"Müller"`) se transliteran limpiamente a nombres de herramientas de handoff válidos `[a-z0-9_]`, las colisiones tras la sanitización se desambiguan automáticamente (`transfer_to_support_2`), y llamar a `agent.add_handoff()` después de inicializar `Runner` registra dinámicamente el subárbol de destino (PRs #49, #108, #112).
 * **Precedencia de `resolve_engine()` con `prefer_default_engine=True`:**
-  * Cuando un `Agent` dentro de un enjambre multiagente hereda los valores por defecto `provider="gemini"` y `model="gemini-2.5-flash"` sin sobrescrituras explícitas, `Runner` ahora respeta el motor fallback `Runner(engine=...)` antes de recurrir a la configuración por defecto del entorno (PR #39).
+  * Cuando un `Agent` no define `engine`, `provider` ni `base_url` (`Agent.provider` vale `None` por defecto), un motor pasado explícitamente con `Runner(engine=...)` ahora tiene prioridad sobre las heurísticas por prefijo del nombre del modelo y el fallback predeterminado a Gemini (PR #39).
 * **Introspección de `Tool` y casos borde de JSON Schema:**
   * Se corrigió la generación de esquemas para módulos que usan `from __future__ import annotations` (PR #72), uniones PEP 604 (`str | int`, `str | None`, PRs #26, #118), `typing.Annotated[T, ...]` (PR #62), contenedores tipados (`list[int]`, `set[str]`, `dict[str, int]`, PRs #40, #87), callables `functools.partial` síncronos y asíncronos (PRs #43, #111), parámetros variádicos `*args`/`**kwargs` (PR #35) y parámetros de herramienta llamados literalmente `default` (PR #68).
 

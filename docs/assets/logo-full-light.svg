@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1350 440" width="100%" height="100%">
+  <defs>
+    <!-- 1. Upper Ribbon Gradient: sweeps from violet on left through royal blue, cyan, to turquoise jaw -->
+    <linearGradient id="cf-upper-ribbon" x1="0.10" y1="0.65" x2="0.85" y2="0.30">
+      <stop offset="0%" stop-color="#9333ea"/>
+      <stop offset="18%" stop-color="#3b82f6"/>
+      <stop offset="48%" stop-color="#1691fa"/>
+      <stop offset="72%" stop-color="#10b1f8"/>
+      <stop offset="88%" stop-color="#49e4ff"/>
+      <stop offset="100%" stop-color="#53e0f2"/>
+    </linearGradient>
+
+    <!-- 2. Upper Right Lobe Glossy Highlight -->
+    <linearGradient id="cf-lobe-gleam" x1="0.65" y1="0.18" x2="0.92" y2="0.55">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.65"/>
+      <stop offset="35%" stop-color="#67e8f9" stop-opacity="0.35"/>
+      <stop offset="80%" stop-color="#0284c7" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- 3. Lower Ribbon Gradient: sweeps from violet on left through cobalt cradle to electric indigo on bottom right -->
+    <linearGradient id="cf-lower-ribbon" x1="0.12" y1="0.45" x2="0.88" y2="0.88">
+      <stop offset="0%" stop-color="#9333ea"/>
+      <stop offset="18%" stop-color="#2563eb"/>
+      <stop offset="45%" stop-color="#0d56fa"/>
+      <stop offset="70%" stop-color="#2563eb"/>
+      <stop offset="88%" stop-color="#3735fd"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+
+    <!-- 4. Lower Cradle Crest Specular Rim -->
+    <linearGradient id="cf-cradle-gleam" x1="0.15" y1="0.60" x2="0.75" y2="0.85">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.60"/>
+      <stop offset="30%" stop-color="#ffffff" stop-opacity="0.50"/>
+      <stop offset="70%" stop-color="#818cf8" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- 5. Top Cyan Sphere (3D Radial Gradient) -->
+    <radialGradient id="cf-sphere-top" cx="36%" cy="30%" r="65%" fx="30%" fy="24%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="20%" stop-color="#cffafe"/>
+      <stop offset="48%" stop-color="#00e5ff"/>
+      <stop offset="80%" stop-color="#0284c7"/>
+      <stop offset="100%" stop-color="#0369a1"/>
+    </radialGradient>
+
+    <!-- 6. Left Magenta Sphere (3D Radial Gradient) -->
+    <radialGradient id="cf-sphere-left" cx="36%" cy="30%" r="65%" fx="30%" fy="24%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="18%" stop-color="#fdf2f8"/>
+      <stop offset="42%" stop-color="#e879f9"/>
+      <stop offset="75%" stop-color="#c026d3"/>
+      <stop offset="100%" stop-color="#581c87"/>
+    </radialGradient>
+
+    <!-- 7. Bottom Indigo Sphere (3D Radial Gradient) -->
+    <radialGradient id="cf-sphere-bot" cx="36%" cy="30%" r="65%" fx="30%" fy="24%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="18%" stop-color="#e0e7ff"/>
+      <stop offset="45%" stop-color="#818cf8"/>
+      <stop offset="78%" stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#312e81"/>
+    </radialGradient>
+
+    <!-- 8. Three Center Dots Gradient -->
+    <linearGradient id="cf-dot-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#0837cc"/>
+    </linearGradient>
+
+    <!-- 9. Wordmark '-agent' Blue-Violet Linear Gradient -->
+    <linearGradient id="cf-text-agent-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2888ec"/>
+      <stop offset="25%" stop-color="#3b82f6"/>
+      <stop offset="55%" stop-color="#6366f1"/>
+      <stop offset="80%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#c084fc"/>
+    </linearGradient>
+
+    <!-- 10. Ambient Shadow Filter for Spheres -->
+    <radialGradient id="cf-ambient-shadow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#050814" stop-opacity="0.45"/>
+      <stop offset="70%" stop-color="#050814" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#050814" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g id="chatflow-symbol" transform="translate(20, 20)">
+    <!-- Ambient Occlusion behind Left Sphere -->
+    <ellipse cx="44" cy="214" rx="42" ry="40" fill="url(#cf-ambient-shadow)"/>
+
+    <!-- 1. Upper Ribbon Path -->
+    <path d="M 41.00,207.00 C 23.67,206.17 13.67,201.00 0.00,198.00 C 2.33,193.33 2.50,189.00 7.00,184.00 C 11.50,179.00 20.50,170.83 27.00,168.00 C 33.50,165.17 39.83,173.00 46.00,167.00 C 52.17,161.00 58.17,141.67 64.00,132.00 C 69.83,122.33 75.67,115.67 81.00,109.00 C 86.33,102.33 87.67,99.50 96.00,92.00 C 104.33,84.50 119.67,71.33 131.00,64.00 C 142.33,56.67 153.67,52.00 164.00,48.00 C 174.33,44.00 184.50,41.83 193.00,40.00 C 201.50,38.17 201.50,37.33 215.00,37.00 C 228.50,36.67 261.67,41.17 274.00,38.00 C 286.33,34.83 283.50,23.00 289.00,18.00 C 294.50,13.00 303.83,9.83 307.00,8.00 C 310.17,6.17 304.33,7.00 308.00,7.00 C 311.67,7.00 323.33,6.67 329.00,8.00 C 334.67,9.33 338.17,12.17 342.00,15.00 C 345.83,17.83 349.17,20.50 352.00,25.00 C 354.83,29.50 357.83,37.17 359.00,42.00 C 360.17,46.83 360.17,49.33 359.00,54.00 C 357.83,58.67 354.83,65.67 352.00,70.00 C 349.17,74.33 346.00,77.00 342.00,80.00 C 338.00,83.00 333.83,86.67 328.00,88.00 C 322.17,89.33 315.00,90.67 307.00,88.00 C 299.00,85.33 290.83,71.00 280.00,72.00 C 269.17,73.00 254.67,86.67 242.00,94.00 C 263.67,94.67 291.33,94.50 307.00,96.00 C 322.67,97.50 326.33,99.00 336.00,103.00 C 345.67,107.00 357.17,113.67 365.00,120.00 C 372.83,126.33 378.67,133.33 383.00,141.00 C 387.33,148.67 390.33,158.00 391.00,166.00 C 391.67,174.00 389.00,182.83 387.00,189.00 C 385.00,195.17 382.33,198.67 379.00,203.00 C 375.67,207.33 371.33,211.67 367.00,215.00 C 362.67,218.33 359.50,221.00 353.00,223.00 C 346.50,225.00 336.33,225.67 328.00,227.00 C 327.67,223.00 328.50,221.00 327.00,215.00 C 325.50,209.00 323.33,198.67 319.00,191.00 C 314.67,183.33 307.33,174.83 301.00,169.00 C 294.67,163.17 290.50,159.67 281.00,156.00 C 271.50,152.33 266.83,149.00 244.00,147.00 C 221.17,145.00 163.33,142.00 144.00,144.00 C 124.67,146.00 134.00,151.33 128.00,159.00 C 122.00,166.67 112.00,182.67 108.00,190.00 C 104.00,197.33 115.17,200.17 104.00,203.00 C 92.83,205.83 58.33,207.83 41.00,207.00 Z" fill="url(#cf-upper-ribbon)"/>
+
+    <!-- Upper Right Lobe Glossy Highlight -->
+    <path d="M 280,72 C 320,68 350,92 365,120 C 382,145 388,180 376,210 C 362,230 338,235 328,227 C 342,205 348,175 336,145 C 324,115 304,88 280,72 Z"
+          fill="url(#cf-lobe-gleam)"/>
+
+    <!-- 2. Lower Ribbon Path -->
+    <path d="M 41.00,207.00 C 58.33,204.67 83.00,204.33 104.00,203.00 C 104.33,214.67 103.67,229.00 105.00,238.00 C 106.33,247.00 109.50,252.00 112.00,257.00 C 114.50,262.00 116.17,263.83 120.00,268.00 C 123.83,272.17 128.83,277.50 135.00,282.00 C 141.17,286.50 148.17,291.67 157.00,295.00 C 165.83,298.33 171.17,300.50 188.00,302.00 C 204.83,303.50 243.17,302.33 258.00,304.00 C 272.83,305.67 271.83,309.17 277.00,312.00 C 282.17,314.83 285.00,318.00 289.00,321.00 C 291.00,307.33 292.67,289.50 295.00,280.00 C 297.33,270.50 300.33,268.17 303.00,264.00 C 305.67,259.83 307.17,258.33 311.00,255.00 C 314.83,251.67 321.33,246.67 326.00,244.00 C 330.67,241.33 334.50,239.83 339.00,239.00 C 343.50,238.17 348.33,238.17 353.00,239.00 C 357.67,239.83 362.50,241.83 367.00,244.00 C 371.50,246.17 375.83,248.67 380.00,252.00 C 384.17,255.33 388.67,259.33 392.00,264.00 C 395.33,268.67 398.00,274.67 400.00,280.00 C 402.00,285.33 403.33,288.83 404.00,296.00 C 404.67,303.17 404.67,316.00 404.00,323.00 C 403.33,330.00 403.50,331.17 400.00,338.00 C 396.50,344.83 388.17,357.83 383.00,364.00 C 377.83,370.17 374.33,371.83 369.00,375.00 C 363.67,378.17 357.83,381.50 351.00,383.00 C 344.17,384.50 339.17,387.67 328.00,384.00 C 316.83,380.33 295.67,366.17 284.00,361.00 C 272.33,355.83 267.00,354.33 258.00,353.00 C 249.00,351.67 245.83,351.50 230.00,353.00 C 214.17,354.50 179.50,360.83 163.00,362.00 C 146.50,363.17 138.83,361.17 131.00,360.00 C 123.17,358.83 122.00,357.67 116.00,355.00 C 110.00,352.33 101.83,348.67 95.00,344.00 C 88.17,339.33 81.67,334.83 75.00,327.00 C 68.33,319.17 59.67,305.67 55.00,297.00 C 50.33,288.33 49.00,283.00 47.00,275.00 C 45.00,267.00 45.67,253.67 43.00,249.00 C 40.33,244.33 35.33,248.50 31.00,247.00 C 26.67,245.50 20.83,242.50 17.00,240.00 C 13.17,237.50 10.83,235.83 8.00,232.00 C 5.17,228.17 2.67,222.00 0.00,217.00 C 13.67,213.67 23.67,209.33 41.00,207.00 Z" fill="url(#cf-lower-ribbon)"/>
+
+    <!-- Lower Cradle Specular Rim -->
+    <path d="M 120,360 C 180,385 250,380 310,360 C 270,365 200,368 135,350 Z"
+          fill="url(#cf-cradle-gleam)"/>
+
+    <!-- 3. Three Ellipsis Dots inside Chat Cavity -->
+    <circle cx="171.4" cy="225.0" r="16.7" fill="url(#cf-dot-grad)"/>
+    <circle cx="215.3" cy="225.0" r="16.7" fill="url(#cf-dot-grad)"/>
+    <circle cx="259.2" cy="225.0" r="16.7" fill="url(#cf-dot-grad)"/>
+
+    <!-- Ambient Occlusion under Top & Bottom Spheres -->
+    <ellipse cx="312" cy="56" rx="36" ry="34" fill="url(#cf-ambient-shadow)"/>
+    <ellipse cx="344" cy="348" rx="46" ry="44" fill="url(#cf-ambient-shadow)"/>
+
+    <!-- 4. The Three Exterior Nodes (Spheres) -->
+    <circle cx="309" cy="49" r="35" fill="url(#cf-sphere-top)"/>
+    <circle cx="41" cy="207" r="39" fill="url(#cf-sphere-left)"/>
+    <circle cx="340" cy="340" r="45" fill="url(#cf-sphere-bot)"/>
+  </g>
+  <g id="chatflow-wordmark">
+    <text x="495" y="222" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, Helvetica, Arial, sans-serif" font-size="120" font-weight="700" letter-spacing="-0.025em">
+      <tspan fill="#0f172a">chatflow</tspan><tspan fill="url(#cf-text-agent-grad)">-agent</tspan>
+    </text>
+    <text x="502" y="282" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, Helvetica, Arial, sans-serif" font-size="24" font-weight="600" letter-spacing="0.32em" fill="#64748b">
+      BUILD · ORCHESTRATE · CONNECT
+    </text>
+  </g>
+</svg>
