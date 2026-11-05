@@ -4,6 +4,7 @@ import asyncio
 import functools
 import hashlib
 import hmac
+import inspect
 import json
 import logging
 import math
@@ -614,10 +615,13 @@ class WhatsAppChannel(BaseChannel):
                             )
                             if self.on_24h_window_expired:
                                 try:
-                                    if asyncio.iscoroutinefunction(self.on_24h_window_expired):
-                                        await self.on_24h_window_expired(to_phone)
-                                    else:
-                                        self.on_24h_window_expired(to_phone)
+                                    # Call, then await any awaitable result: this covers async
+                                    # functions, objects with an async __call__, partials and
+                                    # sync functions returning a coroutine (#175). Sync hooks
+                                    # still run inline on the event loop.
+                                    hook_result = self.on_24h_window_expired(to_phone)
+                                    if inspect.isawaitable(hook_result):
+                                        await hook_result
                                 except Exception as hook_err:
                                     logger.error(
                                         f"Error executing on_24h_window_expired hook for {masked}: {hook_err}"
