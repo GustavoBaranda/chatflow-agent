@@ -148,6 +148,34 @@ class WhatsAppChannel(BaseChannel):
         self.unsupported_media_message = unsupported_media_message
         self.llm_timeout_seconds = llm_timeout_seconds
         self.queue_timeout_seconds = queue_timeout_seconds
+        # Outbound retry / body limits: fail fast on nonsense so a negative
+        # max_body_size cannot reject every webhook, and bad delays cannot
+        # collapse the backoff into an immediate retry storm (#175 item 2).
+        if not isinstance(max_outbound_retries, int) or isinstance(max_outbound_retries, bool):
+            raise ValueError(
+                f"max_outbound_retries must be a non-negative int, got {max_outbound_retries!r}"
+            )
+        if max_outbound_retries < 0:
+            raise ValueError(
+                f"max_outbound_retries must be a non-negative int, got {max_outbound_retries!r}"
+            )
+        if not (math.isfinite(outbound_base_delay) and outbound_base_delay > 0):
+            raise ValueError(
+                f"outbound_base_delay must be a positive finite number, got {outbound_base_delay!r}"
+            )
+        if not (math.isfinite(outbound_max_delay) and outbound_max_delay > 0):
+            raise ValueError(
+                f"outbound_max_delay must be a positive finite number, got {outbound_max_delay!r}"
+            )
+        if outbound_max_delay < outbound_base_delay:
+            raise ValueError(
+                "outbound_max_delay must be >= outbound_base_delay, "
+                f"got base={outbound_base_delay!r} max={outbound_max_delay!r}"
+            )
+        if not isinstance(max_body_size, int) or isinstance(max_body_size, bool) or max_body_size <= 0:
+            raise ValueError(
+                f"max_body_size must be a positive int, got {max_body_size!r}"
+            )
         self.max_outbound_retries = max_outbound_retries
         self.outbound_base_delay = outbound_base_delay
         self.outbound_max_delay = outbound_max_delay
