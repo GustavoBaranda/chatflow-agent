@@ -5,6 +5,7 @@ import re
 import pytest
 
 from chatflow_agent.core.agent import Agent, _sanitize_tool_name
+from chatflow_agent.core.tools import Tool
 from chatflow_agent.types import Handoff
 
 _TOOL_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -49,6 +50,30 @@ def test_agent_tool_decorator_and_add_tool() -> None:
     tool_names = [t.name for t in agent.tools]
     assert "get_balance" in tool_names
     assert "calc_tax" in tool_names
+
+
+def test_agent_tool_decorator_forms_register_and_return_the_tool() -> None:
+    """``@agent.tool()``, ``@agent.tool("name")`` and async tools return what they register (#176)."""
+    agent = Agent(name="Ops Agent", instructions="Operations.")
+
+    @agent.tool()
+    def restart(service: str) -> str:
+        return f"restarted {service}"
+
+    @agent.tool("lookup_host")
+    def lookup(host: str) -> str:
+        return host
+
+    @agent.tool(name="ping_host")
+    async def ping(host: str) -> str:
+        return host
+
+    assert [t.name for t in agent.tools] == ["restart", "lookup_host", "ping_host"]
+    for decorated, registered in zip([restart, lookup, ping], agent.tools, strict=True):
+        assert isinstance(decorated, Tool)
+        assert decorated is registered
+    assert ping.is_async
+    assert restart.execute(service="api") == "restarted api"
 
 
 def test_agent_self_handoff_prevention() -> None:

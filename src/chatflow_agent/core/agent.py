@@ -4,7 +4,7 @@ import hashlib
 import re
 import unicodedata
 from collections.abc import Callable
-from typing import Any
+from typing import Any, overload
 
 from chatflow_agent.core.engines.base import BaseEngine
 from chatflow_agent.core.engines.factory import _ALL_SUPPORTED_PROVIDERS, _GEMINI_PROVIDERS
@@ -153,6 +153,26 @@ class Agent:
         self.tools.append(t)
         return t
 
+    @overload
+    def tool(
+        self,
+        name_or_func: Callable[..., Any],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        validate_args: bool = True,
+    ) -> Tool: ...
+
+    @overload
+    def tool(
+        self,
+        name_or_func: str | None = None,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        validate_args: bool = True,
+    ) -> Callable[[Callable[..., Any]], Tool]: ...
+
     def tool(
         self,
         name_or_func: str | Callable[..., Any] | None = None,
@@ -160,7 +180,7 @@ class Agent:
         name: str | None = None,
         description: str | None = None,
         validate_args: bool = True,
-    ) -> Any:
+    ) -> Tool | Callable[[Callable[..., Any]], Tool]:
         """Decorator to register a tool directly onto this agent instance.
 
         Usage:

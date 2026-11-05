@@ -14,6 +14,7 @@ from typing import (
     Union,
     get_args,
     get_origin,
+    overload,
 )
 
 from pydantic import (
@@ -175,8 +176,10 @@ def _python_type_to_schema(py_type: Any) -> dict[str, Any]:
     * Heterogeneous tuples (``tuple[int, str]``) cannot be expressed as one ``items`` schema,
       so ``items`` is omitted and a warning is logged.
 
-    ``Annotated`` metadata is ignored and ``Optional``/union annotations use their first
-    non-``None`` member, as for non-array types.
+    ``Annotated`` metadata is ignored. ``Optional``/union annotations are delegated to
+    ``_union_to_schema``: ``T | None`` maps to ``T``'s schema with ``nullable: true``, an
+    ``int``/``float`` union broadens to ``NUMBER``, and other unions keep every member in
+    ``anyOf``.
     """
     if py_type is inspect.Parameter.empty or py_type is Any:
         return {"type": "STRING"}
@@ -981,13 +984,33 @@ class Tool:
         return f"<Tool name={self.name!r} async={self.is_async}>"
 
 
+@overload
+def tool(
+    name_or_func: Callable[..., Any],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    validate_args: bool = True,
+) -> Tool: ...
+
+
+@overload
+def tool(
+    name_or_func: str | None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    validate_args: bool = True,
+) -> Callable[[Callable[..., Any]], Tool]: ...
+
+
 def tool(
     name_or_func: str | Callable[..., Any] | None = None,
     *,
     name: str | None = None,
     description: str | None = None,
     validate_args: bool = True,
-) -> Any:
+) -> Tool | Callable[[Callable[..., Any]], Tool]:
     """Decorator to register a function as an introspected Tool.
 
     Usage:
