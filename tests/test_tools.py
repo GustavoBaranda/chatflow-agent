@@ -369,6 +369,50 @@ def test_tool_decorator_with_custom_name_and_desc() -> None:
     assert add_numbers.execute(a=10, b=20) == 30
 
 
+def test_tool_decorator_empty_call_positional_name_and_keyword_func() -> None:
+    """``@tool()``, ``@tool("name")`` and ``tool(name_or_func=fn)`` return a Tool (#176)."""
+
+    @tool()
+    def multiply(a: int, b: int) -> int:
+        """Multiply two numbers."""
+        return a * b
+
+    @tool("product")
+    def named(a: int, b: int) -> int:
+        return a * b
+
+    def subtract(a: int, b: int) -> int:
+        return a - b
+
+    by_keyword = tool(name_or_func=subtract)
+
+    assert isinstance(multiply, Tool)
+    assert multiply.name == "multiply"
+    assert multiply.description == "Multiply two numbers."
+    assert multiply.execute(a=3, b=4) == 12
+    assert isinstance(named, Tool)
+    assert named.name == "product"
+    assert named.execute(a=2, b=5) == 10
+    assert isinstance(by_keyword, Tool)
+    assert by_keyword.name == "subtract"
+    assert by_keyword.execute(a=9, b=4) == 5
+
+
+@pytest.mark.asyncio
+async def test_tool_decorator_parameterized_async_tool() -> None:
+    """A parameterized decorator on an ``async def`` keeps it async and applies its options."""
+
+    @tool(name="fetch_total", validate_args=False)
+    async def fetch(a: int) -> int:
+        return a + 1
+
+    assert isinstance(fetch, Tool)
+    assert fetch.name == "fetch_total"
+    assert fetch.is_async
+    assert fetch.validate_args is False
+    assert await fetch.execute_async(a=1) == 2
+
+
 @pytest.mark.asyncio
 async def test_async_tool_sync_execute_in_running_loop_raises_clear_error() -> None:
     """Calling execute() on an async tool from an active event loop must raise a clear ToolExecutionError (SEC-09)."""
