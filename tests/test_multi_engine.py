@@ -1,5 +1,6 @@
 """Tests for Multi-Provider engines (OpenAI, Grok, Gemma/Ollama, Claude) and heterogeneous swarms."""
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -753,3 +754,131 @@ def test_anthropic_rejects_invalid_max_tokens(bad_value: object) -> None:
     """max_tokens must be a positive int; bools and non-ints are refused."""
     with pytest.raises(ConfigurationError, match="max_tokens"):
         AnthropicEngine(api_key="ant-test-key", max_tokens=bad_value)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_negative_retry_after_falls_back_to_exponential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Negative Retry-After is invalid; fall back to exponential backoff (Gemini parity)."""
+    attempts = 0
+    sleeps: list[float] = []
+
+    def fake_response(req: httpx.Request):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return (
+                429,
+                {"type": "error", "error": {"type": "rate_limit_error", "message": "Rate limited"}},
+                {"Retry-After": "-5"},
+            )
+        return 200, {"content": [{"type": "text", "text": "Recovered"}]}
+
+    transport = MockTransport(fake_response)
+    client = httpx.AsyncClient(transport=transport)
+    engine = AnthropicEngine(api_key="ant-test-key", http_client=client)
+    engine.base_delay = 1.0
+    engine.max_delay = 10.0
+
+    agent = Agent(name="Claude", model="claude-3-5-sonnet", instructions="Helpful Claude.")
+
+    async def record_sleep(delay: float, *args, **kwargs):
+        sleeps.append(delay)
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+    result = await engine.generate_turn_async(
+        agent=agent,
+        history=[Message(role=Role.USER, content="Hello")],
+    )
+
+    assert result.text == "Recovered"
+    assert attempts == 2
+    assert sleeps, "expected a retry sleep"
+    # base_delay * 2**0 = 1.0, plus up to 0.25 jitter => [1.0, 1.25]
+    assert 1.0 <= sleeps[0] <= 1.25
+
+
+@pytest.mark.asyncio
+async def test_anthropic_nan_retry_after_falls_back_to_exponential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NaN Retry-After is treated as missing and uses exponential backoff."""
+    attempts = 0
+    sleeps: list[float] = []
+
+    def fake_response(req: httpx.Request):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return (
+                429,
+                {"type": "error", "error": {"type": "rate_limit_error", "message": "Rate limited"}},
+                {"Retry-After": "nan"},
+            )
+        return 200, {"content": [{"type": "text", "text": "Recovered"}]}
+
+    transport = MockTransport(fake_response)
+    client = httpx.AsyncClient(transport=transport)
+    engine = AnthropicEngine(api_key="ant-test-key", http_client=client)
+    engine.base_delay = 1.0
+    engine.max_delay = 10.0
+
+    agent = Agent(name="Claude", model="claude-3-5-sonnet", instructions="Helpful Claude.")
+
+    async def record_sleep(delay: float, *args, **kwargs):
+        sleeps.append(delay)
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+    result = await engine.generate_turn_async(
+        agent=agent,
+        history=[Message(role=Role.USER, content="Hello")],
+    )
+
+    assert result.text == "Recovered"
+    assert sleeps
+    assert 1.0 <= sleeps[0] <= 1.25
+
+
+@pytest.mark.asyncio
+async def test_openai_negative_retry_after_falls_back_to_exponential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenAI-compatible engines treat negative Retry-After as invalid (exponential backoff)."""
+    attempts = 0
+    sleeps: list[float] = []
+
+    def fake_response(req: httpx.Request):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return (
+                429,
+                {"error": {"message": "rate"}},
+                {"Retry-After": "-2"},
+            )
+        return 200, {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+
+    transport = MockTransport(fake_response)
+    client = httpx.AsyncClient(transport=transport)
+    engine = OpenAIEngine(api_key="sk-test", http_client=client, provider="openai")
+    engine.base_delay = 1.0
+    engine.max_delay = 10.0
+
+    agent = Agent(name="GPT", model="gpt-4o-mini", instructions="Helpful.")
+
+    async def record_sleep(delay: float, *args, **kwargs):
+        sleeps.append(delay)
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+    result = await engine.generate_turn_async(
+        agent=agent,
+        history=[Message(role=Role.USER, content="Hello")],
+    )
+
+    assert result.text == "ok"
+    assert sleeps
+    assert 1.0 <= sleeps[0] <= 1.25
