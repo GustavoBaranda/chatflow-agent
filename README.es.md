@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-full-dark.svg">
+    <img src="docs/assets/logo-full-light.svg" alt="Chatflow-Agent" width="520">
+  </picture>
+</p>
+
 # chatflow-agent
 
 [![CI](https://github.com/GustavoBaranda/chatflow-agent/actions/workflows/test.yml/badge.svg)](https://github.com/GustavoBaranda/chatflow-agent/actions/workflows/test.yml)
@@ -7,7 +14,7 @@
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Checked with mypy](https://img.shields.io/badge/mypy-checked-blue.svg)](https://mypy-lang.org/)
 
-🌐 **Idioma:** [English](README.md) | **Español** · [Arquitectura](docs/es/ARCHITECTURE.md) · [Changelog](CHANGELOG.md) · [Contribuciones](#contribuciones) · [Paquete en PyPI](https://pypi.org/project/chatflow-agent/) · [Reportar Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
+🌐 **Idioma:** [English](README.md) | **Español** · [Arquitectura](docs/es/ARCHITECTURE.md) · [Solución de Problemas](docs/es/TROUBLESHOOTING.md) · [Changelog](CHANGELOG.md) · [Contribuciones](#-contribuciones) · [Paquete en PyPI](https://pypi.org/project/chatflow-agent/) · [Reportar Issue](https://github.com/GustavoBaranda/chatflow-agent/issues)
 
 > **Construye equipos de agentes autónomos para WhatsApp, Telegram, aplicaciones de webhook personalizadas y CLI en Python con un núcleo ligero y agnóstico al proveedor.**
 
@@ -37,8 +44,8 @@ pip install --pre chatflow-agent
 9. [Canales disponibles](#canales-disponibles)
 10. [Ejemplos de uso](#ejemplos-de-uso)
 11. [Documentación técnica](#documentación-técnica)
-12. [Contribuciones](#contribuciones)
-13. [Apoyo al proyecto](#apoyo-al-proyecto)
+12. [Contribuciones](#-contribuciones)
+13. [Apoyo al proyecto](#-apoyo-al-proyecto)
 14. [Licencia](#licencia)
 
 ---
@@ -322,12 +329,24 @@ print(f"[{response.active_agent_name}]: {response.content}")
           <sub><b>@madhavidayma21</b></sub>
         </a>
       </td>
+      <td align="center" valign="top" width="16.66%">
+        <a href="https://github.com/dannyward630">
+          <img src="https://github.com/dannyward630.png?size=64" width="64" height="64" alt="@dannyward630" /><br />
+          <sub><b>@dannyward630</b></sub>
+        </a>
+      </td>
+      <td align="center" valign="top" width="16.66%">
+        <a href="https://github.com/IENVYshanks">
+          <img src="https://github.com/IENVYshanks.png?size=64" width="64" height="64" alt="@IENVYshanks" /><br />
+          <sub><b>@IENVYshanks</b></sub>
+        </a>
+      </td>
     </tr>
   </tbody>
 </table>
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 
-Consulta el [listado completo de colaboradores en GitHub](https://github.com/GustavoBaranda/chatflow-agent/graphs/contributors) o revisa la sección de [Contribuciones](#contribuciones) para sumarte al proyecto.
+Consulta el [listado completo de colaboradores en GitHub](https://github.com/GustavoBaranda/chatflow-agent/graphs/contributors) o revisa la sección de [Contribuciones](#-contribuciones) para sumarte al proyecto.
 
 ---
 
@@ -417,7 +436,7 @@ Al ejecutar un turno para un `Agent`, el `Runner` resuelve el motor LLM en este 
 2. **Proveedor explícito del agente (`agent.provider`):** Se resuelve cuando `agent.provider` está definido (`gemini`/`google`, `anthropic`/`claude`, `openai`, `grok`/`xai`, `ollama`/`gemma`, `deepseek` o `groq`).
 3. **Endpoint personalizado del agente (`agent.base_url`):** Si se define `agent.base_url` sin un `provider` explícito, enruta a `OpenAIEngine` (seleccionando el preset oficial si la URL coincide con un endpoint oficial, o exigiendo `api_key` explícita salvo en `localhost`).
 4. **Motor explícito del Runner (`Runner(engine=...)`):** Si se pasó un `engine` personalizado al `Runner`, tiene prioridad sobre las heurísticas por prefijo de nombre de modelo.
-5. **Heurísticas por prefijo del modelo (`agent.model`):** Detecta automáticamente `claude-*`, `gpt-*`/`o1*`/`o3*`/`chatgpt-*`, `grok*`, `deepseek-*` y `gemma*`/`llama*`/`mistral*`/`qwen*`/`phi*`.
+5. **Heurísticas por prefijo del modelo (`agent.model`):** Detecta automáticamente `claude-*`, `gpt-*`/`o1*`/`o3*`/`chatgpt-*`, `grok*`, `deepseek-*` y `gemma*`/`llama*`/`mistral*`/`qwen*`/`phi*`. Los prefijos `text-embedding-*` y `dall-e*` también se enrutan a `OpenAIEngine`; corresponden a familias de modelos de OpenAI que no son necesariamente modelos conversacionales.
 6. **Motor por defecto del Runner / fallback a Gemini:** Utiliza el `GeminiEngine` por defecto del `Runner` (configurado con `Runner(api_key=...)`) o recurre a `GeminiEngine(api_key=agent.api_key)`. Si el agente define su propia `api_key`, se usa el `GeminiEngine` por defecto del `Runner` con esa clave en lugar de la del `Runner`; el proveedor sigue siendo Gemini. Un motor pasado explícitamente con `Agent(engine=...)` o `Runner(engine=...)` nunca se modifica.
 
 > [!IMPORTANT]
@@ -624,7 +643,7 @@ runner = Runner(
 
 ### Almacenamiento SQLite en disco y en memoria (`SQLiteSessionStore`)
 
-Basado en el módulo estándar `sqlite3` de Python con Write-Ahead Logging (`WAL`), transacciones atómicas, poda por ventana deslizante y deduplicación persistente de mensajes de webhooks (`dedup_ttl_hours=192`):
+Basado en el módulo estándar `sqlite3` de Python con transacciones atómicas, poda por ventana deslizante y deduplicación de mensajes de webhooks (`dedup_ttl_hours=192`). Los almacenes en archivo usan Write-Ahead Logging (`WAL`) y persisten entre reinicios; los almacenes `":memory:"` usan una base en memoria con caché compartida, sin WAL, y sus datos se pierden al cerrar el almacén:
 
 ```python
 from chatflow_agent import Runner, SQLiteSessionStore
@@ -911,6 +930,7 @@ En el directorio [`examples/`](examples/) encontrarás scripts de referencia lis
 
 * **[Guía de Arquitectura](docs/es/ARCHITECTURE.md):** Explicación detallada del bucle de ejecución interno, esquemas de mensajes, adaptadores de motores y persistencia de sesiones.
 * **[Guía de Migración (0.3.4 → 0.4.0)](docs/es/MIGRATION_0.4.md):** Instrucciones de actualización, cambios incompatibles y nuevas funcionalidades en `0.4.0`.
+* **[Solución de Problemas](docs/es/TROUBLESHOOTING.md):** Errores frecuentes y cómo resolverlos (API keys, instalación de prereleases, extras opcionales, firmas de WhatsApp, timeouts, bloqueos de SQLite).
 * **[Changelog](CHANGELOG.md):** Historial de versiones, nuevas funcionalidades, avisos de seguridad y cambios incompatibles (breaking changes).
 * **[Política de Seguridad](SECURITY.md):** Versiones soportadas e instrucciones para reportar vulnerabilidades.
 * **[Código de Conducta](CODE_OF_CONDUCT.md):** Estándares de convivencia de la comunidad.

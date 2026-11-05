@@ -236,7 +236,7 @@ Cuando `Runner` evalúa un turno para `current_agent`, [`resolve_engine()`](../.
 
 #### Implementaciones de Motores y Normalización entre Proveedores
 
-- **[`GeminiEngine`](../../src/chatflow_agent/core/engines/gemini.py):** Invoca directamente la API REST de Google Gemini (`https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`) mediante `httpx.AsyncClient` sin requerir el SDK `google-genai`. Soporta `GEMINI_API_KEY` / `GOOGLE_API_KEY`, fusiona turnos consecutivos de usuario/herramienta según exigen las reglas de `Content` de Gemini y preserva metadatos `thoughtSignature` en las partes de llamada a función.
+- **[`GeminiEngine`](../../src/chatflow_agent/core/engines/gemini.py):** Invoca directamente la API REST de Google Gemini (`https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`) mediante `httpx.AsyncClient` sin requerir el SDK `google-genai`. Soporta `GEMINI_API_KEY` / `GOOGLE_API_KEY`. Cada mensaje del historial se convierte en su propia entrada `Content` (texto de usuario y resultados de herramientas como `user`, texto del modelo y llamadas a herramientas como `model`); los turnos consecutivos no se fusionan. Las instrucciones del agente, junto con los mensajes `Role.SYSTEM` del historial, se envían como `systemInstruction`. De cada `functionCall` de la respuesta solo se conservan `id`, `name` y `args`; otros campos de la parte (como `thoughtSignature`) no se almacenan ni se reenvían.
 - **[`OpenAIEngine`](../../src/chatflow_agent/core/engines/openai_compatible.py):** Invoca directamente endpoints REST `/chat/completions` compatibles con OpenAI mediante `httpx.AsyncClient` sin requerir el paquete SDK `openai`. Soporta OpenAI (`OPENAI_API_KEY`), xAI Grok (`XAI_API_KEY`), DeepSeek (`DEEPSEEK_API_KEY`), Groq (`GROQ_API_KEY`), Ollama (`http://localhost:11434/v1`), vLLM y endpoints personalizados compatibles con OpenAI. Aplica aislamiento estricto de credenciales mediante `_resolve_api_key()` e `_is_official_endpoint()`: las claves API de variables de entorno se envían únicamente al endpoint HTTPS oficial de cada proveedor y nunca se filtran a servidores locales en loopback ni a URLs `base_url` de terceros.
 - **[`AnthropicEngine`](../../src/chatflow_agent/core/engines/anthropic.py):** Invoca directamente la API REST Anthropic Messages (`https://api.anthropic.com/v1/messages`, `anthropic-version: 2023-06-01`) mediante `httpx.AsyncClient` usando `ANTHROPIC_API_KEY`.
 - **Normalización del Prompt de Sistema (`system_prompt`):** Para los proveedores con un campo de sistema de nivel superior (`GeminiEngine` y `AnthropicEngine`), [`system_prompt()`](../../src/chatflow_agent/core/engines/base.py) recibe el valor resuelto de `agent.get_instructions()` y lo concatena con cualquier mensaje `Role.SYSTEM` presente en el historial de la sesión.
@@ -323,10 +323,12 @@ Exception
       ├── ProviderError             (lanzada cuando falla la comunicación con un proveedor LLM)
       ├── DependencyError           (.feature, .extra_package; lanzada cuando falta un extra opcional)
       ├── ToolExecutionError        (.tool_name, .original_error; lanzada cuando una herramienta falla en ejecución)
+      │    └── ToolArgumentValidationError (los argumentos provistos por el modelo no superaron la validación antes de ejecutar la herramienta)
       ├── ToolSchemaError           (lanzada al registrar una unión cuyo esquema no puede representarse)
       ├── AgentHandoffError         (lanzada ante destinos de handoff no autorizados, desconocidos o inconsistentes)
       ├── ReentrantTurnError        (también hereda de RuntimeError; lanzada ante reentrada en línea en la misma sesión)
       ├── SessionDeletedError       (solo SQLite: lanzada cuando una sesión almacenada se elimina durante un turno)
+      ├── JsonCodecError            (lanzada cuando un valor no puede prepararse para codificación JSON)
       └── ChannelError              (channels/base.py; lanzada cuando falla una operación de canal o no hay Runner vinculado)
 ```
 
