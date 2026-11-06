@@ -23,7 +23,7 @@ pip install --pre chatflow-agent
 ```
 
 > [!NOTE]
-> The documentation currently describes the `0.4.0` prerelease. Until `0.4.0` is stable, use `--pre`; plain `pip install chatflow-agent` selects the latest stable `0.3.x` release, which does not include every API documented below.
+> The `main` branch documents the next `0.4.0` prerelease, including features added after the currently published `0.4.0rc1`. Those newer features are not available in `0.4.0rc1`. At present, `pip install --pre chatflow-agent` installs the latest prerelease available on PyPI, which is `0.4.0rc1`; plain `pip install chatflow-agent` selects the latest stable `0.3.x` release, which does not include every API documented below.
 
 `chatflow-agent` is an async-first Python framework for orchestrating multi-agent conversational workflows across real-world messaging channels. Inspired by lightweight agent handoff patterns, it combines provider-agnostic LLM engines with built-in concurrency locks, transactional turn rollbacks, SQLite persistence, and turnkey channel adapters for **WhatsApp (Meta Cloud API)**, **Telegram**, and **CLI**, plus a custom webhook example application.
 
