@@ -8,6 +8,7 @@ import inspect
 import json
 import logging
 import math
+import numbers
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -22,7 +23,7 @@ from chatflow_agent.core.runner import (
     _TurnTimeout,
     _within,
 )
-from chatflow_agent.exceptions import DependencyError
+from chatflow_agent.exceptions import ConfigurationError, DependencyError
 from chatflow_agent.types import AgentResponse
 
 logger = logging.getLogger("chatflow_agent.whatsapp")
@@ -32,6 +33,39 @@ DEFAULT_MAX_BODY_SIZE = 1 * 1024 * 1024  # 1 MB maximum allowed webhook payload 
 # Extra time the background dispatch backstop allows beyond queue + turn limits. The Runner
 # enforces both limits; the backstop only bounds a dispatch_async() that never reaches it.
 _DISPATCH_BACKSTOP_GRACE_SECONDS = 1.0
+
+# Bound exponential retry calculations well below float overflow. Each computed delay is
+# additionally capped by outbound_max_delay.
+_MAX_OUTBOUND_RETRIES_LIMIT = 10
+
+
+def _validate_int_setting(name: str, value: object, *, minimum: int, maximum: int | None) -> None:
+    """Raise ConfigurationError unless value is a non-boolean integer within the bounds."""
+    valid = False
+    if isinstance(value, numbers.Integral) and not isinstance(value, bool):
+        integer = int(value)
+        valid = integer >= minimum and (maximum is None or integer <= maximum)
+    if not valid:
+        bounds = f"between {minimum} and {maximum}" if maximum is not None else f">= {minimum}"
+        raise ConfigurationError(
+            f"WhatsAppChannel '{name}' must be an integer {bounds} (not a bool), got {value!r}."
+        )
+
+
+def _validate_delay_setting(name: str, value: object) -> None:
+    """Raise ConfigurationError unless value is a finite, non-negative real number."""
+    valid = False
+    if isinstance(value, numbers.Real) and not isinstance(value, bool):
+        try:
+            seconds = float(value)
+        except (OverflowError, TypeError, ValueError):
+            seconds = math.inf
+        valid = math.isfinite(seconds) and seconds >= 0
+    if not valid:
+        raise ConfigurationError(
+            f"WhatsAppChannel '{name}' must be a finite number of seconds >= 0 (not a bool), "
+            f"got {value!r}."
+        )
 
 
 class _DispatchBackstopTimeout(asyncio.TimeoutError):
@@ -73,6 +107,13 @@ class WhatsAppChannel(BaseChannel):
     time turns out at once or, on Python 3.13, stop the event loop). A warning is logged
     for zero, negative and ``nan`` values.
 
+    Outbound and payload settings are validated at construction. Invalid values raise
+    ``ConfigurationError`` (a ``ValueError``): ``max_outbound_retries`` must be an integer
+    from 0 to 10, ``outbound_base_delay`` and ``outbound_max_delay`` must be finite real
+    numbers of seconds greater than or equal to zero, and ``max_body_size`` must be a
+    positive integer number of bytes. Booleans are rejected for all four settings. The
+    maximum delay remains a cap and may therefore be lower than the base delay.
+
     Message-id deduplication TTL is configured on ``SessionStore`` /
     ``SQLiteSessionStore`` (``dedup_ttl_hours``), not on this channel.
 
@@ -110,6 +151,15 @@ class WhatsAppChannel(BaseChannel):
             raise ValueError(
                 f"queue_timeout_seconds must be a positive finite number, got {queue_timeout_seconds!r}"
             )
+        _validate_int_setting(
+            "max_outbound_retries",
+            max_outbound_retries,
+            minimum=0,
+            maximum=_MAX_OUTBOUND_RETRIES_LIMIT,
+        )
+        _validate_delay_setting("outbound_base_delay", outbound_base_delay)
+        _validate_delay_setting("outbound_max_delay", outbound_max_delay)
+        _validate_int_setting("max_body_size", max_body_size, minimum=1, maximum=None)
         # llm_timeout_seconds is not validated, to keep accepting what it accepted before.
         if llm_timeout_seconds is not None and (
             math.isnan(llm_timeout_seconds) or llm_timeout_seconds <= 0
@@ -148,34 +198,6 @@ class WhatsAppChannel(BaseChannel):
         self.unsupported_media_message = unsupported_media_message
         self.llm_timeout_seconds = llm_timeout_seconds
         self.queue_timeout_seconds = queue_timeout_seconds
-        # Outbound retry / body limits: fail fast on nonsense so a negative
-        # max_body_size cannot reject every webhook, and bad delays cannot
-        # collapse the backoff into an immediate retry storm (#175 item 2).
-        if not isinstance(max_outbound_retries, int) or isinstance(max_outbound_retries, bool):
-            raise ValueError(
-                f"max_outbound_retries must be a non-negative int, got {max_outbound_retries!r}"
-            )
-        if max_outbound_retries < 0:
-            raise ValueError(
-                f"max_outbound_retries must be a non-negative int, got {max_outbound_retries!r}"
-            )
-        if not (math.isfinite(outbound_base_delay) and outbound_base_delay > 0):
-            raise ValueError(
-                f"outbound_base_delay must be a positive finite number, got {outbound_base_delay!r}"
-            )
-        if not (math.isfinite(outbound_max_delay) and outbound_max_delay > 0):
-            raise ValueError(
-                f"outbound_max_delay must be a positive finite number, got {outbound_max_delay!r}"
-            )
-        if outbound_max_delay < outbound_base_delay:
-            raise ValueError(
-                "outbound_max_delay must be >= outbound_base_delay, "
-                f"got base={outbound_base_delay!r} max={outbound_max_delay!r}"
-            )
-        if not isinstance(max_body_size, int) or isinstance(max_body_size, bool) or max_body_size <= 0:
-            raise ValueError(
-                f"max_body_size must be a positive int, got {max_body_size!r}"
-            )
         self.max_outbound_retries = max_outbound_retries
         self.outbound_base_delay = outbound_base_delay
         self.outbound_max_delay = outbound_max_delay
