@@ -1070,22 +1070,106 @@ async def test_telegram_fallback_send_failure_is_caught_and_logged(
     telegram_channel: TelegramChannel,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A second exception raised while sending fallback_message must be caught and logged (#175)."""
+    """A second exception raised while sending fallback_message must be caught and logged without leaking err text (#175)."""
     telegram_channel.dispatch_async = AsyncMock(
         side_effect=RuntimeError("Primary LLM dispatch failure")
     )
 
     update, context = _build_text_update(424242, "trigger double failure")
     update.message.reply_text = AsyncMock(
-        side_effect=RuntimeError("Secondary Telegram send failure")
+        side_effect=ValueError("Secondary Telegram send failure")
     )
 
     with caplog.at_level("ERROR", logger="chatflow_agent.telegram"):
         await telegram_channel._handle_message(update, context)
 
     update.message.reply_text.assert_called_once_with(telegram_channel.fallback_message)
-    assert "Primary LLM dispatch failure" in caplog.text
-    assert "Secondary Telegram send failure" in caplog.text
+    assert "Error processing Telegram message (RuntimeError)." in caplog.text
+    assert "Failed to send Telegram fallback message (ValueError)." in caplog.text
+    assert "Primary LLM dispatch failure" not in caplog.text
+    assert "Secondary Telegram send failure" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_telegram_error_logs_never_expose_tokens_user_text_or_reply_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Exception messages carrying bot tokens, private user text, or reply chunks must never leak into logs (#175)."""
+    import logging
+    import warnings
+
+    from telegram.error import RetryAfter
+    from telegram.warnings import PTBDeprecationWarning
+
+    import chatflow_agent.channels.telegram as tg_mod
+
+    async def fake_sleep(delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(tg_mod.asyncio, "sleep", fake_sleep)
+
+    fake_token = "999888777:AAFakeBotTokenSecret_XYZ987654321"
+    private_user_text = "PRIVATE_USER_MESSAGE_SSN_123_45_6789"
+    sensitive_chunk = "CONFIDENTIAL_REPLY_CHUNK_PAYLOAD_42"
+
+    class _LeakyRetryAfter(RetryAfter):
+        def __str__(self) -> str:
+            return (
+                f"POST https://api.telegram.org/bot{fake_token}/sendMessage failed: "
+                f"user={private_user_text} chunk={sensitive_chunk}"
+            )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=PTBDeprecationWarning)
+        leaky_retry_after = _LeakyRetryAfter(1)
+
+    channel = TelegramChannel(
+        token=fake_token,
+        fallback_message="FALLBACK_TG",
+    )
+    channel.attach(
+        Runner(
+            starting_agent=Agent(name="Bot", instructions="Test"),
+            engine=MockEngine(sensitive_chunk),
+        )
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="chatflow_agent.telegram"):
+        # 1. Exhausted RetryAfter carrying token, user text, and chunk content in str(err)
+        update_flood, ctx_flood = _build_text_update(1001, private_user_text)
+        update_flood.message.reply_text = AsyncMock(side_effect=leaky_retry_after)
+        await channel._handle_message(update_flood, ctx_flood)
+
+        # 2. Primary send error + fallback send error both carrying token, user text, and chunk content
+        update_err, ctx_err = _build_text_update(1002, private_user_text)
+        update_err.message.reply_text = AsyncMock(
+            side_effect=[
+                RuntimeError(f"send failed token={fake_token} chunk={sensitive_chunk}"),
+                ConnectionError(f"fallback failed token={fake_token} user={private_user_text}"),
+            ]
+        )
+        await channel._handle_message(update_err, ctx_err)
+
+        # 3. Group /reset permission check raising an exception carrying token and user text
+        update_reset, ctx_reset = _build_reset_update(
+            -100555,
+            chat_type="supergroup",
+            user_id=77,
+            member_status=RuntimeError(f"getChatMember url=bot{fake_token} user={private_user_text}"),
+        )
+        await channel._handle_reset(update_reset, ctx_reset)
+
+    # Diagnostic class names and context are present
+    assert "Telegram flood control: max retries (3) exceeded while sending reply (_LeakyRetryAfter)." in caplog.text
+    assert "Error processing Telegram message (RuntimeError)." in caplog.text
+    assert "Failed to send Telegram fallback message (ConnectionError)." in caplog.text
+    assert "Failed to verify chat member permissions for /reset (RuntimeError)." in caplog.text
+
+    # No sensitive values from exception messages appear anywhere in the logs
+    assert fake_token not in caplog.text
+    assert private_user_text not in caplog.text
+    assert sensitive_chunk not in caplog.text
 
 
 @pytest.mark.asyncio

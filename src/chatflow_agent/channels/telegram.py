@@ -133,7 +133,9 @@ class TelegramChannel(BaseChannel):
                     if getattr(member, "status", None) in ("creator", "administrator"):
                         is_admin = True
                 except Exception as err:
-                    logger.error(f"Failed to verify chat member permissions for /reset: {err}")
+                    logger.error(
+                        f"Failed to verify chat member permissions for /reset ({type(err).__name__})."
+                    )
                     is_admin = False
 
             if not is_admin:
@@ -150,7 +152,7 @@ class TelegramChannel(BaseChannel):
         try:
             await update.message.reply_text(self.fallback_message)
         except Exception as err:
-            logger.error(f"Failed to send Telegram fallback message: {err}")
+            logger.error(f"Failed to send Telegram fallback message ({type(err).__name__}).")
 
     async def _send_chunk(self, update: Any, chunk: str) -> bool:
         """Send one reply chunk, waiting and retrying on bounded ``RetryAfter`` errors."""
@@ -171,7 +173,7 @@ class TelegramChannel(BaseChannel):
                     continue
                 logger.error(
                     f"Telegram flood control: max retries ({_MAX_OUTBOUND_RETRIES}) "
-                    f"exceeded while sending reply: {err}"
+                    f"exceeded while sending reply ({type(err).__name__})."
                 )
                 return False
 
@@ -213,7 +215,7 @@ class TelegramChannel(BaseChannel):
                     return
                 sent_any = True
         except Exception as err:
-            logger.error(f"Error processing Telegram message: {err}")
+            logger.error(f"Error processing Telegram message ({type(err).__name__}).")
             if not sent_any:
                 await self._send_fallback(update)
 
