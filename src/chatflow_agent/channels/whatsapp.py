@@ -79,6 +79,19 @@ def _mask_phone(phone: str) -> str:
     return f"{phone[:4]}***{phone[-3:]}"
 
 
+def _fallback_wamid(msg: dict[str, Any]) -> str:
+    """Derive a deterministic fallback wamid from the canonical JSON of a message dict."""
+    canonical = json.dumps(
+        msg,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"gen_{digest}"
+
+
 __all__ = ["WhatsAppChannel", "split_message"]
 
 
@@ -454,7 +467,7 @@ class WhatsAppChannel(BaseChannel):
                     if not isinstance(msg, dict):
                         _warn_malformed("messages item")
                         continue
-                    wamid = msg.get("id") or f"gen_{hash(str(msg))}"
+                    wamid = msg.get("id") or _fallback_wamid(msg)
                     sender = msg.get("from")
                     if not sender:
                         continue
