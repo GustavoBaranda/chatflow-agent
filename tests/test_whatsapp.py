@@ -219,3 +219,182 @@ def test_webhook_malformed_json_still_reports_invalid_json(
     )
     assert res.status_code == 400
     assert res.json() == {"detail": "Invalid JSON payload"}
+
+
+def _meta_message_payload(msg: dict[str, object]) -> dict[str, object]:
+    return {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "123456",
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "messages": [msg],
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_meta_fallback_wamid_is_key_order_independent_and_collision_free(
+    configured_channel: WhatsAppChannel,
+) -> None:
+    """Fallback wamid for Meta messages without id is canonical-JSON SHA-256, independent of key order (#175)."""
+    msg_order_a = {
+        "from": "5491112345678",
+        "timestamp": "1710000000",
+        "type": "text",
+        "text": {"body": "Need info on pricing", "preview_url": False},
+    }
+    msg_order_b = {
+        "text": {"preview_url": False, "body": "Need info on pricing"},
+        "type": "text",
+        "timestamp": "1710000000",
+        "from": "5491112345678",
+    }
+
+    extracted_a = configured_channel._extract_messages(_meta_message_payload(msg_order_a))
+    extracted_b = configured_channel._extract_messages(_meta_message_payload(msg_order_b))
+
+    assert len(extracted_a) == 1
+    assert len(extracted_b) == 1
+    wamid_a = extracted_a[0][0]
+    wamid_b = extracted_b[0][0]
+    assert wamid_a == wamid_b
+    assert wamid_a.startswith("gen_")
+    assert len(wamid_a) == 4 + 64
+    # Sensitive phone number and message text must not appear in the generated identifier
+    assert "5491112345678" not in wamid_a
+    assert "Need info on pricing" not in wamid_a
+
+    # Distinct messages produce distinct fallback identifiers
+    variants = [
+        {
+            "from": "5491112345679",
+            "timestamp": "1710000000",
+            "type": "text",
+            "text": {"body": "Need info on pricing", "preview_url": False},
+        },
+        {
+            "from": "5491112345678",
+            "timestamp": "1710000001",
+            "type": "text",
+            "text": {"body": "Need info on pricing", "preview_url": False},
+        },
+        {
+            "from": "5491112345678",
+            "timestamp": "1710000000",
+            "type": "text",
+            "text": {"body": "Different body", "preview_url": False},
+        },
+        {
+            "from": "5491112345678",
+            "timestamp": "1710000000",
+            "type": "image",
+            "image": {"id": "media_1"},
+        },
+    ]
+    seen_ids = {wamid_a}
+    for variant in variants:
+        [(variant_wamid, _, _)] = configured_channel._extract_messages(
+            _meta_message_payload(variant)
+        )
+        assert variant_wamid.startswith("gen_")
+        assert variant_wamid not in seen_ids
+        seen_ids.add(variant_wamid)
+
+
+def test_meta_real_wamid_is_preserved_when_present(
+    configured_channel: WhatsAppChannel,
+) -> None:
+    """When a Meta message includes an id, the real wamid is preserved untouched (#175)."""
+    msg_with_id = {
+        "id": "wamid.HBgNNTQ5MTExMjM0NTY3OBUCABIYFjNFQjA",
+        "from": "5491112345678",
+        "timestamp": "1710000000",
+        "type": "text",
+        "text": {"body": "Hello"},
+    }
+    [(wamid, sender, body)] = configured_channel._extract_messages(
+        _meta_message_payload(msg_with_id)
+    )
+    assert wamid == "wamid.HBgNNTQ5MTExMjM0NTY3OBUCABIYFjNFQjA"
+    assert sender == "5491112345678"
+    assert body == "Hello"
+
+
+def test_meta_fallback_wamid_is_stable_across_processes(
+    configured_channel: WhatsAppChannel,
+) -> None:
+    """Fallback wamid remains identical across processes with different PYTHONHASHSEED values (#175)."""
+    import os
+    import subprocess
+    import sys
+
+    msg = {
+        "from": "5491112345678",
+        "timestamp": "1710000000",
+        "type": "text",
+        "text": {"body": "Cross-process stability check"},
+    }
+    [(expected_wamid, _, _)] = configured_channel._extract_messages(_meta_message_payload(msg))
+
+    code = (
+        "from chatflow_agent.channels.whatsapp import _fallback_wamid; "
+        "msg = {'text': {'body': 'Cross-process stability check'}, "
+        "'type': 'text', 'timestamp': '1710000000', 'from': '5491112345678'}; "
+        "print(_fallback_wamid(msg))"
+    )
+    for seed in ("1", "42", "999999"):
+        env = dict(os.environ, PYTHONHASHSEED=seed)
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        assert proc.stdout.strip() == expected_wamid
+
+
+def test_meta_fallback_wamid_deduplicates_retries_without_id(
+    configured_channel: WhatsAppChannel,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Meta webhook retries lacking id are deduplicated even when key order differs, without logging content (#175)."""
+    client = TestClient(configured_channel.app)
+    first_payload = _meta_message_payload(
+        {
+            "from": "5491112345678",
+            "timestamp": "1710000000",
+            "type": "text",
+            "text": {"body": "Sensitive secret message body"},
+        }
+    )
+    second_payload = _meta_message_payload(
+        {
+            "text": {"body": "Sensitive secret message body"},
+            "type": "text",
+            "timestamp": "1710000000",
+            "from": "5491112345678",
+        }
+    )
+
+    with caplog.at_level("INFO", logger="chatflow_agent.whatsapp"):
+        first = client.post("/webhook", json=first_payload)
+        second = client.post("/webhook", json=second_payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["messages_queued"] == 1
+    assert second.json()["messages_queued"] == 0
+    assert "Skipping duplicate wamid: gen_" in caplog.text
+    assert "Sensitive secret message body" not in caplog.text
+    assert "5491112345678" not in caplog.text
+
