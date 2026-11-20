@@ -2,7 +2,10 @@
 
 import asyncio
 import contextlib
+import datetime
 import logging
+import math
+import warnings
 from typing import Any
 
 from chatflow_agent.channels.base import BaseChannel, split_message
@@ -10,6 +13,30 @@ from chatflow_agent.exceptions import ConfigurationError, DependencyError
 from chatflow_agent.types import AgentResponse
 
 logger = logging.getLogger("chatflow_agent.telegram")
+
+_MAX_OUTBOUND_RETRIES = 3
+
+
+def _retry_after_seconds(
+    err: Any,
+    warning_cls: type[Warning] = DeprecationWarning,
+) -> float:
+    """Extract a non-negative finite delay in seconds from a Telegram ``RetryAfter`` error."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=warning_cls)
+        raw: Any = getattr(err, "retry_after", None)
+    if isinstance(raw, datetime.timedelta):
+        seconds = raw.total_seconds()
+    elif isinstance(raw, bool):
+        return 0.0
+    else:
+        try:
+            seconds = float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+    if not math.isfinite(seconds) or seconds < 0.0:
+        return 0.0
+    return seconds
 
 
 class TelegramChannel(BaseChannel):
@@ -38,7 +65,9 @@ class TelegramChannel(BaseChannel):
         try:
             from telegram import Update
             from telegram.constants import ChatAction
+            from telegram.error import RetryAfter
             from telegram.ext import Application, BaseUpdateProcessor, filters
+            from telegram.warnings import PTBDeprecationWarning
         except ImportError as err:
             raise DependencyError(
                 feature="TelegramChannel",
@@ -61,6 +90,8 @@ class TelegramChannel(BaseChannel):
 
         self._update_cls = Update
         self._action_cls = ChatAction
+        self._retry_after_cls = RetryAfter
+        self._ptb_deprecation_warning_cls: type[Warning] = PTBDeprecationWarning
         self._filters = filters
 
         # Initialize python-telegram-bot application
@@ -114,6 +145,36 @@ class TelegramChannel(BaseChannel):
             await self.runner.reset_session_async(chat_id)
         await update.message.reply_text("Conversation memory has been reset.")
 
+    async def _send_fallback(self, update: Any) -> None:
+        """Send the configured fallback message without letting a second error escape."""
+        try:
+            await update.message.reply_text(self.fallback_message)
+        except Exception as err:
+            logger.error(f"Failed to send Telegram fallback message: {err}")
+
+    async def _send_chunk(self, update: Any, chunk: str) -> bool:
+        """Send one reply chunk, waiting and retrying on bounded ``RetryAfter`` errors."""
+        retries = 0
+        while True:
+            try:
+                await update.message.reply_text(chunk)
+                return True
+            except self._retry_after_cls as err:
+                if retries < _MAX_OUTBOUND_RETRIES:
+                    delay = _retry_after_seconds(err, self._ptb_deprecation_warning_cls)
+                    retries += 1
+                    logger.warning(
+                        f"Telegram flood control: retrying in {delay:.2f}s "
+                        f"(attempt {retries}/{_MAX_OUTBOUND_RETRIES})..."
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error(
+                    f"Telegram flood control: max retries ({_MAX_OUTBOUND_RETRIES}) "
+                    f"exceeded while sending reply: {err}"
+                )
+                return False
+
     async def _handle_message(self, update: Any, context: Any) -> None:
         """Process standard incoming text messages from Telegram with error resilience."""
         if not update.effective_chat or not update.message or not update.message.text:
@@ -132,6 +193,7 @@ class TelegramChannel(BaseChannel):
         except Exception:
             pass
 
+        sent_any = False
         try:
             response: AgentResponse = await self.dispatch_async(
                 session_id=chat_id,
@@ -147,10 +209,13 @@ class TelegramChannel(BaseChannel):
                 reply_text = self.fallback_message
             chunks = split_message(reply_text, max_len=4096)
             for chunk in chunks:
-                await update.message.reply_text(chunk)
+                if not await self._send_chunk(update, chunk):
+                    return
+                sent_any = True
         except Exception as err:
             logger.error(f"Error processing Telegram message: {err}")
-            await update.message.reply_text(self.fallback_message)
+            if not sent_any:
+                await self._send_fallback(update)
 
     def run(self, **kwargs: Any) -> None:
         """Start polling for Telegram updates.

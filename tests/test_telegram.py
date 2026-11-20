@@ -824,3 +824,324 @@ async def test_runner_reset_session_reentrancy_and_missing_session() -> None:
     # Sync wrapper rejects calls from a running event loop
     with pytest.raises(RuntimeError, match="Runner.reset_session\\(\\) cannot be called"):
         runner.reset_session("self-session")
+
+
+def _make_retry_after(value: Any) -> Any:
+    """Construct a PTB ``RetryAfter`` exception without emitting PTBDeprecationWarning."""
+    import warnings
+
+    from telegram.error import RetryAfter
+    from telegram.warnings import PTBDeprecationWarning
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=PTBDeprecationWarning)
+        return RetryAfter(value)
+
+
+@pytest.mark.asyncio
+async def test_telegram_retry_after_on_first_chunk_waits_and_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RetryAfter on the first chunk waits for retry_after and delivers the chunk without fallback (#175)."""
+    import datetime
+
+    import chatflow_agent.channels.telegram as tg_mod
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(tg_mod.asyncio, "sleep", fake_sleep)
+
+    agent = Agent(name="FloodBot", instructions="Test")
+    runner = Runner(starting_agent=agent, engine=MockEngine("Recovered reply"))
+    channel = TelegramChannel(
+        token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        fallback_message="FALLBACK_TG",
+    )
+    channel.attach(runner)
+
+    update, context = _build_text_update(12345, "hello")
+    update.message.reply_text = AsyncMock(
+        side_effect=[
+            _make_retry_after(2),
+            _make_retry_after(datetime.timedelta(seconds=0.5)),
+            _make_retry_after(-3),
+            None,
+        ]
+    )
+
+    await channel._handle_message(update, context)
+
+    assert sleeps == [2.0, 0.5, 0.0]
+    assert [c.args[0] for c in update.message.reply_text.call_args_list] == [
+        "Recovered reply",
+        "Recovered reply",
+        "Recovered reply",
+        "Recovered reply",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_telegram_retry_after_after_partial_chunks_does_not_duplicate_sent_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RetryAfter on chunk N retries only chunk N; already-sent chunks are never duplicated (#175)."""
+    import chatflow_agent.channels.telegram as tg_mod
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(tg_mod.asyncio, "sleep", fake_sleep)
+
+    part1 = "Part 1: " + ("A" * 2500)
+    part2 = "Part 2: " + ("B" * 2500)
+    part3 = "Part 3: " + ("C" * 2500)
+    long_reply = f"{part1}\n\n{part2}\n\n{part3}"
+
+    agent = Agent(name="MultiChunkBot", instructions="Test")
+    runner = Runner(starting_agent=agent, engine=MockEngine(long_reply))
+    channel = TelegramChannel(
+        token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        fallback_message="FALLBACK_TG",
+    )
+    channel.attach(runner)
+
+    update, context = _build_text_update(12345, "long message")
+    delivered: list[str] = []
+    attempts_per_chunk: dict[str, int] = {}
+
+    async def scripted_reply(text: str) -> None:
+        count = attempts_per_chunk.get(text, 0) + 1
+        attempts_per_chunk[text] = count
+        if text.startswith("Part 2:") and count == 1:
+            raise _make_retry_after(1.25)
+        delivered.append(text)
+
+    update.message.reply_text = AsyncMock(side_effect=scripted_reply)
+
+    await channel._handle_message(update, context)
+
+    assert sleeps == [1.25]
+    assert len(delivered) == 3
+    assert delivered[0].startswith("Part 1:")
+    assert delivered[1].startswith("Part 2:")
+    assert delivered[2].startswith("Part 3:")
+    assert attempts_per_chunk[delivered[0]] == 1
+    assert attempts_per_chunk[delivered[1]] == 2
+    assert attempts_per_chunk[delivered[2]] == 1
+    assert "FALLBACK_TG" not in delivered
+
+
+@pytest.mark.asyncio
+async def test_telegram_retry_after_exhausted_on_first_chunk_stops_without_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When RetryAfter persists past max retries on the first chunk, retrying stops boundedly without fallback (#175)."""
+    import chatflow_agent.channels.telegram as tg_mod
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(tg_mod.asyncio, "sleep", fake_sleep)
+
+    part1 = "Part 1: " + ("A" * 2500)
+    part2 = "Part 2: " + ("B" * 2500)
+    token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+    channel = TelegramChannel(
+        token=token,
+        fallback_message="FALLBACK_TG",
+    )
+    channel.attach(
+        Runner(
+            starting_agent=Agent(name="Bot", instructions="Test"),
+            engine=MockEngine(f"{part1}\n\n{part2}"),
+        )
+    )
+
+    update, context = _build_text_update(12345, "secret user message")
+    update.message.reply_text = AsyncMock(side_effect=_make_retry_after(3))
+
+    with caplog.at_level("WARNING", logger="chatflow_agent.telegram"):
+        await channel._handle_message(update, context)
+
+    # 1 initial attempt + 3 bounded retries = 4 calls total, all for chunk 1
+    assert sleeps == [3.0, 3.0, 3.0]
+    sent_args = [c.args[0] for c in update.message.reply_text.call_args_list]
+    assert len(sent_args) == 4
+    assert all(arg.startswith("Part 1:") for arg in sent_args)
+    assert "FALLBACK_TG" not in sent_args
+    assert "Telegram flood control: max retries (3) exceeded" in caplog.text
+    assert token not in caplog.text
+    assert "secret user message" not in caplog.text
+    assert "Part 1:" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_telegram_retry_after_exhausted_after_partial_chunks_stops_without_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Exhausted RetryAfter on chunk 2 stops delivery without duplicating chunk 1 or sending fallback (#175)."""
+    import chatflow_agent.channels.telegram as tg_mod
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(tg_mod.asyncio, "sleep", fake_sleep)
+
+    part1 = "Part 1: " + ("A" * 2500)
+    part2 = "Part 2: " + ("B" * 2500)
+    part3 = "Part 3: " + ("C" * 2500)
+    token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+    channel = TelegramChannel(
+        token=token,
+        fallback_message="FALLBACK_TG",
+    )
+    channel.attach(
+        Runner(
+            starting_agent=Agent(name="Bot", instructions="Test"),
+            engine=MockEngine(f"{part1}\n\n{part2}\n\n{part3}"),
+        )
+    )
+
+    update, context = _build_text_update(12345, "partial flood")
+
+    async def fail_on_part2(text: str) -> None:
+        if text.startswith("Part 2:"):
+            raise _make_retry_after(1.5)
+
+    update.message.reply_text = AsyncMock(side_effect=fail_on_part2)
+
+    with caplog.at_level("WARNING", logger="chatflow_agent.telegram"):
+        await channel._handle_message(update, context)
+
+    assert sleeps == [1.5, 1.5, 1.5]
+    sent_args = [c.args[0] for c in update.message.reply_text.call_args_list]
+    # 1 call for Part 1 + 4 calls (1 initial + 3 retries) for Part 2; Part 3 and fallback never sent
+    assert len(sent_args) == 5
+    assert sent_args[0].startswith("Part 1:")
+    assert all(arg.startswith("Part 2:") for arg in sent_args[1:])
+    assert not any(arg.startswith("Part 3:") for arg in sent_args)
+    assert "FALLBACK_TG" not in sent_args
+    assert "Telegram flood control: max retries (3) exceeded" in caplog.text
+    assert token not in caplog.text
+    assert "Part 2:" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_telegram_send_error_after_partial_chunks_does_not_send_fallback() -> None:
+    """A non-flood-control send error on chunk 2+ must not append fallback_message after partial content (#175)."""
+    part1 = "Part 1: " + ("A" * 2500)
+    part2 = "Part 2: " + ("B" * 2500)
+    channel = TelegramChannel(
+        token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        fallback_message="FALLBACK_TG",
+    )
+    channel.attach(
+        Runner(
+            starting_agent=Agent(name="Bot", instructions="Test"),
+            engine=MockEngine(f"{part1}\n\n{part2}"),
+        )
+    )
+
+    update, context = _build_text_update(12345, "partial error")
+    update.message.reply_text = AsyncMock(side_effect=[None, RuntimeError("Network drop")])
+
+    await channel._handle_message(update, context)
+
+    sent_args = [c.args[0] for c in update.message.reply_text.call_args_list]
+    assert len(sent_args) == 2
+    assert sent_args[0].startswith("Part 1:")
+    assert sent_args[1].startswith("Part 2:")
+    assert "FALLBACK_TG" not in sent_args
+
+
+@pytest.mark.asyncio
+async def test_telegram_fallback_send_failure_is_caught_and_logged(
+    telegram_channel: TelegramChannel,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A second exception raised while sending fallback_message must be caught and logged (#175)."""
+    telegram_channel.dispatch_async = AsyncMock(
+        side_effect=RuntimeError("Primary LLM dispatch failure")
+    )
+
+    update, context = _build_text_update(424242, "trigger double failure")
+    update.message.reply_text = AsyncMock(
+        side_effect=RuntimeError("Secondary Telegram send failure")
+    )
+
+    with caplog.at_level("ERROR", logger="chatflow_agent.telegram"):
+        await telegram_channel._handle_message(update, context)
+
+    update.message.reply_text.assert_called_once_with(telegram_channel.fallback_message)
+    assert "Primary LLM dispatch failure" in caplog.text
+    assert "Secondary Telegram send failure" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_telegram_cancellation_during_retry_after_sleep_propagates_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancelling _handle_message while waiting on RetryAfter propagates CancelledError without fallback (#175)."""
+    import chatflow_agent.channels.telegram as tg_mod
+
+    sleeping = asyncio.Event()
+    gate = asyncio.Event()
+
+    async def gated_sleep(delay: float) -> None:
+        sleeping.set()
+        await gate.wait()
+
+    monkeypatch.setattr(tg_mod.asyncio, "sleep", gated_sleep)
+
+    channel = TelegramChannel(
+        token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        fallback_message="FALLBACK_TG",
+    )
+    channel.attach(
+        Runner(
+            starting_agent=Agent(name="Bot", instructions="Test"),
+            engine=MockEngine("Hello"),
+        )
+    )
+
+    update, context = _build_text_update(12345, "cancel me")
+    update.message.reply_text = AsyncMock(side_effect=_make_retry_after(10))
+
+    task = asyncio.create_task(channel._handle_message(update, context))
+    await asyncio.wait_for(sleeping.wait(), timeout=2.0)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2.0)
+
+    update.message.reply_text.assert_called_once_with("Hello")
+
+
+def test_retry_after_seconds_suppresses_only_ptb_deprecation_warning() -> None:
+    """_retry_after_seconds suppresses PTBDeprecationWarning specifically without hiding other warnings (#175)."""
+    import warnings
+
+    from telegram.warnings import PTBDeprecationWarning
+
+    from chatflow_agent.channels.telegram import _retry_after_seconds
+
+    class _CustomRetryAfter:
+        @property
+        def retry_after(self) -> float:
+            warnings.warn("unrelated runtime warning", RuntimeWarning, stacklevel=2)
+            return 1.5
+
+    with pytest.warns(RuntimeWarning, match="unrelated runtime warning"):
+        assert _retry_after_seconds(_CustomRetryAfter(), PTBDeprecationWarning) == 1.5
+
