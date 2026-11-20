@@ -236,7 +236,7 @@ When `Runner` evaluates a turn for `current_agent`, [`resolve_engine()`](../src/
 
 #### Engine Implementations & Cross-Provider Normalization
 
-- **[`GeminiEngine`](../src/chatflow_agent/core/engines/gemini.py):** Calls the Google Gemini REST API (`https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`) directly via `httpx.AsyncClient` without requiring the `google-genai` SDK. Supports `GEMINI_API_KEY` / `GOOGLE_API_KEY`, coalesces consecutive user/tool turns as required by Gemini `Content` rules, and preserves `thoughtSignature` metadata on function call parts.
+- **[`GeminiEngine`](../src/chatflow_agent/core/engines/gemini.py):** Calls the Google Gemini REST API (`https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`) directly via `httpx.AsyncClient` without requiring the `google-genai` SDK. Supports `GEMINI_API_KEY` / `GOOGLE_API_KEY`. Each history message becomes its own `Content` entry (user text and tool results as `user`, model text and tool calls as `model`); consecutive turns are not merged. The agent instructions, plus any `Role.SYSTEM` history messages, are sent as `systemInstruction`. From each `functionCall` in the response, only `id`, `name` and `args` are kept; other part fields (such as `thoughtSignature`) are not stored or sent back.
 - **[`OpenAIEngine`](../src/chatflow_agent/core/engines/openai_compatible.py):** Calls OpenAI-compatible `/chat/completions` REST endpoints directly via `httpx.AsyncClient` without requiring the `openai` SDK package. Supports OpenAI (`OPENAI_API_KEY`), xAI Grok (`XAI_API_KEY`), DeepSeek (`DEEPSEEK_API_KEY`), Groq (`GROQ_API_KEY`), Ollama (`http://localhost:11434/v1`), vLLM, and custom OpenAI-compatible endpoints. Enforces strict credential isolation via `_resolve_api_key()` and `_is_official_endpoint()`: environment API keys are sent only to their provider's official HTTPS endpoint and never leaked to local loopback servers or custom third-party `base_url` endpoints.
 - **[`AnthropicEngine`](../src/chatflow_agent/core/engines/anthropic.py):** Calls the Anthropic Messages REST API (`https://api.anthropic.com/v1/messages`, `anthropic-version: 2023-06-01`) directly via `httpx.AsyncClient` using `ANTHROPIC_API_KEY`.
 - **System Prompt Normalization (`system_prompt`):** For providers with a top-level system field (`GeminiEngine` and `AnthropicEngine`), [`system_prompt()`](../src/chatflow_agent/core/engines/base.py) receives the resolved value of `agent.get_instructions()` and concatenates it with any `Role.SYSTEM` messages present in the session history.
@@ -323,10 +323,12 @@ Exception
       ├── ProviderError             (raised when communication with an LLM provider fails)
       ├── DependencyError           (.feature, .extra_package; raised when an optional extra is missing)
       ├── ToolExecutionError        (.tool_name, .original_error; raised when a tool fails at runtime)
+      │    └── ToolArgumentValidationError (model-supplied arguments failed validation before the tool ran)
       ├── ToolSchemaError           (raised at tool registration for an unrepresentable union schema)
       ├── AgentHandoffError         (raised on unauthorized, unknown, or mismatched handoff targets)
       ├── ReentrantTurnError        (also subclasses RuntimeError; raised on same-session inline re-entry)
       ├── SessionDeletedError       (SQLite only: raised when a stored session is deleted concurrently mid-turn)
+      ├── JsonCodecError            (raised when a value cannot be prepared for JSON encoding)
       └── ChannelError              (channels/base.py; raised when a channel operation fails or has no Runner attached)
 ```
 

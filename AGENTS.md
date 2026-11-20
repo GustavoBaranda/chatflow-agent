@@ -269,8 +269,9 @@ Testing rules:
 
 - English is the primary user-documentation language. Keep the relevant Spanish counterpart
   semantically equivalent: `README.md` / `README.es.md`, `docs/ARCHITECTURE.md` /
-  `docs/es/ARCHITECTURE.md`, and `docs/MIGRATION_0.4.md` /
-  `docs/es/MIGRATION_0.4.md`. `CONTRIBUTING.md` and `CHANGELOG.md` contain both languages.
+  `docs/es/ARCHITECTURE.md`, `docs/MIGRATION_0.4.md` / `docs/es/MIGRATION_0.4.md`, and
+  `docs/TROUBLESHOOTING.md` / `docs/es/TROUBLESHOOTING.md`. `CONTRIBUTING.md`, `CHANGELOG.md`
+  and `SECURITY.md` contain both languages.
 - Documentation must describe implemented behavior. Verify signatures, defaults, errors,
   timeout semantics, persistence guarantees, and examples against code and tests.
 - Update migration guidance and the changelog for authorized compatibility changes. Keep release

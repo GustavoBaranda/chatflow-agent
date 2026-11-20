@@ -431,7 +431,7 @@ except ToolArgumentValidationError as exc:
 * **Atomic Turn Rollback on Errors and Cancellation:**
   * When a turn fails with an unhandled exception, times out (`turn_timeout`), or is cancelled (`asyncio.CancelledError`), `Runner` atomically restores the full pre-turn checkpoint: message history (including any old messages pruned by `SessionContext.max_turns`), `session.active_agent`, and a deep copy of `session.metadata` (PRs #34, #52, #69).
 * **Cross-Provider Tool Call ID Normalization:**
-  * `replacement_tool_call_id(index, seed)` generates deterministic alphanumeric IDs when normalizing tool calls across providers, preventing collisions during multi-provider handoffs (PR #130).
+  * `replacement_tool_call_id(call_id)` returns `"call_"` followed by the first 24 hex digits of the SHA-256 of `call_id`. It is used when a provider would reject a tool-call ID issued by another provider after a handoff; the same ID always produces the same replacement, so a call and its result still match, and `session.history` keeps the original ID (PR #130).
 * **`Role.SYSTEM` History Message Forwarding:**
   * Mid-conversation `Role.SYSTEM` messages stored in session history are now merged and forwarded alongside `system_prompt` across `GeminiEngine`, `OpenAIEngine`, and `AnthropicEngine` instead of being silently dropped (PR #100).
 * **Resilient `ProviderError` Wrapping for Malformed Provider Payloads:**
@@ -441,7 +441,7 @@ except ToolArgumentValidationError as exc:
 * **Handoff Naming & Dynamic Registration Fixes:**
   * Non-ASCII agent names (e.g., `"Política"`, `"Müller"`) transliterate cleanly into valid `[a-z0-9_]` handoff tool names, collisions after sanitization are automatically disambiguated (`transfer_to_support_2`), and calling `agent.add_handoff()` after `Runner` initialization dynamically registers the target tree (PRs #49, #108, #112).
 * **`resolve_engine()` Precedence with `prefer_default_engine=True`:**
-  * When an `Agent` inside a multi-agent swarm inherits default `provider="gemini"` and `model="gemini-2.5-flash"` without explicit overrides, `Runner` now respects the `Runner(engine=...)` fallback engine prior to falling back to environment defaults (PR #39).
+  * When an `Agent` sets no `engine`, `provider` or `base_url` (`Agent.provider` defaults to `None`), an engine passed explicitly with `Runner(engine=...)` now takes precedence over the model-name prefix heuristics and the default Gemini fallback (PR #39).
 * **`Tool` Introspection & JSON Schema Edge Cases:**
   * Fixed schema generation for modules using `from __future__ import annotations` (PR #72), PEP 604 unions (`str | int`, `str | None`, PRs #26, #118), `typing.Annotated[T, ...]` (PR #62), typed containers (`list[int]`, `set[str]`, `dict[str, int]`, PRs #40, #87), sync and async `functools.partial` callables (PRs #43, #111), variadic `*args`/`**kwargs` parameters (PR #35), and tool parameters literally named `default` (PR #68).
 
