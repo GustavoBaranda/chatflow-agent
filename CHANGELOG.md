@@ -16,6 +16,9 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+- **Accurate `engine` Type Annotation on `Agent`** ([#220](https://github.com/GustavoBaranda/chatflow-agent/issues/220)): `Agent.__init__` and `Agent.engine` are now annotated as `BaseEngine | None` instead of `Any | None`, so static type checkers (`mypy`, `pyright`) catch invalid engines without changing runtime behavior. CI verifies this in `tests/type_checks/agent_engine.py` with `mypy --strict tests/type_checks`.
+
 ## [0.4.0rc2] - 2026-11-21
 
 ### ⚠ BREAKING CHANGES
@@ -227,6 +230,9 @@ If you are upgrading from v0.2.0:
 ## Español
 
 ## [Unreleased]
+
+### Corregido
+- **Anotación de tipo precisa de `engine` en `Agent`** ([#220](https://github.com/GustavoBaranda/chatflow-agent/issues/220)): `Agent.__init__` y `Agent.engine` ahora se anotan como `BaseEngine | None` en lugar de `Any | None`, de modo que los verificadores de tipos estáticos (`mypy`, `pyright`) detectan motores inválidos sin cambiar el comportamiento en tiempo de ejecución. CI lo verifica en `tests/type_checks/agent_engine.py` con `mypy --strict tests/type_checks`.
 
 ## [0.4.0rc2] - 2026-11-21
 
