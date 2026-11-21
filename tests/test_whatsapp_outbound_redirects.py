@@ -144,11 +144,11 @@ async def test_outbound_real_httpx_client_overrides_follow_redirects_true(
     """Real httpx.AsyncClient(follow_redirects=True) must still not follow outbound 3xx redirects."""
     fake_token = "EAAG-FAKE-WA-TOKEN-REDIRECT-TEST"
     redirect_target = "https://redirect.example/capture?secret=loc_fake_123"
-    seen_urls: list[str] = []
+    seen_urls: list[httpx.URL] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen_urls.append(str(request.url))
-        if "redirect.example" in str(request.url):
+        seen_urls.append(request.url)
+        if request.url.host == "redirect.example":
             return httpx.Response(200, json={"messages": [{"id": "should-never-happen"}]})
         return httpx.Response(
             302,
@@ -177,8 +177,8 @@ async def test_outbound_real_httpx_client_overrides_follow_redirects_true(
 
     assert ok is False
     assert len(seen_urls) == 1
-    assert "graph.facebook.com" in seen_urls[0]
-    assert "redirect.example" not in seen_urls[0]
+    assert seen_urls[0].host == "graph.facebook.com"
+    assert seen_urls[0].host != "redirect.example"
     assert redirect_target not in caplog.text
     assert "loc_fake_123" not in caplog.text
     assert fake_token not in caplog.text
