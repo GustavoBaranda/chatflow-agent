@@ -17,6 +17,7 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Fixed
+- **Reject Non-2xx Outbound WhatsApp Responses** ([#210](https://github.com/GustavoBaranda/chatflow-agent/issues/210)): `WhatsAppChannel._send_single_outbound_whatsapp()` now passes `follow_redirects=False` explicitly and treats only `2xx` (`200 <= status_code < 300`) responses as successful delivery. `3xx` redirect responses are logged with the masked recipient phone number, return `False` without retrying, and stop any remaining chunks in multi-chunk replies.
 - Reject boolean flags for `turn_timeout`, `queue_timeout_seconds`, `max_turns` and `default_max_turns` with the existing `ValueError` contract (#214). Positive numeric settings and `turn_timeout=None` are unchanged.
 
 ## [0.4.0rc2] - 2026-11-21
@@ -232,6 +233,7 @@ If you are upgrading from v0.2.0:
 ## [Unreleased]
 
 ### Corregido
+- **Rechazo de respuestas salientes no-2xx en WhatsApp** ([#210](https://github.com/GustavoBaranda/chatflow-agent/issues/210)): `WhatsAppChannel._send_single_outbound_whatsapp()` ahora pasa `follow_redirects=False` de forma explícita y considera exitosas únicamente las respuestas `2xx` (`200 <= status_code < 300`). Las respuestas de redirección `3xx` se registran con el número del destinatario enmascarado, devuelven `False` sin reintentar y detienen el envío de los fragmentos restantes en respuestas divididas.
 - Se rechazan valores booleanos en `turn_timeout`, `queue_timeout_seconds`, `max_turns` y `default_max_turns` con el mismo contrato `ValueError` (#214). Los valores numéricos positivos y `turn_timeout=None` no cambian.
 
 ## [0.4.0rc2] - 2026-11-21
