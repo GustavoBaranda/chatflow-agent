@@ -9,6 +9,7 @@ Common problems when installing and running `chatflow-agent`, with the exact mes
 - [WhatsApp webhook](#whatsapp-webhook)
 - [Timeouts](#timeouts)
 - [SQLite session stores](#sqlite-session-stores)
+- [HTTP dependency logs (`httpx` and `httpcore`)](#http-dependency-logs-httpx-and-httpcore)
 
 ---
 
@@ -155,3 +156,24 @@ Waiting in the queue does not consume `llm_timeout_seconds`, so a message can ta
 ### Worker threads or files stay open after shutdown
 
 **Fix:** close stores deterministically with `with SQLiteSessionStore(...) as store:` or `store.close()`.
+
+---
+
+## HTTP dependency logs (`httpx` and `httpcore`)
+
+### Bot tokens or API keys appear in `INFO` or `DEBUG` logs
+
+**Cause:** `chatflow-agent` does not alter global logging levels for third-party libraries. When an application configures root logging at `INFO` (e.g. `logging.basicConfig(level=logging.INFO)`), `httpx` logs every request URL, which exposes credentials placed in URLs — notably Telegram Bot API URLs in `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`), or custom `base_url` values with embedded credentials. Enabling `DEBUG` on `httpcore` additionally logs raw request headers (`Authorization`, `x-api-key`, `x-goog-api-key`).
+
+**Fix:** raise the `httpx` and `httpcore` logger levels in your application's startup code:
+
+```python
+import logging
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+```
+
+For `GeminiEngine`, keep `api_key_in_query=False` (the default) whenever your provider or proxy supports the `x-goog-api-key` header.
+
+**Limitations:** this setting suppresses `httpx`/`httpcore` request logs in your Python process, but does not redact secrets from reverse-proxy access logs, custom `httpx` event hooks, APM stack-frame variable capture (`locals()`), or other third-party loggers.

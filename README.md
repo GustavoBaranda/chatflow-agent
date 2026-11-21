@@ -446,6 +446,8 @@ When executing a turn for an `Agent`, the `Runner` resolves the LLM engine in th
 > **Vertex AI is not supported.** `GeminiEngine` calls only the Gemini Developer API (Google AI Studio) with an API key. Application Default Credentials (ADC) and the `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` variables are not used, so setups that relied on them fail with `ProviderError("Gemini API client is not configured. ...")`. Use a Gemini API key, or provide your own engine through `Runner(engine=...)`.
 >
 > **`GeminiEngine.client` was removed in v0.4.0.** It held the `google-genai` client, which is no longer a dependency. Assigning a fake to it no longer mocks anything. To call the SDK directly, install `google-genai` and create your own client. To mock Gemini in tests or customize HTTP, pass an `httpx.AsyncClient` with `GeminiEngine(http_client=...)`; it stays owned by you and must be used on one event loop only. See the [CHANGELOG](CHANGELOG.md) for the migration steps.
+>
+> **Prefer header authentication (`api_key_in_query=False`).** By default, `GeminiEngine` sends the API key in the `x-goog-api-key` header. Keep `api_key_in_query=False` whenever compatible with your endpoint: `api_key_in_query=True` places the key in the request URL (`?key=...`), which `httpx` logs at `INFO` level. See [SECURITY.md](SECURITY.md#operational-security-http-dependency-logging) for safe HTTP logging settings.
 
 ---
 
@@ -892,6 +894,8 @@ if __name__ == "__main__":
 
 > [!NOTE]
 > **Telegram `RetryAfter` wait limit (`max_retry_after_seconds`):** `max_retry_after_seconds` is a keyword-only option (default `60.0` seconds) that caps **each individual `RetryAfter` event** — it is not a global turn or delivery timeout. Each reply chunk allows up to 3 retries, so with the default `60.0` a single chunk can accumulate up to 180 seconds of sleep (excluding HTTP request times), and multi-chunk replies can accumulate additional wait across chunks. If Telegram requests a delay above `max_retry_after_seconds`, delivery aborts immediately without sleeping or retrying, without duplicating already-delivered chunks, and without appending `fallback_message` after partial delivery. Passing `max_retry_after_seconds=0.0` allows zero-second delays while rejecting any positive wait. Compared to earlier `0.4.0` prereleases, delays above 60 seconds now abort instead of sleeping for the full requested duration unless you raise `max_retry_after_seconds`.
+>
+> **HTTP Logging with `TelegramChannel`:** Telegram's Bot API embeds the bot token in the request URL path, and `python-telegram-bot` uses `httpx` internally. If your application enables `INFO` or `DEBUG` logging (for example `logging.basicConfig(level=logging.INFO)`), set `logging.getLogger("httpx").setLevel(logging.WARNING)` and `logging.getLogger("httpcore").setLevel(logging.WARNING)` so request URLs and headers are not logged. See [SECURITY.md](SECURITY.md#operational-security-http-dependency-logging) and [Troubleshooting](docs/TROUBLESHOOTING.md#http-dependency-logs-httpx-and-httpcore).
 
 ### Interactive Terminal (CLI)
 

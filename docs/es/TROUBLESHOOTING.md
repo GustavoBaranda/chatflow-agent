@@ -9,6 +9,7 @@ Problemas frecuentes al instalar y ejecutar `chatflow-agent`, con los mensajes e
 - [Webhook de WhatsApp](#webhook-de-whatsapp)
 - [Timeouts](#timeouts)
 - [Almacenes de sesión SQLite](#almacenes-de-sesión-sqlite)
+- [Logs de dependencias HTTP (`httpx` y `httpcore`)](#logs-de-dependencias-http-httpx-y-httpcore)
 
 ---
 
@@ -155,3 +156,24 @@ La espera en la cola no consume `llm_timeout_seconds`, así que un mensaje puede
 ### Quedan hilos o archivos abiertos después de cerrar la aplicación
 
 **Solución:** cerrá los almacenes de forma determinista con `with SQLiteSessionStore(...) as store:` o `store.close()`.
+
+---
+
+## Logs de dependencias HTTP (`httpx` y `httpcore`)
+
+### Aparecen tokens de bots o claves API en logs `INFO` o `DEBUG`
+
+**Causa:** `chatflow-agent` no modifica los niveles globales de logging de bibliotecas de terceros. Cuando una aplicación configura el logger raíz en nivel `INFO` (por ejemplo con `logging.basicConfig(level=logging.INFO)`), `httpx` registra cada URL de solicitud, lo que expone credenciales presentes en la URL —en particular las rutas de la Bot API de Telegram en `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`) o valores de `base_url` con credenciales embebidas. Habilitar `DEBUG` en `httpcore` además registra las cabeceras HTTP completas (`Authorization`, `x-api-key`, `x-goog-api-key`).
+
+**Solución:** elevá el nivel de los loggers `httpx` y `httpcore` al iniciar tu aplicación:
+
+```python
+import logging
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+```
+
+En `GeminiEngine`, mantené `api_key_in_query=False` (el valor por defecto) siempre que tu proveedor o proxy admita la cabecera `x-goog-api-key`.
+
+**Limitaciones:** esta configuración suprime los registros de solicitudes de `httpx`/`httpcore` en tu proceso Python, pero no redacta secretos en logs de acceso de proxies reversos, hooks personalizados de `httpx`, captura de variables locales (`locals()`) en herramientas APM ni otros loggers de terceros.

@@ -446,6 +446,8 @@ Al ejecutar un turno para un `Agent`, el `Runner` resuelve el motor LLM en este 
 > **Vertex AI no está soportado.** `GeminiEngine` invoca únicamente la API de Gemini Developer (Google AI Studio) mediante una clave de API. Application Default Credentials (ADC) y las variables `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT` y `GOOGLE_CLOUD_LOCATION` no se utilizan, por lo que las configuraciones que dependían de ellas fallarán con `ProviderError("Gemini API client is not configured. ...")`. Utiliza una clave de API de Gemini o proporciona tu propio motor mediante `Runner(engine=...)`.
 >
 > **`GeminiEngine.client` fue eliminado en v0.4.0.** Ese atributo almacenaba el cliente de `google-genai`, que ya no es una dependencia del proyecto. Asignarle un objeto simulado (mock) ya no tiene efecto. Si necesitas invocar el SDK directamente, instala `google-genai` y crea tu propio cliente. Para simular respuestas de Gemini en tests o personalizar el transporte HTTP, pasa un `httpx.AsyncClient` mediante `GeminiEngine(http_client=...)`; el cliente permanece bajo tu control y debe usarse en un único event loop. Consulta el [CHANGELOG](CHANGELOG.md) para ver los pasos de migración.
+>
+> **Preferí autenticación por cabecera (`api_key_in_query=False`).** Por defecto, `GeminiEngine` envía la clave API en la cabecera `x-goog-api-key`. Mantené `api_key_in_query=False` siempre que sea compatible con tu endpoint: `api_key_in_query=True` incluye la clave en la URL (`?key=...`), que `httpx` registra en nivel `INFO`. Consultá [SECURITY.md](SECURITY.md#seguridad-operativa-registro-de-dependencias-http) para configurar el logging HTTP de forma segura.
 
 ---
 
@@ -894,6 +896,8 @@ if __name__ == "__main__":
 
 > [!NOTE]
 > **Límite de espera `RetryAfter` en Telegram (`max_retry_after_seconds`):** `max_retry_after_seconds` es una opción solo por palabra clave (`60.0` segundos por defecto) que limita **cada evento `RetryAfter` individual** — no es un timeout global del turno ni del envío. Cada fragmento de respuesta admite hasta 3 reintentos, por lo que con el valor por defecto de `60.0` un mismo fragmento puede acumular hasta 180 segundos de `sleep` (sin incluir los tiempos de las solicitudes HTTP), y una respuesta con varios fragmentos puede acumular esperas adicionales entre fragmentos. Si Telegram solicita una espera superior a `max_retry_after_seconds`, el envío se aborta de inmediato sin dormir ni reintentar, sin duplicar fragmentos ya entregados y sin agregar `fallback_message` tras una entrega parcial. El valor `max_retry_after_seconds=0.0` permite retrasos de cero segundos pero rechaza cualquier espera positiva. Respecto a prereleases anteriores de `0.4.0`, las demoras superiores a 60 segundos ahora se abortan en lugar de esperar la duración completa, salvo que aumentes `max_retry_after_seconds`.
+>
+> **Logging HTTP con `TelegramChannel`:** la Bot API de Telegram incluye el token del bot en la ruta de cada URL, y `python-telegram-bot` utiliza `httpx` internamente. Si tu aplicación habilita logging en nivel `INFO` o `DEBUG` (por ejemplo `logging.basicConfig(level=logging.INFO)`), configurá `logging.getLogger("httpx").setLevel(logging.WARNING)` y `logging.getLogger("httpcore").setLevel(logging.WARNING)` para evitar registrar URLs y cabeceras de solicitud. Consultá [SECURITY.md](SECURITY.md#seguridad-operativa-registro-de-dependencias-http) y la [Guía de Solución de Problemas](docs/es/TROUBLESHOOTING.md#logs-de-dependencias-http-httpx-y-httpcore).
 
 ### Terminal interactiva (CLI)
 

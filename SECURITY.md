@@ -18,6 +18,29 @@ Security patches and bug fixes are provided exclusively for the latest released 
 
 ---
 
+### Operational Security: HTTP Dependency Logging
+
+`chatflow-agent` redacts configured API keys, tokens, and URL credentials from its own error messages, `ProviderError` exceptions, and channel logs, and does not mutate global Python logging configuration on behalf of your application.
+
+However, underlying HTTP dependencies (`httpx` and `httpcore`) emit their own logs when your application configures root logging at `INFO` or `DEBUG` (for example via `logging.basicConfig(level=logging.INFO)`):
+
+- **`httpx` at `INFO` level** logs full request URLs. Any credential embedded in a request URL — including Telegram Bot API URLs used by `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`), or a custom `base_url` with userinfo/query credentials — will appear in `httpx` logs.
+- **`httpcore` at `DEBUG` level** logs raw HTTP request headers (including `Authorization`, `x-api-key`, and `x-goog-api-key`).
+
+**Recommended production configuration:**
+
+```python
+import logging
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+```
+
+- Keep `GeminiEngine(api_key_in_query=False)` (the default) whenever your Gemini endpoint or proxy supports the `x-goog-api-key` header.
+- **Limitations:** raising `httpx`/`httpcore` log levels prevents those loggers from emitting request URLs and headers, but does not scrub credentials from reverse-proxy access logs, custom HTTP transport hooks, APM stack-frame `locals()`, or third-party loggers outside `httpx`/`httpcore`.
+
+---
+
 ### Reporting a Vulnerability
 
 We take the security of `chatflow-agent` seriously. If you discover a security vulnerability, **never disclose it publicly in GitHub Issues, pull requests, discussions, or social media**. Public issues are not a secure channel for reporting vulnerabilities.
@@ -80,6 +103,29 @@ Los parches de seguridad y correcciones de errores se proporcionan exclusivament
 | Versiones preliminares de `0.4.0` (p. ej. `0.4.0rc2`) | :warning: | Destinadas a pruebas y evaluación. No se recomiendan para producción. Los problemas de seguridad pueden corregirse en versiones preliminares posteriores, sin backports ni tiempos de respuesta garantizados. |
 | `0.3.4` (Última) | :white_check_mark: | Versión actual soportada bajo modalidad best-effort. |
 | `< 0.3.4` | :x: | Sin soporte. Actualiza a la última versión disponible (`0.3.4`). |
+
+---
+
+### Seguridad Operativa: Registro de Dependencias HTTP
+
+`chatflow-agent` redacta claves API, tokens y credenciales en URLs configuradas en sus propios mensajes de error, excepciones `ProviderError` y logs de canales, y no modifica la configuración global de `logging` de Python en nombre de tu aplicación.
+
+Sin embargo, las dependencias HTTP subyacentes (`httpx` y `httpcore`) emiten sus propios registros cuando tu aplicación configura el logger raíz en nivel `INFO` o `DEBUG` (por ejemplo mediante `logging.basicConfig(level=logging.INFO)`):
+
+- **`httpx` en nivel `INFO`** registra las URLs completas de cada solicitud. Cualquier credencial incluida en una URL —como las rutas de la Bot API de Telegram usadas por `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`) o un `base_url` personalizado con credenciales en `userinfo` o query— aparecerá en los logs de `httpx`.
+- **`httpcore` en nivel `DEBUG`** registra las cabeceras HTTP completas (incluyendo `Authorization`, `x-api-key` y `x-goog-api-key`).
+
+**Configuración recomendada en producción:**
+
+```python
+import logging
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+```
+
+- Mantené `GeminiEngine(api_key_in_query=False)` (valor por defecto) siempre que el proveedor o proxy admita la cabecera `x-goog-api-key`.
+- **Limitaciones:** elevar el nivel de los loggers `httpx`/`httpcore` evita que estos registren URLs y cabeceras de solicitud, pero no sanitiza credenciales en logs de acceso de proxies reversos, hooks personalizados de transporte HTTP, captura de `locals()` en herramientas APM ni otros loggers de terceros.
 
 ---
 
