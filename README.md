@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-full-dark.svg">
-    <img src="docs/assets/logo-full-light.svg" alt="Chatflow-Agent" width="520">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/GustavoBaranda/chatflow-agent/main/docs/assets/logo-full-dark.svg">
+    <img src="https://raw.githubusercontent.com/GustavoBaranda/chatflow-agent/main/docs/assets/logo-full-light.svg" alt="Chatflow-Agent" width="520">
   </picture>
 </p>
 
@@ -52,7 +52,7 @@ pip install --pre chatflow-agent
 
 ## Key Features
 
-* **Ultra-Lightweight Core:** Only 2 core runtime dependencies (`pydantic>=2.6.0`, `httpx>=0.27.0`). All LLM engines (**Google Gemini**, **OpenAI**, **Anthropic Claude**, **xAI Grok**, **DeepSeek**, **Groq**, **Ollama**, and **vLLM**) work out of the box over native `httpx` REST without heavy SDK chains; optional channel dependencies are installed only when needed.
+* **Ultra-Lightweight Core:** Only 2 core runtime dependencies (`pydantic>=2.6.0`, `httpx>=0.27.0,<1.0`). All LLM engines (**Google Gemini**, **OpenAI**, **Anthropic Claude**, **xAI Grok**, **DeepSeek**, **Groq**, **Ollama**, and **vLLM**) work out of the box over native `httpx` REST without heavy SDK chains; optional channel dependencies are installed only when needed.
 * **Omnichannel Connectors:** Built-in adapters for **WhatsApp (Meta Cloud API)**, **Telegram**, and interactive **CLI**, plus an example custom webhook application built with Starlette.
 * **Multi-Provider Freedom:** Run agents on **Google Gemini**, **OpenAI**, **Anthropic Claude**, **xAI Grok**, **DeepSeek**, **Groq**, or local models via **Ollama** (**Google Gemma**, Llama, Mistral, Qwen, Phi) and **vLLM**—even mixing different providers within the same multi-agent swarm.
 * **Autonomous Peer Handoffs:** Agents delegate conversations to specialist peers dynamically based on user intent, persisting the active specialist and session metadata across turns and server restarts.
@@ -63,7 +63,7 @@ pip install --pre chatflow-agent
 ## Installation & Requirements
 
 * **Python:** `3.10`, `3.11`, `3.12`, or `3.13`
-* **Core dependencies:** `pydantic>=2.6.0`, `httpx>=0.27.0`
+* **Core dependencies:** `pydantic>=2.6.0`, `httpx>=0.27.0,<1.0`
 
 Install only the extras your deployment requires:
 

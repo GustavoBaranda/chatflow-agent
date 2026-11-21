@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-full-dark.svg">
-    <img src="docs/assets/logo-full-light.svg" alt="Chatflow-Agent" width="520">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/GustavoBaranda/chatflow-agent/main/docs/assets/logo-full-dark.svg">
+    <img src="https://raw.githubusercontent.com/GustavoBaranda/chatflow-agent/main/docs/assets/logo-full-light.svg" alt="Chatflow-Agent" width="520">
   </picture>
 </p>
 
@@ -52,7 +52,7 @@ pip install --pre chatflow-agent
 
 ## Características principales
 
-* **Núcleo ultraligero:** Solo 2 dependencias de ejecución en el núcleo (`pydantic>=2.6.0`, `httpx>=0.27.0`). Todos los motores LLM (**Google Gemini**, **OpenAI**, **Anthropic Claude**, **xAI Grok**, **DeepSeek**, **Groq**, **Ollama** y **vLLM**) funcionan de serie mediante cliente REST `httpx` nativo sin cadenas pesadas de SDKs; las dependencias opcionales de los canales se instalan únicamente cuando se necesitan.
+* **Núcleo ultraligero:** Solo 2 dependencias de ejecución en el núcleo (`pydantic>=2.6.0`, `httpx>=0.27.0,<1.0`). Todos los motores LLM (**Google Gemini**, **OpenAI**, **Anthropic Claude**, **xAI Grok**, **DeepSeek**, **Groq**, **Ollama** y **vLLM**) funcionan de serie mediante cliente REST `httpx` nativo sin cadenas pesadas de SDKs; las dependencias opcionales de los canales se instalan únicamente cuando se necesitan.
 * **Conectores omnicanal:** Adaptadores integrados para **WhatsApp (Meta Cloud API)**, **Telegram** y **CLI** interactiva, además de una aplicación de ejemplo para webhooks personalizados construida con Starlette.
 * **Libertad multi-proveedor:** Ejecuta agentes sobre **Google Gemini**, **OpenAI**, **Anthropic Claude**, **xAI Grok**, **DeepSeek**, **Groq** o modelos locales mediante **Ollama** (**Google Gemma**, Llama, Mistral, Qwen, Phi) y **vLLM**, incluso combinando distintos proveedores en un mismo enjambre.
 * **Handoffs autónomos entre pares:** Los agentes delegan conversaciones dinámicamente a especialistas según la intención del usuario, conservando el agente activo y los metadatos de la sesión entre turnos y reinicios del servidor.
@@ -63,7 +63,7 @@ pip install --pre chatflow-agent
 ## Instalación y requisitos
 
 * **Python:** `3.10`, `3.11`, `3.12` o `3.13`
-* **Dependencias del núcleo:** `pydantic>=2.6.0`, `httpx>=0.27.0`
+* **Dependencias del núcleo:** `pydantic>=2.6.0`, `httpx>=0.27.0,<1.0`
 
 Instala únicamente los extras que tu despliegue requiera:
 
