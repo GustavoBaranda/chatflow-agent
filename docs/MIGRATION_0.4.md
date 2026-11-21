@@ -475,6 +475,16 @@ except ToolArgumentValidationError as exc:
 
 ---
 
+### 3.6. Boolean Flags in Numeric Configuration
+
+`True` and `False` raise `ValueError` for `Runner.run_async(turn_timeout=...)`,
+`WhatsAppChannel(queue_timeout_seconds=...)`, and the `max_turns` /
+`default_max_turns` arguments of `SessionContext`, `SQLiteSessionContext`,
+`SessionStore` and `SQLiteSessionStore`. Pass positive integer turn limits and
+positive finite numeric timeout values instead of boolean flags.
+`turn_timeout=None` still disables the active turn timeout. Defaults, valid
+numeric inputs and SQLite schemas are unchanged.
+
 ## 4. Related Documentation
 
 * **[Architecture Guide](ARCHITECTURE.md):** Detailed breakdown of the `Runner` execution loop, engine resolution, tool introspection, handoffs, SQLite concurrency, and channels.

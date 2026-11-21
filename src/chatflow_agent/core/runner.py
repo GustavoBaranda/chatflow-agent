@@ -620,8 +620,8 @@ class Runner:
         limits = _dispatch_limits.get()
         if limits is not None:
             _dispatch_limits.set(None)
-        if turn_timeout is not None and not (
-            math.isfinite(turn_timeout) and turn_timeout > 0
+        if turn_timeout is not None and (
+            isinstance(turn_timeout, bool) or not (math.isfinite(turn_timeout) and turn_timeout > 0)
         ):
             raise ValueError(
                 f"turn_timeout must be a positive finite number or None, got {turn_timeout!r}"

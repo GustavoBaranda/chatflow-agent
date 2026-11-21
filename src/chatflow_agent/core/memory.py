@@ -46,7 +46,7 @@ class SessionContext:
         max_turns: int = 40,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        if max_turns<=0:
+        if isinstance(max_turns, bool) or max_turns <= 0:
             raise ValueError(
                 f"max_turns must be positive,got {max_turns}"
             )
@@ -221,7 +221,7 @@ class SessionStore(BaseSessionStore):
         dedup_ttl_hours: float = DEFAULT_DEDUP_TTL_HOURS,
     ) -> None:
         import time as _time
-        if default_max_turns <= 0:
+        if isinstance(default_max_turns, bool) or default_max_turns <= 0:
             raise ValueError(
         f"default_max_turns must be a positive integer, got {default_max_turns}"
     )
@@ -380,7 +380,7 @@ class SQLiteSessionContext(SessionContext):
         owner: "SQLiteSessionStore | None" = None,
         default_agent: Agent | None = None,
     ) -> None:
-        if max_turns <= 0:
+        if isinstance(max_turns, bool) or max_turns <= 0:
             raise ValueError(f"max_turns must be a positive integer, got {max_turns}")
         super().__init__(
             session_id=session_id,
@@ -870,7 +870,7 @@ class SQLiteSessionStore(BaseSessionStore):
         default_max_turns: int = 40,
         dedup_ttl_hours: float = DEFAULT_DEDUP_TTL_HOURS,
     ) -> None:
-        if default_max_turns <= 0:
+        if isinstance(default_max_turns, bool) or default_max_turns <= 0:
             raise ValueError(
         f"default_max_turns must be a positive integer, got {default_max_turns}")
         self.db_path = str(db_path)
