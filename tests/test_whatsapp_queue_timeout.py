@@ -85,7 +85,7 @@ def build(
     store: Any,
     *,
     queue: float,
-    turn: float,
+    turn: float | None,
     engine: BaseEngine | None = None,
     tools: list[Any] | None = None,
 ) -> tuple[WhatsAppChannel, Runner, Any, list[tuple[str, str]]]:
@@ -489,6 +489,26 @@ async def test_llm_timeout_without_limit_keeps_working(any_store: Any, llm: Any)
     engine.gates["slow"].set()
     await bounded(task)
     assert sent == [(PHONE, "re:slow")]
+
+
+@pytest.mark.asyncio
+async def test_constructor_llm_timeout_none_runs_turns_without_turn_limit(
+    any_store: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Constructing WhatsAppChannel with llm_timeout_seconds=None runs turns without a turn limit (#200)."""
+    engine = GateEngine()
+    with caplog.at_level(logging.WARNING, logger="chatflow_agent.whatsapp"):
+        channel, _, _, sent = build(any_store, queue=5.0, turn=None, engine=engine)
+    assert channel.llm_timeout_seconds is None
+    assert "llm_timeout_seconds=" not in caplog.text
+    engine.gates["slow"] = asyncio.Event()
+    task = process(channel, "w1", "slow")
+    await bounded(engine.started_event("slow").wait())
+    await asyncio.sleep(0.1)
+    engine.gates["slow"].set()
+    await bounded(task)
+    assert sent == [(PHONE, "re:slow")]
+    assert history(any_store) == ["slow", "re:slow"]
 
 
 @pytest.mark.asyncio

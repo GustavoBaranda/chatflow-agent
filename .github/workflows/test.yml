@@ -40,8 +40,8 @@ jobs:
       - name: Run Mypy Type Check
         run: python -m mypy
 
-      - name: Run Decorator Typing Check
-        run: python -m mypy --strict tests/type_checks/decorators.py
+      - name: Run Static Typing Checks
+        run: python -m mypy --strict tests/type_checks
 
       - name: Run Pytest Suite
         run: pytest -v

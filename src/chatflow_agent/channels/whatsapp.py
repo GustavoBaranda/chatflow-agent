@@ -149,7 +149,7 @@ class WhatsAppChannel(BaseChannel):
             "Por favor intenta nuevamente en unos momentos."
         ),
         unsupported_media_message: str = ("Por el momento solo puedo procesar mensajes de texto."),
-        llm_timeout_seconds: float = 120.0,
+        llm_timeout_seconds: float | None = 120.0,
         max_outbound_retries: int = 3,
         outbound_base_delay: float = 1.0,
         outbound_max_delay: float = 30.0,
@@ -209,7 +209,7 @@ class WhatsAppChannel(BaseChannel):
         self.api_version = api_version
         self.fallback_message = fallback_message
         self.unsupported_media_message = unsupported_media_message
-        self.llm_timeout_seconds = llm_timeout_seconds
+        self.llm_timeout_seconds: float | None = llm_timeout_seconds
         self.queue_timeout_seconds = queue_timeout_seconds
         self.max_outbound_retries = max_outbound_retries
         self.outbound_base_delay = outbound_base_delay
