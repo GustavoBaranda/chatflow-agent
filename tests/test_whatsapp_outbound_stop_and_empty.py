@@ -73,7 +73,7 @@ async def test_empty_reply_sends_fallback_not_empty_body() -> None:
     channel = _channel()
     posted: list[dict] = []
 
-    async def capture_post(url, json=None, headers=None, timeout=None):
+    async def capture_post(url, json=None, headers=None, timeout=None, **kwargs):
         posted.append(json)
         return httpx.Response(status_code=200, json={"messages": [{"id": "ok"}]})
 

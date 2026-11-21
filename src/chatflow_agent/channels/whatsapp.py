@@ -633,10 +633,23 @@ class WhatsAppChannel(BaseChannel):
         while True:
             try:
                 async with self._httpx.AsyncClient() as client:
-                    res = await client.post(url, json=body, headers=headers, timeout=10.0)
+                    res = await client.post(
+                        url,
+                        json=body,
+                        headers=headers,
+                        timeout=10.0,
+                        follow_redirects=False,
+                    )
 
-                    if res.status_code < 400:
+                    if 200 <= res.status_code < 300:
                         return True
+
+                    if 300 <= res.status_code < 400:
+                        logger.error(
+                            f"WhatsApp outbound request to {masked} was redirected "
+                            f"(HTTP {res.status_code}); redirects are not followed."
+                        )
+                        return False
 
                     # Handle 429 Too Many Requests: respect Retry-After header + jitter
                     if res.status_code == 429:
