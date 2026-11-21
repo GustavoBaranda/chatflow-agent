@@ -15,6 +15,18 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
 from chatflow_agent.channels.base import BaseChannel, split_message
+from chatflow_agent.core._redaction import (
+    describe_error as _describe_error,
+)
+from chatflow_agent.core._redaction import (
+    is_valid_header_secret as _is_valid_header_secret,
+)
+from chatflow_agent.core._redaction import (
+    redact_secrets as _redact_secrets,
+)
+from chatflow_agent.core._redaction import (
+    sanitize_error_body as _sanitize_error_body,
+)
 from chatflow_agent.core.memory import _run_blocking
 from chatflow_agent.core.runner import (
     _dispatch_limits,
@@ -608,6 +620,14 @@ class WhatsAppChannel(BaseChannel):
             if not ok:
                 return
 
+    def _outbound_secrets(self) -> list[str | None]:
+        """Secrets to redact from outbound HTTP error bodies and logs."""
+        return [self.access_token, self.app_secret, self.verify_token]
+
+    def _redact_outbound(self, text: str) -> str:
+        """Remove configured WhatsApp credentials and embedded URL userinfo from log text."""
+        return _redact_secrets(text, self._outbound_secrets())
+
     async def _send_single_outbound_whatsapp(self, to_phone: str, text: str) -> bool:
         """Send a single text message chunk via Meta WhatsApp Cloud API with retries and 24h detection.
 
@@ -617,6 +637,13 @@ class WhatsAppChannel(BaseChannel):
         import random
 
         masked = _mask_phone(to_phone)
+        if not self.access_token or not _is_valid_header_secret(self.access_token):
+            logger.error(
+                f"Cannot send outbound WhatsApp message to {masked}: access_token is missing "
+                "or contains spaces, control characters, or non-ASCII characters."
+            )
+            return False
+
         url = f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/messages"
         headers = {
             "Authorization": f"Bearer {self.access_token}",
@@ -706,42 +733,62 @@ class WhatsAppChannel(BaseChannel):
                                     )
                             return False
                     except Exception as parse_err:
+                        safe_parse_err = self._redact_outbound(_describe_error(parse_err))
+                        safe_raw = _sanitize_error_body(
+                            res.text, self._outbound_secrets(), limit=150
+                        )
                         logger.warning(
-                            f"Unable to parse Meta error payload for {masked}: {parse_err} (raw: {res.text[:150]})"
+                            f"Unable to parse Meta error payload for {masked}: "
+                            f"{safe_parse_err} (raw: {safe_raw})"
                         )
 
-                    # Non-retriable 4xx/5xx: log error with masked phone and exit without retrying
+                    # Non-retriable 4xx/5xx: log error with masked phone, redacted & bounded body
+                    safe_body = _sanitize_error_body(
+                        res.text, self._outbound_secrets(), limit=1000
+                    )
                     logger.error(
-                        f"Failed to send outbound WhatsApp message to {masked}: {res.status_code} - {res.text}"
+                        f"Failed to send outbound WhatsApp message to {masked}: "
+                        f"{res.status_code} - {safe_body}"
                     )
                     return False
 
             # ONLY retry on connect errors (connection failed before request could be accepted by Meta)
             except (self._httpx.ConnectError, self._httpx.ConnectTimeout) as net_err:
+                safe_net_err = self._redact_outbound(_describe_error(net_err))
                 if retries < self.max_outbound_retries:
                     base_delay = self.outbound_base_delay * (2**retries)
                     jitter = random.uniform(0.0, 0.25 * base_delay)
                     delay = min(self.outbound_max_delay, base_delay + jitter)
                     logger.warning(
-                        f"Connect error calling WhatsApp API for {masked}: {net_err}. "
+                        f"Connect error calling WhatsApp API for {masked} "
+                        f"({type(net_err).__name__}): {safe_net_err}. "
                         f"Retrying in {delay:.2f}s (attempt {retries + 1}/{self.max_outbound_retries})..."
                     )
                     await asyncio.sleep(delay)
                     retries += 1
                     continue
-                logger.error(f"Max retries exceeded for {masked} after connect error: {net_err}")
+                logger.error(
+                    f"Max retries exceeded for {masked} after connect error "
+                    f"({type(net_err).__name__}): {safe_net_err}"
+                )
                 return False
 
             # Read/Write timeouts must NOT retry because Meta may have already received and delivered the message
             except (self._httpx.ReadTimeout, self._httpx.WriteTimeout) as timeout_err:
+                safe_timeout_err = self._redact_outbound(_describe_error(timeout_err))
                 logger.error(
-                    f"Read/write timeout sending outbound message to {masked}: {timeout_err}. "
+                    f"Read/write timeout sending outbound message to {masked} "
+                    f"({type(timeout_err).__name__}): {safe_timeout_err}. "
                     "Not retrying to prevent duplicate message dispatch."
                 )
                 return False
 
             except Exception as err:
-                logger.error(f"Error calling WhatsApp Cloud API for {masked}: {err}")
+                safe_err = self._redact_outbound(_describe_error(err))
+                logger.error(
+                    f"Error calling WhatsApp Cloud API for {masked} "
+                    f"({type(err).__name__}): {safe_err}"
+                )
                 return False
 
     def run(self, host: str = "0.0.0.0", port: int = 8000, **kwargs: Any) -> None:
