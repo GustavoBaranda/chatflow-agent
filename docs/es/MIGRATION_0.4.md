@@ -50,7 +50,7 @@ Para la mayoría de las aplicaciones, actualizar de `v0.3.4` a `0.4.0` es una **
   * `google-genai>=0.3.0` era una dependencia principal del paquete en `pyproject.toml`.
   * `GeminiEngine` inicializaba `genai.Client(api_key=resolved_key)`. Cuando no se configuraba `api_key`, `GEMINI_API_KEY` ni `GOOGLE_API_KEY`, `GeminiEngine` emitía una advertencia en el log y permitía que `genai.Client()` recurriera a Google Cloud Vertex AI / Application Default Credentials (`GOOGLE_GENAI_USE_VERTEXAI` / ADC).
 * **Comportamiento actual (`0.4.0`):**
-  * `google-genai` fue eliminado de `pyproject.toml`. Las dependencias principales son ahora únicamente `pydantic>=2.6.0` y `httpx>=0.27.0`.
+  * `google-genai` fue eliminado de `pyproject.toml`. Las dependencias principales son ahora únicamente `pydantic>=2.6.0` y `httpx>=0.27.0,<1.0` (la cota superior `<1.0` evita que instalaciones prerelease resuelvan versiones de desarrollo incompatibles de `httpx` 1.x, PR #206).
   * `GeminiEngine` se comunica directamente con la API REST de Google Gemini (`https://generativelanguage.googleapis.com/v1beta` por defecto, o reemplazada mediante `GOOGLE_GEMINI_BASE_URL`) mediante `httpx.AsyncClient` usando el encabezado `x-goog-api-key` (o `api_key_in_query=True`), y acepta `http_client: httpx.AsyncClient | None = None`.
   * Si no se proporciona una clave mediante `api_key=...` y tampoco están definidas `GEMINI_API_KEY` ni `GOOGLE_API_KEY` en el entorno, `GeminiEngine.generate_turn_async()` lanza `ProviderError` en el primer turno (fail-closed) en lugar de intentar autenticación mediante Vertex AI ADC.
 * **Usuarios afectados:**
@@ -292,11 +292,17 @@ Las siguientes mejoras, validaciones y correcciones de errores se incorporaron e
    * Los usuarios de `CLIChannel` pueden escribir `/reset` durante una sesión interactiva para limpiar el historial de conversación sin reiniciar el proceso; el agente activo y `metadata` se conservan (PR #119).
 7. **Autodetección del prefijo de modelo `deepseek-*` en `resolve_engine()`:**
    * Configurar `model="deepseek-chat"` o `model="deepseek-reasoner"` sin un `provider` explícito selecciona automáticamente `provider="deepseek"` (`https://api.deepseek.com`, `DEEPSEEK_API_KEY`) (PR #55).
-8. **Nuevas excepciones públicas exportadas en `chatflow_agent` y `chatflow_agent.exceptions`:**
-   * `ToolSchemaError` (subclase de `ChatFlowError`, PRs #118, #136)
-   * `ToolArgumentValidationError` (subclase de `ToolExecutionError`)
-   * `ReentrantTurnError` (subclase de `ChatFlowError` y `RuntimeError`, PR #120)
-   * `SessionDeletedError` (subclase de `ChatFlowError`, PR #120)
+8. **`AnthropicEngine(max_tokens=...)` configurable y registro de truncamiento:**
+   * `AnthropicEngine` acepta el parámetro solo por nombre `max_tokens: int = 4096` (reemplazando el valor fijo del payload), lanza `ConfigurationError` ante valores no positivos o booleanos y registra una advertencia cuando Anthropic responde con `stop_reason == "max_tokens"` (PR #193).
+9. **Actualizaciones concurrentes en Telegram y reset seguro por sesión (`concurrent_updates`, `Runner.reset_session_async()`, `Runner.reset_session()`):**
+   * `TelegramChannel` acepta la opción solo por nombre `concurrent_updates` (`False` por defecto; admite `bool`, un `int` positivo o un `BaseUpdateProcessor`, lanzando `ConfigurationError` ante valores inválidos). El comando `/reset` de Telegram delega en `Runner.reset_session_async(session_id)`, coordinando la limpieza del historial con el lock de sesión, la barrera de trabajo síncrono, la guarda de reentrada (`ReentrantTurnError`) y la descarga a hilos trabajadores de SQLite (PR #189).
+10. **Nuevas excepciones públicas exportadas en `chatflow_agent` y `chatflow_agent.exceptions`:**
+    * `ConfigurationError` (subclase de `ChatFlowError` y `ValueError`, PR #183)
+    * `JsonCodecError` (subclase de `ChatFlowError`, PR #188)
+    * `ToolSchemaError` (subclase de `ChatFlowError`, PRs #118, #136)
+    * `ToolArgumentValidationError` (subclase de `ToolExecutionError`, PR #160)
+    * `ReentrantTurnError` (subclase de `ChatFlowError` y `RuntimeError`, PR #120)
+    * `SessionDeletedError` (subclase de `ChatFlowError`, PR #120)
 
 ```python
 import asyncio
@@ -304,7 +310,9 @@ import httpx
 from chatflow_agent import (
     Agent,
     ChatFlowError,
+    ConfigurationError,
     GeminiEngine,
+    JsonCodecError,
     ReentrantTurnError,
     Runner,
     SQLiteSessionStore,
@@ -324,6 +332,8 @@ def lookup_order(order_id: str) -> str:
 tool_obj = Tool(func=lookup_order)
 schema = tool_obj.to_openai_parameters()
 assert schema["required"] == ["order_id"]
+assert issubclass(ConfigurationError, (ChatFlowError, ValueError))
+assert issubclass(JsonCodecError, ChatFlowError)
 assert issubclass(ToolSchemaError, ChatFlowError)
 assert issubclass(ToolArgumentValidationError, ToolExecutionError)
 assert issubclass(ReentrantTurnError, ChatFlowError)
@@ -363,6 +373,9 @@ asyncio.run(demo_new_features())
 * **Protección ante sesiones eliminadas (`SessionDeletedError`):** Si una `SQLiteSessionContext` es eliminada mediante `store.delete(session_id)` mientras un turno está en cola o en ejecución, el turno en curso falla con `SessionDeletedError` y hace rollback sin dejar filas detrás, y un turno en cola arranca después una sesión nueva y vacía (PR #120).
 * **Logs estructurados de timeouts en `WhatsAppChannel`:** Los mensajes de advertencia de timeout en `WhatsAppChannel` fueron refinados para distinguir entre contención en la cola del lock (`"Session busy for %s after %ss; skipping turn."`), timeouts de ejecución del turno (`"Turn timed out for %s after %ss."`) y expiración del backstop (`"Dispatch backstop expired for %s after %ss"` / `"TimeoutError raised while dispatching message from %s"`) (PR #131).
 * **`Runner.run()` dentro de un bucle de eventos activo:** Llamar al helper síncrono `Runner.run()` desde dentro de un bucle de eventos `asyncio` ya en ejecución ahora lanza un error claro `RuntimeError("Runner.run() cannot be called from a running event loop. Use `await runner.run_async(...)` instead.")` (PR #57).
+* **Validación estricta de proveedores y endpoints (`ConfigurationError`):** Pasar un `provider` no soportado a `Agent`, combinar `provider="gemini"`/`"google"` con `base_url`, configurar un `base_url` remoto personalizado sin `api_key` explícita o pasar un `provider` no reconocido a `OpenAIEngine` sin `base_url` ahora lanza `ConfigurationError` (subclase de `ValueError`) al configurar en lugar de recurrir silenciosamente a heurísticas o fallar a mitad del turno (PR #183).
+* **Serialización JSON estricta de metadatos de sesión (`JsonCodecError`):** Los metadatos de sesión se codifican mediante un `json_codec` compartido que serializa `datetime`/`date`/`time` como ISO-8601 y lanza `JsonCodecError` ante objetos no soportados en lugar de convertirlos silenciosamente a texto o fallar de forma inconsistente; la codificación en cable de resultados de herramientas conserva la coerción a cadena para valores hoja no JSON (PR #188).
+* **Contratos de envío, tamaño de payload y timeout en `WhatsAppChannel`:** Valores inválidos de `max_outbound_retries` (`0..10`), `outbound_base_delay` (`>= 0`, finito), `outbound_max_delay` (`>= 0`, finito) o `max_body_size` (`int` positivo; se rechazan booleanos y flotantes como `2e6`) ahora fallan tempranamente con `ConfigurationError` en el constructor (PR #198). `llm_timeout_seconds` se anota como `float | None = 120.0` para coincidir con su comportamiento en tiempo de ejecución donde `None` desactiva el límite de turno (PR #205).
 * **Validación de argumentos en constructores (`ValueError`):**
   * `Agent(name="", instructions="...")` o un `Agent.name` compuesto solo por espacios en blanco lanza `ValueError` (PR #86).
   * `SQLiteSessionStore(..., default_max_turns=0)` o `SessionContext(..., max_turns=0)` (o `< 0`) lanza `ValueError` (PR #63).
@@ -388,7 +401,7 @@ asyncio.run(demo_new_features())
 * **Anotaciones no soportadas y contrato de fallback:**
   * Tipos sin mapeo de esquema concreto (como `TypedDict`, `Enum`, `dataclass`, `BaseModel` y `Literal`) retienen el fallback compatible hacia atrás (Gemini OpenAPI 3.0 `{"type": "STRING"}` / OpenAI JSON Schema `{"type": "string"}`) para parámetros no unión y aceptan valores bajo `Any` en validación de runtime. En uniones, tipos no mapeables fallan tempranamente con `ToolSchemaError` al registrarse.
 * **Firmas de Python y valores por defecto:**
-  * Parámetros con guiones bajos iniciales (ej. `_id`, `_query`), parámetros nombrados `model_config` y métodos no enlazados con parámetro receptor `self` se validan correctamente sin colisiones ni advertencias.
+  * Parámetros con guiones bajos iniciales (ej. `_id`, `_query`), parámetros nombrados `model_config` y parámetros llamados `self` o `cls` en funciones comunes se conservan y validan como parámetros ordinarios sin colisiones ni advertencias (PR #191). Los métodos de instancia y de clase deben registrarse como métodos enlazados.
   * `Tool.__call__` preserva la semántica de llamada de Python en todos los tipos de parámetros (posicionales puros, variádicos, sólo por nombre), manteniendo espacios de nombres independientes cuando parámetros posicionales puros comparten nombre con entradas en `**kwargs`.
   * Pasar argumentos posicionales puros como palabras clave falla tempranamente con el error específico `positional-only argument passed as keyword` cuando la función no tiene `**kwargs`. Con `**kwargs`, esas palabras clave se reenvían a `**kwargs`, como en Python nativo. La aceptación y el rechazo son idénticos en todas las versiones de Python soportadas.
   * Parámetros omitidos con valores por defecto (incluyendo valores por defecto mutables como `tags: list[str] = []` u objetos centinela) preservan el enlace nativo de Python y la identidad de los objetos.
@@ -436,8 +449,13 @@ except ToolArgumentValidationError as exc:
   * Los mensajes `Role.SYSTEM` almacenados en mitad del historial de sesión ahora se fusionan y reenvían junto con `system_prompt` en `GeminiEngine`, `OpenAIEngine` y `AnthropicEngine` en lugar de ser descartados silenciosamente (PR #100).
 * **Encapsulamiento resiliente en `ProviderError` ante respuestas malformadas del proveedor:**
   * Respuestas HTTP que no contienen JSON válido, ausencia de `choices`/`candidates` y argumentos JSON de herramientas malformados provenientes del proveedor ahora se encapsulan consistentemente en `ProviderError` en lugar de propagar `JSONDecodeError`, `IndexError` o `KeyError` crudos (PR #124).
-* **Endurecimiento del webhook de `WhatsAppChannel`:**
+* **Endurecimiento del webhook y entregas salientes de `WhatsAppChannel`:**
   * Las notificaciones de webhook de tipo `reaction` y `system` ignoradas y las estructuras anidadas malformadas ya no provocan excepciones no controladas, y los cuerpos JSON que no son objetos (`[]`, `"str"`, `123`) ahora devuelven HTTP `400 Bad Request` (PRs #110, #117, #129).
+  * Las respuestas HTTP JSON del webhook ahora enmascaran el número `sender` con `_mask_phone()` (PR #192); los mensajes de Meta que omiten `"id"` generan un `wamid` fallback determinista mediante SHA-256 (`gen_<sha256>`) sobre JSON canónico (PR #204); la entrega saliente detiene los fragmentos restantes ante un fallo, envía `fallback_message` ante respuestas vacías o solo con espacios y advierte al construirse si faltan credenciales salientes (PR #180); y `on_24h_window_expired` espera cualquier valor de retorno awaitable (PR #196).
+* **Resiliencia ante flood-control y fallback en `TelegramChannel`:**
+  * `TelegramChannel` captura `telegram.error.RetryAfter` por fragmento no enviado y reintenta hasta 3 veces sin duplicar fragmentos ya entregados, envía `fallback_message` ante respuestas vacías o solo con espacios, protege el envío del fallback frente a errores secundarios (sin agregar `fallback_message` tras una entrega parcial) y registra únicamente el nombre de la clase de excepción en errores de handlers (PRs #180, #203).
+* **Manejo consistente de `Retry-After` entre proveedores y WhatsApp:**
+  * Los encabezados `Retry-After` negativos o no finitos en `WhatsAppChannel`, `OpenAIEngine` y `AnthropicEngine` ahora recurren al backoff exponencial en lugar de disparar un reintento inmediato, igualando el comportamiento de `GeminiEngine` (PR #194).
 * **Desambiguación de nombres de handoff y registro dinámico:**
   * Los nombres de agentes no ASCII (por ejemplo, `"Política"`, `"Müller"`) se transliteran limpiamente a nombres de herramientas de handoff válidos `[a-z0-9_]`, las colisiones tras la sanitización se desambiguan automáticamente (`transfer_to_support_2`), y llamar a `agent.add_handoff()` después de inicializar `Runner` registra dinámicamente el subárbol de destino (PRs #49, #108, #112).
 * **Precedencia de `resolve_engine()` con `prefer_default_engine=True`:**
@@ -449,7 +467,7 @@ except ToolArgumentValidationError as exc:
 
 ### 3.5. Mejoras internas que no requieren migración
 
-* **I/O no bloqueante para SQLite basado en archivo:** Las instancias de `SQLiteSessionStore` basadas en archivo delegan las operaciones bloqueantes de SQLite a un `ThreadPoolExecutor` dedicado de 4 workers mediante `_run_blocking()` cuando se invocan desde un contexto asíncrono, evitando bloqueos del bucle de eventos bajo carga (PR #133).
+* **I/O no bloqueante para SQLite basado en archivo y menor sobrecarga de conexiones:** Las instancias de `SQLiteSessionStore` basadas en archivo delegan las operaciones bloqueantes de SQLite a un `ThreadPoolExecutor` dedicado de 4 workers mediante `_run_blocking()` cuando se invocan desde un contexto asíncrono, evitando bloqueos del bucle de eventos bajo carga (PR #133). `SQLiteSessionStore.get()` lee los metadatos de sesión y los mensajes en una única transacción, y `Runner.run_async()` activa el turn journal directamente a partir del estado cargado por `get_or_create()` sin una consulta `refresh()` redundante (PR #190).
 * **Deduplicación atómica de `wamid`:** `SQLiteSessionStore.record_processed_message()` registra el id del mensaje con un único upsert condicional, `INSERT INTO chatflow_processed_messages ... ON CONFLICT(message_id) DO UPDATE SET processed_at = CURRENT_TIMESTAMP WHERE processed_at < datetime('now', ?)`: un id registrado dentro del TTL no se toca (0 filas cambiadas) y un registro expirado se renueva. Los registros expirados se purgan después con un `DELETE` separado dentro de la misma transacción (PR #120).
 * **Gestión automática del pool en canales y `Runner.run()`:** `Runner.run()`, `TelegramChannel.run()` y el ciclo de vida (`lifespan`) de `WhatsAppChannel` entran automáticamente en `async with runner:` para que el pooling de conexiones esté activo sin configuración adicional (PR #130).
 * **Compatibilidad total hacia atrás del esquema SQLite:** Los archivos de base de datos SQLite existentes creados en `v0.3.x` funcionan en `0.4.0` sin necesidad de migración manual de esquema.
