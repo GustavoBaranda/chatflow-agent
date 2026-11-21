@@ -12,7 +12,7 @@ Security patches and bug fixes are provided exclusively for the latest released 
 
 | Version | Supported | Notes |
 |:-------:|:---------:|:------|
-| `0.4.0` pre-releases (e.g. `0.4.0rc1`) | :warning: | Intended for testing and evaluation. Not recommended for production. Security issues may be addressed in subsequent pre-release versions, without guaranteed backports or response times. |
+| `0.4.0` pre-releases (e.g. `0.4.0rc2`) | :warning: | Intended for testing and evaluation. Not recommended for production. Security issues may be addressed in subsequent pre-release versions, without guaranteed backports or response times. |
 | `0.3.4` (Latest) | :white_check_mark: | Current release supported on a best-effort basis. |
 | `< 0.3.4` | :x: | Unsupported. Please upgrade to the latest release (`0.3.4`). |
 
@@ -77,7 +77,7 @@ Los parches de seguridad y correcciones de errores se proporcionan exclusivament
 
 | Versión | Con Soporte | Notas |
 |:-------:|:-----------:|:------|
-| Versiones preliminares de `0.4.0` (p. ej. `0.4.0rc1`) | :warning: | Destinadas a pruebas y evaluación. No se recomiendan para producción. Los problemas de seguridad pueden corregirse en versiones preliminares posteriores, sin backports ni tiempos de respuesta garantizados. |
+| Versiones preliminares de `0.4.0` (p. ej. `0.4.0rc2`) | :warning: | Destinadas a pruebas y evaluación. No se recomiendan para producción. Los problemas de seguridad pueden corregirse en versiones preliminares posteriores, sin backports ni tiempos de respuesta garantizados. |
 | `0.3.4` (Última) | :white_check_mark: | Versión actual soportada bajo modalidad best-effort. |
 | `< 0.3.4` | :x: | Sin soporte. Actualiza a la última versión disponible (`0.3.4`). |
 

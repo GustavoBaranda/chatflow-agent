@@ -332,7 +332,8 @@ def lookup_order(order_id: str) -> str:
 tool_obj = Tool(func=lookup_order)
 schema = tool_obj.to_openai_parameters()
 assert schema["required"] == ["order_id"]
-assert issubclass(ConfigurationError, (ChatFlowError, ValueError))
+assert issubclass(ConfigurationError, ChatFlowError)
+assert issubclass(ConfigurationError, ValueError)
 assert issubclass(JsonCodecError, ChatFlowError)
 assert issubclass(ToolSchemaError, ChatFlowError)
 assert issubclass(ToolArgumentValidationError, ToolExecutionError)

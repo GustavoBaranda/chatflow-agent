@@ -18,11 +18,11 @@ Common problems when installing and running `chatflow-agent`, with the exact mes
 
 **Cause:** the documentation describes the `0.4.0` prerelease. Plain `pip install chatflow-agent` installs the latest stable `0.3.x` release, which does not include every `0.4.0` API.
 
-**Fix:** install the prerelease explicitly, as shown in the README's [Installation & Requirements](../README.md#installation--requirements) section:
+**Fix:** install the prerelease by explicit version (avoid `pip install --pre`, which allows prereleases across all dependencies), as shown in the README's [Installation & Requirements](../README.md#installation--requirements) section:
 
 ```bash
-pip install --pre chatflow-agent
-pip install --pre "chatflow-agent[whatsapp]"   # with an optional extra
+pip install chatflow-agent==0.4.0rc2
+pip install "chatflow-agent[whatsapp]==0.4.0rc2"   # with an optional extra
 ```
 
 ### `DependencyError` when using a channel
@@ -33,7 +33,7 @@ The feature '<feature>' requires optional dependencies from '<extra>'. Please in
 
 **Cause:** the core package does not install channel dependencies. `WhatsAppChannel` needs the `whatsapp` extra (FastAPI, Uvicorn) and `TelegramChannel` needs the `telegram` extra (`python-telegram-bot`).
 
-**Fix:** run the command shown in the message, adding `--pre` while `0.4.0` is a prerelease. `pip install --pre "chatflow-agent[all]"` installs every extra.
+**Fix:** run the command shown in the message, pinning the prerelease version while `0.4.0` is a prerelease (for example, `pip install "chatflow-agent[all]==0.4.0rc2"` installs every extra).
 
 ---
 

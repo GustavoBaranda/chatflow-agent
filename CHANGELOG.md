@@ -16,6 +16,8 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.0rc2] - 2026-11-21
+
 ### ⚠ BREAKING CHANGES
 - **`WhatsAppChannel` No Longer Accepts `dedup_ttl_hours`** ([#154](https://github.com/GustavoBaranda/chatflow-agent/pull/154) by [@GustavoBaranda](https://github.com/GustavoBaranda), [#148](https://github.com/GustavoBaranda/chatflow-agent/issues/148)): the constructor argument and the `WhatsAppChannel.dedup_ttl_hours` attribute are removed; passing it now raises `TypeError`, and `max_body_size`, `enable_docs` and `queue_timeout_seconds` are keyword-only. The argument never had an effect — webhook deduplication always used the attached `SessionStore` / `SQLiteSessionStore` TTL, which remains where the TTL is configured (Migration Guide §2.4). This is the fourth of the four breaking changes the Migration Guide lists for 0.4.0, so the guide's count is now fully accounted for in the changelog.
 
@@ -225,6 +227,8 @@ If you are upgrading from v0.2.0:
 ## Español
 
 ## [Unreleased]
+
+## [0.4.0rc2] - 2026-11-21
 
 ### ⚠ CAMBIOS CON RUPTURA DE COMPATIBILIDAD (BREAKING CHANGES)
 - **`WhatsAppChannel` Ya No Acepta `dedup_ttl_hours`** ([#154](https://github.com/GustavoBaranda/chatflow-agent/pull/154) por [@GustavoBaranda](https://github.com/GustavoBaranda), [#148](https://github.com/GustavoBaranda/chatflow-agent/issues/148)): se eliminan el argumento del constructor y el atributo `WhatsAppChannel.dedup_ttl_hours`; pasarlo ahora levanta `TypeError`, y `max_body_size`, `enable_docs` y `queue_timeout_seconds` pasan a ser solo por palabra clave. El argumento nunca tuvo efecto — la deduplicación de webhooks siempre usó el TTL del `SessionStore` / `SQLiteSessionStore` adjunto, que sigue siendo donde se configura el TTL (Guía de Migración §2.4). Es el cuarto de los cuatro cambios incompatibles que la Guía de Migración enumera para 0.4.0, con lo que el conteo de la guía queda completamente reflejado en el changelog.
