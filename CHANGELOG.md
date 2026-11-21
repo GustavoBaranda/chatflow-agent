@@ -16,6 +16,9 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+- Reject boolean flags for `turn_timeout`, `queue_timeout_seconds`, `max_turns` and `default_max_turns` with the existing `ValueError` contract (#214). Positive numeric settings and `turn_timeout=None` are unchanged.
+
 ## [0.4.0rc2] - 2026-11-21
 
 ### ⚠ BREAKING CHANGES
@@ -227,6 +230,9 @@ If you are upgrading from v0.2.0:
 ## Español
 
 ## [Unreleased]
+
+### Corregido
+- Se rechazan valores booleanos en `turn_timeout`, `queue_timeout_seconds`, `max_turns` y `default_max_turns` con el mismo contrato `ValueError` (#214). Los valores numéricos positivos y `turn_timeout=None` no cambian.
 
 ## [0.4.0rc2] - 2026-11-21
 

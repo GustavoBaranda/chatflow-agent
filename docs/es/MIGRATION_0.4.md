@@ -475,6 +475,17 @@ except ToolArgumentValidationError as exc:
 
 ---
 
+### 3.6. Valores booleanos en la configuración numérica
+
+`True` y `False` generan `ValueError` en `Runner.run_async(turn_timeout=...)`,
+`WhatsAppChannel(queue_timeout_seconds=...)` y los argumentos `max_turns` /
+`default_max_turns` de `SessionContext`, `SQLiteSessionContext`, `SessionStore`
+y `SQLiteSessionStore`. Utiliza límites de turnos enteros positivos y tiempos
+numéricos positivos y finitos, en lugar de valores booleanos.
+`turn_timeout=None` sigue desactivando el límite de tiempo del turno activo.
+No cambian los valores predeterminados, las entradas numéricas válidas ni los
+esquemas de SQLite.
+
 ## 4. Documentación relacionada
 
 * **[Guía de Arquitectura](ARCHITECTURE.md):** Desglose detallado del bucle de ejecución de `Runner`, resolución de motores, introspección de herramientas, handoffs, concurrencia en SQLite y canales.

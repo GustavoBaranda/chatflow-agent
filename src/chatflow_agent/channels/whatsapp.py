@@ -160,7 +160,9 @@ class WhatsAppChannel(BaseChannel):
         queue_timeout_seconds: float = 120.0,
     ) -> None:
         super().__init__()
-        if not (math.isfinite(queue_timeout_seconds) and queue_timeout_seconds > 0):
+        if isinstance(queue_timeout_seconds, bool) or not (
+            math.isfinite(queue_timeout_seconds) and queue_timeout_seconds > 0
+        ):
             raise ValueError(
                 f"queue_timeout_seconds must be a positive finite number, got {queue_timeout_seconds!r}"
             )
