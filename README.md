@@ -939,7 +939,7 @@ Ready-to-run reference scripts are available in the [`examples/`](examples/) dir
 
 * **[Architecture Guide](docs/ARCHITECTURE.md):** Deep dive into the internal execution loop, message schemas, engine adapters, and session persistence.
 * **[Migration Guide (0.3.4 → 0.4.0)](docs/MIGRATION_0.4.md):** Upgrade instructions, breaking changes, and new features in `0.4.0`.
-* **[Troubleshooting](docs/TROUBLESHOOTING.md):** Common errors and how to fix them (API keys, prerelease installs, optional extras, WhatsApp signatures, timeouts, SQLite locks).
+* **[Troubleshooting](docs/TROUBLESHOOTING.md):** Common errors and how to fix them (API keys, upgrades from `0.3.x`, optional extras, WhatsApp signatures, timeouts, SQLite locks).
 * **[Changelog](CHANGELOG.md):** Release history, new features, security advisories, and breaking changes.
 * **[Security Policy](SECURITY.md):** Supported versions and vulnerability reporting instructions.
 * **[Code of Conduct](CODE_OF_CONDUCT.md):** Community standards and expectations.

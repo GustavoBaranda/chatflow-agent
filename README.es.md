@@ -941,7 +941,7 @@ En el directorio [`examples/`](examples/) encontrarás scripts de referencia lis
 
 * **[Guía de Arquitectura](docs/es/ARCHITECTURE.md):** Explicación detallada del bucle de ejecución interno, esquemas de mensajes, adaptadores de motores y persistencia de sesiones.
 * **[Guía de Migración (0.3.4 → 0.4.0)](docs/es/MIGRATION_0.4.md):** Instrucciones de actualización, cambios incompatibles y nuevas funcionalidades en `0.4.0`.
-* **[Solución de Problemas](docs/es/TROUBLESHOOTING.md):** Errores frecuentes y cómo resolverlos (API keys, instalación de prereleases, extras opcionales, firmas de WhatsApp, timeouts, bloqueos de SQLite).
+* **[Solución de Problemas](docs/es/TROUBLESHOOTING.md):** Errores frecuentes y cómo resolverlos (API keys, actualizaciones desde `0.3.x`, extras opcionales, firmas de WhatsApp, timeouts, bloqueos de SQLite).
 * **[Changelog](CHANGELOG.md):** Historial de versiones, nuevas funcionalidades, avisos de seguridad y cambios incompatibles (breaking changes).
 * **[Política de Seguridad](SECURITY.md):** Versiones soportadas e instrucciones para reportar vulnerabilidades.
 * **[Código de Conducta](CODE_OF_CONDUCT.md):** Estándares de convivencia de la comunidad.
