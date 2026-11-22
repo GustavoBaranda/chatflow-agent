@@ -11,6 +11,7 @@ import math
 import os
 import random
 import re
+import secrets
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -44,6 +45,15 @@ _RETRIABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _API_KEY_PATTERN = re.compile(r"[\x21-\x7e]+")
 # A model ID such as "gemini-2.5-flash"; "models/" or "tunedModels/" may precede it.
 _MODEL_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# Stateless fallback IDs synthesized when Gemini omits functionCall.id (34 chars: <= 40 for
+# OpenAI, [a-zA-Z0-9_-]+ for Anthropic, and distinct from OpenAI's call_* prefix).
+_GEMINI_SYNTHETIC_ID_PREFIX = "cf_gemini_"
+_GEMINI_SYNTHETIC_ID_PATTERN = re.compile(r"cf_gemini_[0-9a-f]{24}")
+
+
+def _synthetic_gemini_tool_call_id() -> str:
+    """Generate a collision-resistant fallback tool-call ID scoped to GeminiEngine."""
+    return f"{_GEMINI_SYNTHETIC_ID_PREFIX}{secrets.token_hex(12)}"
 
 
 def _new_attempt_client(timeout: float) -> httpx.AsyncClient:
@@ -578,7 +588,7 @@ class GeminiEngine(BaseEngine):
                 raise _malformed("'content' is not an object")
             parts = _optional_list(content or {}, "parts")
             text_chunks: list[str] = []
-            for idx, part in enumerate(parts):
+            for part in parts:
                 if not isinstance(part, dict):
                     raise _malformed("a part is not an object")
                 text = part.get("text")
@@ -588,7 +598,7 @@ class GeminiEngine(BaseEngine):
                     text_chunks.append(text)
                 function_call = part.get("functionCall")
                 if function_call:
-                    extracted_calls.append(_parse_function_call(function_call, idx))
+                    extracted_calls.append(_parse_function_call(function_call))
             if text_chunks:
                 extracted_text = "".join(text_chunks)
 
@@ -613,9 +623,12 @@ def _optional_list(obj: dict[str, Any], key: str) -> list[Any]:
     return value
 
 
-def _parse_function_call(function_call: Any, part_idx: int) -> ToolCall:
-    """Convert a ``functionCall`` part into a ToolCall. Gemini's ``id`` is kept; without one,
-    the ID is synthetic, in the engine's historical format."""
+def _parse_function_call(function_call: Any) -> ToolCall:
+    """Convert a ``functionCall`` part into a ToolCall.
+
+    Non-empty provider ``id`` strings are preserved byte-for-byte; missing, null, empty, or
+    whitespace-only IDs receive a stateless Gemini-scoped synthetic ID.
+    """
     if not isinstance(function_call, dict):
         raise _malformed("'functionCall' is not an object")
     name = function_call.get("name")
@@ -624,18 +637,32 @@ def _parse_function_call(function_call: Any, part_idx: int) -> ToolCall:
     args = function_call.get("args")
     if args is not None and not isinstance(args, dict):
         raise _malformed("'functionCall.args' is not an object")
-    call_id = function_call.get("id")
-    if call_id is not None and not isinstance(call_id, str):
+    raw_id = function_call.get("id")
+    if raw_id is None:
+        call_id = _synthetic_gemini_tool_call_id()
+    elif not isinstance(raw_id, str):
         raise _malformed("'functionCall.id' is not a string")
+    elif not raw_id.strip():
+        call_id = _synthetic_gemini_tool_call_id()
+    else:
+        call_id = raw_id
     return ToolCall(
-        id=call_id or f"call_{name}_{part_idx}",
+        id=call_id,
         name=name or "",
         args=dict(args or {}),
     )
 
 
+def _is_synthetic_gemini_id(call_id: str, name: str) -> bool:
+    """Return True if ``call_id`` matches a current or legacy Gemini synthetic ID."""
+    return bool(
+        _GEMINI_SYNTHETIC_ID_PATTERN.fullmatch(call_id)
+        or re.fullmatch(rf"call_{re.escape(name)}_\d+", call_id)
+    )
+
+
 def _with_provider_id(part: dict[str, Any], call_id: str, name: str) -> dict[str, Any]:
-    """Add ``id`` to a functionCall/functionResponse part, unless the ID is a synthetic one."""
-    if not re.fullmatch(rf"call_{re.escape(name)}_\d+", call_id):
+    """Add ``id`` to a functionCall/functionResponse part, unless the ID is a Gemini synthetic one."""
+    if not _is_synthetic_gemini_id(call_id, name):
         part["id"] = call_id
     return part
