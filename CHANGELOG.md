@@ -16,9 +16,32 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-22
+
+First stable release of the `0.4.x` series, consolidating all changes from `0.4.0rc1`, `0.4.0rc2`, and `0.4.0rc3` plus synthetic tool-call ID collision fixes for `OpenAIEngine` and `GeminiEngine`.
+
+### Security
+- **Credential Redaction and Sanitized Error Handling (from `0.4.0rc3`):** Includes the credential-redaction and error-sanitization hardening introduced in `0.4.0rc3` across `OpenAIEngine`, `AnthropicEngine`, `GeminiEngine`, and `WhatsAppChannel` outbound logs (masking configured API keys, tokens, and embedded URL credentials and avoiding chained `httpx`/`json.JSONDecodeError` internals in `ProviderError`).
+
 ### Fixed
-- **Prevent Synthetic Tool-Call ID Collisions Across Turns in `GeminiEngine`** ([#231](https://github.com/GustavoBaranda/chatflow-agent/issues/231)): when Gemini omits `functionCall.id` or returns `None`, `""`, or whitespace-only strings, `GeminiEngine` now generates a unique stateless Gemini-scoped fallback ID (`cf_gemini_<24 hex chars>`, 34 characters, compatible with OpenAI and Anthropic) instead of reusing per-response indices (`call_{name}_{part_idx}`). `_with_provider_id()` omits both current (`cf_gemini_<24 hex>`) and legacy (`call_{name}_{part_idx}`) Gemini synthetic IDs when sending history back to Gemini while preserving provider-supplied IDs and OpenAI/Anthropic IDs byte-for-byte.
-- **Prevent Synthetic Tool-Call ID Collisions Across Turns in `OpenAIEngine`** ([#213](https://github.com/GustavoBaranda/chatflow-agent/issues/213)): when an OpenAI-compatible provider omits `tool_call.id` or returns `None`, `""`, or whitespace-only strings, `OpenAIEngine` now generates a unique stateless fallback ID (`call_<24 hex chars>`, 29 characters, compatible with OpenAI, Anthropic, and Gemini) instead of reusing per-response indices (`call_0`, `call_1`). Provider-supplied non-empty IDs remain unchanged byte-for-byte.
+- **Prevent Synthetic Tool-Call ID Collisions Across Turns in `GeminiEngine`** ([#231](https://github.com/GustavoBaranda/chatflow-agent/issues/231), [#232](https://github.com/GustavoBaranda/chatflow-agent/pull/232)): when Gemini omits `functionCall.id` or returns `None`, `""`, or whitespace-only strings, `GeminiEngine` now generates a unique stateless Gemini-scoped fallback ID (`cf_gemini_<24 hex chars>`, 34 characters, compatible with OpenAI and Anthropic) instead of reusing per-response indices (`call_{name}_{part_idx}`). When sending history back to Gemini, `GeminiEngine` omits both current (`cf_gemini_<24 hex>`) and legacy (`call_{name}_{part_idx}`) Gemini synthetic IDs while preserving provider-supplied IDs and OpenAI/Anthropic IDs byte-for-byte.
+- **Prevent Synthetic Tool-Call ID Collisions Across Turns in `OpenAIEngine`** ([#213](https://github.com/GustavoBaranda/chatflow-agent/issues/213), [#230](https://github.com/GustavoBaranda/chatflow-agent/pull/230)): when an OpenAI-compatible provider omits `tool_call.id` or returns `None`, `""`, or whitespace-only strings, `OpenAIEngine` now generates a unique stateless fallback ID (`call_<24 hex chars>`, 29 characters, compatible with OpenAI, Anthropic, and Gemini) instead of reusing per-response indices (`call_0`, `call_1`). Provider-supplied non-empty IDs remain unchanged byte-for-byte.
+
+### Breaking Changes from `0.3.x`
+For full upgrade instructions and code examples, see the [0.4.0 Migration Guide](docs/MIGRATION_0.4.md). The four confirmed breaking changes from `v0.3.4` to `0.4.0` are:
+1. **Removal of `google-genai` and end of Vertex AI / ADC fallback:** Core dependencies are now solely `pydantic>=2.6.0` and `httpx>=0.27.0,<1.0`; `GeminiEngine` calls the Gemini Developer REST API (`v1beta`) directly over `httpx` and requires an explicit Gemini API key instead of falling back to Google Cloud Vertex AI / Application Default Credentials (ADC).
+2. **Removal of `GeminiEngine.client`:** The `GeminiEngine.client` attribute (previously a `google-genai` client) has been removed; pass `http_client: httpx.AsyncClient | None = None` or a custom `BaseEngine` stub instead.
+3. **Rejection of duplicate `Agent` names:** Multi-agent graphs registering distinct `Agent` instances with the same `name` now raise an error instead of silently shadowing each other.
+4. **Removal of `WhatsAppChannel` `dedup_ttl_hours` and keyword-only parameters:** Removed the unused `dedup_ttl_hours` parameter from `WhatsAppChannel` (configure deduplication TTL on the attached `SessionStore` / `SQLiteSessionStore`), and made `max_body_size`, `enable_docs`, and `queue_timeout_seconds` keyword-only.
+
+### Notable Behavior Changes
+- **Runtime tool-argument validation enabled by default:** Model-supplied tool arguments are validated and coerced via Pydantic (`ToolArgumentValidationError`, subclass of `ToolExecutionError`) before execution (`validate_args=True` by default, opt-out via `validate_args=False`).
+- **Strict `Runner.run()` event-loop guard:** Calling synchronous `Runner.run()` inside an already running event loop raises `RuntimeError`; use `await runner.run_async(...)` in async contexts.
+
+### Known Limitations
+- **Historical persisted tool-call IDs:** New synthetic tool-call IDs generated in `0.4.0` are unique across turns, but existing SQLite sessions created before `0.4.0` remain untouched on disk for backward compatibility. As a result, legacy duplicated synthetic IDs (`call_0`, `call_{name}_{part_idx}`, or `""`) already present in historical SQLite sessions can still be propagated to Anthropic and OpenAI during cross-provider handoffs.
+- **Single-node SQLite coordination:** `SQLiteSessionStore` is scoped to a single process/node; multi-node deployments require an application-provided `BaseSessionStore`.
+- **WhatsApp at-most-once acknowledgment:** Recording `wamid` before background dispatch prevents duplicate processing at the deliberate cost of losing an in-flight turn if the process crashes immediately after acknowledging Meta's webhook.
 
 ## [0.4.0rc3] - 2026-11-22
 
@@ -242,9 +265,32 @@ If you are upgrading from v0.2.0:
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-22
+
+Primera versión estable de la serie `0.4.x`, que consolida todos los cambios de `0.4.0rc1`, `0.4.0rc2` y `0.4.0rc3`, más las correcciones contra colisiones de IDs sintéticos de tool calls en `OpenAIEngine` y `GeminiEngine`.
+
+### Seguridad
+- **Redacción de credenciales y sanitización de errores (desde `0.4.0rc3`):** Incluye el endurecimiento de redacción de credenciales y sanitización de errores introducido en `0.4.0rc3` en `OpenAIEngine`, `AnthropicEngine`, `GeminiEngine` y los logs salientes de `WhatsAppChannel` (enmascaramiento de claves API, tokens y credenciales en URLs, sin encadenar detalles internos de `httpx` ni `json.JSONDecodeError` en `ProviderError`).
+
 ### Corregido
-- **Prevención de colisiones de IDs sintéticos de tool calls entre turnos en `GeminiEngine`** ([#231](https://github.com/GustavoBaranda/chatflow-agent/issues/231)): cuando Gemini omite `functionCall.id` o devuelve `None`, `""` o solo espacios, `GeminiEngine` genera ahora un ID de respaldo único sin estado con prefijo propio de Gemini (`cf_gemini_<24 hex>`, 34 caracteres, compatible con OpenAI y Anthropic) en lugar de reutilizar índices por respuesta (`call_{name}_{part_idx}`). `_with_provider_id()` omite tanto el formato nuevo (`cf_gemini_<24 hex>`) como el legado (`call_{name}_{part_idx}`) al reenviar historial a Gemini, conservando byte a byte los IDs reales del proveedor y los IDs de OpenAI y Anthropic.
-- **Prevención de colisiones de IDs sintéticos de tool calls entre turnos en `OpenAIEngine`** ([#213](https://github.com/GustavoBaranda/chatflow-agent/issues/213)): cuando un proveedor compatible con OpenAI omite `tool_call.id` o devuelve `None`, `""` o solo espacios, `OpenAIEngine` genera ahora un ID de respaldo único sin estado (`call_<24 hex>`, 29 caracteres, compatible con OpenAI, Anthropic y Gemini) en lugar de reutilizar índices por respuesta (`call_0`, `call_1`). Los IDs no vacíos provistos por el proveedor se conservan sin cambios byte a byte.
+- **Prevención de colisiones de IDs sintéticos de tool calls entre turnos en `GeminiEngine`** ([#231](https://github.com/GustavoBaranda/chatflow-agent/issues/231), [#232](https://github.com/GustavoBaranda/chatflow-agent/pull/232)): cuando Gemini omite `functionCall.id` o devuelve `None`, `""` o solo espacios, `GeminiEngine` genera ahora un ID de respaldo único sin estado con prefijo propio de Gemini (`cf_gemini_<24 hex>`, 34 caracteres, compatible con OpenAI y Anthropic) en lugar de reutilizar índices por respuesta (`call_{name}_{part_idx}`). Al reenviar historial a Gemini, `GeminiEngine` omite tanto el formato nuevo (`cf_gemini_<24 hex>`) como el legado (`call_{name}_{part_idx}`), conservando byte a byte los IDs reales del proveedor y los IDs de OpenAI y Anthropic.
+- **Prevención de colisiones de IDs sintéticos de tool calls entre turnos en `OpenAIEngine`** ([#213](https://github.com/GustavoBaranda/chatflow-agent/issues/213), [#230](https://github.com/GustavoBaranda/chatflow-agent/pull/230)): cuando un proveedor compatible con OpenAI omite `tool_call.id` o devuelve `None`, `""` o solo espacios, `OpenAIEngine` genera ahora un ID de respaldo único sin estado (`call_<24 hex>`, 29 caracteres, compatible con OpenAI, Anthropic y Gemini) en lugar de reutilizar índices por respuesta (`call_0`, `call_1`). Los IDs no vacíos provistos por el proveedor se conservan sin cambios byte a byte.
+
+### Cambios Incompatibles desde `0.3.x`
+Para las instrucciones completas de actualización y ejemplos de código, consultá la [Guía de Migración a 0.4.0](docs/es/MIGRATION_0.4.md). Los cuatro cambios incompatibles confirmados entre `v0.3.4` y `0.4.0` son:
+1. **Eliminación de `google-genai` y fin del soporte Vertex AI / ADC:** Las dependencias del núcleo son ahora únicamente `pydantic>=2.6.0` y `httpx>=0.27.0,<1.0`; `GeminiEngine` invoca directamente la API REST de Gemini Developer (`v1beta`) sobre `httpx` y requiere una API key explícita de Gemini en lugar de recurrir a Google Cloud Vertex AI / Application Default Credentials (ADC).
+2. **Eliminación de `GeminiEngine.client`:** Se eliminó el atributo `GeminiEngine.client` (anteriormente un cliente de `google-genai`); en su lugar utilizá `http_client: httpx.AsyncClient | None = None` o un stub de `BaseEngine`.
+3. **Rechazo de nombres duplicados de `Agent`:** Los grafos multi-agente que registren instancias distintas de `Agent` con el mismo `name` ahora lanzan error en lugar de sobrescribirse silenciosamente.
+4. **Eliminación de `dedup_ttl_hours` en `WhatsAppChannel` y parámetros keyword-only:** Se eliminó el parámetro sin uso `dedup_ttl_hours` de `WhatsAppChannel` (el TTL de deduplicación se configura en el `SessionStore` / `SQLiteSessionStore` adjunto) y `max_body_size`, `enable_docs` y `queue_timeout_seconds` pasaron a ser solo por palabra clave.
+
+### Cambios de Comportamiento Notables
+- **Validación en tiempo de ejecución de argumentos de tools activada por defecto:** Los argumentos provistos por el modelo se validan y coaccionan con Pydantic (`ToolArgumentValidationError`, subclase de `ToolExecutionError`) antes de ejecutar la herramienta (`validate_args=True` por defecto; desactivable con `validate_args=False`).
+- **Guarda estricta de event loop en `Runner.run()`:** Invocar `Runner.run()` dentro de un event loop ya activo lanza `RuntimeError`; utilizá `await runner.run_async(...)` en contextos asíncronos.
+
+### Limitaciones Conocidas
+- **IDs históricos persistidos en SQLite:** Los nuevos IDs sintéticos generados en `0.4.0` son únicos entre turnos, pero las sesiones SQLite creadas antes de `0.4.0` se conservan intactas en disco por compatibilidad hacia atrás. En consecuencia, los IDs sintéticos legados duplicados (`call_0`, `call_{name}_{part_idx}` o `""`) que ya existan en sesiones SQLite históricas todavía pueden propagarse a Anthropic y OpenAI durante handoffs entre proveedores.
+- **Coordinación SQLite de nodo único:** `SQLiteSessionStore` aplica a un único proceso/nodo; los despliegues multi-nodo requieren un `BaseSessionStore` externo provisto por la aplicación.
+- **Confirmación *at-most-once* en WhatsApp:** Registrar el `wamid` antes del despacho en segundo plano evita procesamientos duplicados con la contrapartida deliberada de perder un turno en vuelo si el proceso cae inmediatamente tras confirmar el webhook a Meta.
 
 ## [0.4.0rc3] - 2026-11-22
 
