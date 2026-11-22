@@ -880,6 +880,7 @@ channel = TelegramChannel(
     token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",  # From @BotFather
     fallback_message="Sorry, a temporary issue occurred. Please retry in a few moments.",
     concurrent_updates=True,  # Optional (False by default): process distinct chats concurrently
+    max_retry_after_seconds=60.0,  # Optional (60.0 by default): abort RetryAfter waits exceeding this cap
 )
 
 channel.attach(runner)
@@ -888,6 +889,9 @@ if __name__ == "__main__":
     # Runs async polling; in group chats, /reset is restricted to group administrators
     channel.run()
 ```
+
+> [!NOTE]
+> **Telegram `RetryAfter` wait limit (`max_retry_after_seconds`):** `max_retry_after_seconds` is a keyword-only option (default `60.0` seconds) that caps **each individual `RetryAfter` event** — it is not a global turn or delivery timeout. Each reply chunk allows up to 3 retries, so with the default `60.0` a single chunk can accumulate up to 180 seconds of sleep (excluding HTTP request times), and multi-chunk replies can accumulate additional wait across chunks. If Telegram requests a delay above `max_retry_after_seconds`, delivery aborts immediately without sleeping or retrying, without duplicating already-delivered chunks, and without appending `fallback_message` after partial delivery. Passing `max_retry_after_seconds=0.0` allows zero-second delays while rejecting any positive wait. Compared to earlier `0.4.0` prereleases, delays above 60 seconds now abort instead of sleeping for the full requested duration unless you raise `max_retry_after_seconds`.
 
 ### Interactive Terminal (CLI)
 

@@ -882,6 +882,7 @@ canal_telegram = TelegramChannel(
     fallback_message="Disculpa, ocurrió un inconveniente temporal. Por favor reintenta en breve.",
     start_message="Bienvenido al bot. ¿En qué podemos ayudarte hoy?",
     concurrent_updates=True,  # Opcional (False por defecto): procesa distintos chats en paralelo
+    max_retry_after_seconds=60.0,  # Opcional (60.0 por defecto): aborta esperas RetryAfter que superen este límite
 )
 
 canal_telegram.attach(runner)
@@ -890,6 +891,9 @@ if __name__ == "__main__":
     # Ejecuta polling asíncrono; en chats grupales, /reset está restringido a administradores del grupo
     canal_telegram.run()
 ```
+
+> [!NOTE]
+> **Límite de espera `RetryAfter` en Telegram (`max_retry_after_seconds`):** `max_retry_after_seconds` es una opción solo por palabra clave (`60.0` segundos por defecto) que limita **cada evento `RetryAfter` individual** — no es un timeout global del turno ni del envío. Cada fragmento de respuesta admite hasta 3 reintentos, por lo que con el valor por defecto de `60.0` un mismo fragmento puede acumular hasta 180 segundos de `sleep` (sin incluir los tiempos de las solicitudes HTTP), y una respuesta con varios fragmentos puede acumular esperas adicionales entre fragmentos. Si Telegram solicita una espera superior a `max_retry_after_seconds`, el envío se aborta de inmediato sin dormir ni reintentar, sin duplicar fragmentos ya entregados y sin agregar `fallback_message` tras una entrega parcial. El valor `max_retry_after_seconds=0.0` permite retrasos de cero segundos pero rechaza cualquier espera positiva. Respecto a prereleases anteriores de `0.4.0`, las demoras superiores a 60 segundos ahora se abortan en lugar de esperar la duración completa, salvo que aumentes `max_retry_after_seconds`.
 
 ### Terminal interactiva (CLI)
 
