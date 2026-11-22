@@ -24,6 +24,9 @@ pip install chatflow-agent
 
 `chatflow-agent` es un framework asíncrono de Python diseñado para orquestar flujos conversacionales multi-agente en canales de mensajería reales. Inspirado en patrones ligeros de transferencia entre agentes (handoffs), combina motores LLM multi-proveedor con candados de concurrencia por sesión, reversión transaccional ante fallos (rollback), persistencia en SQLite y conectores integrados para **WhatsApp (Meta Cloud API)**, **Telegram** y **CLI**, además de una aplicación de ejemplo para webhooks personalizados.
 
+> [!NOTE]
+> **Novedades en `0.4.0`:** `GeminiEngine` nativo sobre `httpx` (solo 2 dependencias del núcleo: `pydantic` y `httpx`), validación de argumentos de tools en runtime con Pydantic, redacción de credenciales y sanitización de errores en motores y logs salientes de WhatsApp, concurrencia y timeouts endurecidos en SQLite (`turn_timeout`, `spawn_turn()`, `reset_session_async()`), actualizaciones concurrentes y manejo acotado de `RetryAfter` en `TelegramChannel`, e IDs sintéticos resistentes a colisiones en OpenAI y Gemini. Consultá el [Registro de Cambios](CHANGELOG.md#040---2026-11-22-1) y la [Guía de Migración `0.3.4` → `0.4.0`](docs/es/MIGRATION_0.4.md).
+
 ![Arquitectura de chatflow-agent: Canales de Entrada (WhatsApp, Telegram, Webhook, CLI) conectados a Runner y Memoria de Sesión, orquestando un Agente Triage y un Especialista con handoff autónomo entre pares y herramientas @agent.tool](https://raw.githubusercontent.com/GustavoBaranda/chatflow-agent/main/docs/images/architecture-es.png)
 
 ---
@@ -220,7 +223,7 @@ print(f"[{response.active_agent_name}]: {response.content}")
       </td>
       <td align="center" valign="top" width="16.66%">
         <a href="https://github.com/HarshRajSinghania">
-          <img src="https://github.com/HarshRajSinghania.png?size=64" width="64" height="64" alt="@HarshRajSinghania" /><br />
+          <img src="https://avatars.githubusercontent.com/u/40535627?v=4&s=64" width="64" height="64" alt="@HarshRajSinghania" /><br />
           <sub><b>@HarshRajSinghania</b></sub>
         </a>
       </td>

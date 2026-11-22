@@ -24,6 +24,9 @@ pip install chatflow-agent
 
 `chatflow-agent` is an async-first Python framework for orchestrating multi-agent conversational workflows across real-world messaging channels. Inspired by lightweight agent handoff patterns, it combines provider-agnostic LLM engines with built-in concurrency locks, transactional turn rollbacks, SQLite persistence, and turnkey channel adapters for **WhatsApp (Meta Cloud API)**, **Telegram**, and **CLI**, plus a custom webhook example application.
 
+> [!NOTE]
+> **What's New in `0.4.0`:** Native `httpx` `GeminiEngine` (only 2 core dependencies: `pydantic` and `httpx`), runtime Pydantic tool-argument validation, credential redaction & sanitized error handling across engines and WhatsApp outbound logs, hardened SQLite concurrency/timeouts (`turn_timeout`, `spawn_turn()`, `reset_session_async()`), `TelegramChannel` concurrent updates & bounded `RetryAfter` handling, and collision-resistant synthetic tool-call IDs for OpenAI and Gemini. See the full [Changelog](CHANGELOG.md#040---2026-11-22) and the [`0.3.4` → `0.4.0` Migration Guide](docs/MIGRATION_0.4.md).
+
 ![chatflow-agent Architecture: Input Channels (WhatsApp, Telegram, Webhook, CLI) connected to Runner and Session Memory, orchestrating a Triage Agent and a Specialist Agent with autonomous peer handoff and @agent.tool actions](https://raw.githubusercontent.com/GustavoBaranda/chatflow-agent/main/docs/images/architecture-en.png)
 
 ---
@@ -220,7 +223,7 @@ print(f"[{response.active_agent_name}]: {response.content}")
       </td>
       <td align="center" valign="top" width="16.66%">
         <a href="https://github.com/HarshRajSinghania">
-          <img src="https://github.com/HarshRajSinghania.png?size=64" width="64" height="64" alt="@HarshRajSinghania" /><br />
+          <img src="https://avatars.githubusercontent.com/u/40535627?v=4&s=64" width="64" height="64" alt="@HarshRajSinghania" /><br />
           <sub><b>@HarshRajSinghania</b></sub>
         </a>
       </td>
