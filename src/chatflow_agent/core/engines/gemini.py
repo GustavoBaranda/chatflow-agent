@@ -13,12 +13,20 @@ import random
 import re
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote, quote_plus, urlsplit
+from urllib.parse import urlsplit
 
 import httpx
 
+from chatflow_agent.core._redaction import (
+    body_excerpt as _body_excerpt,
+)
+from chatflow_agent.core._redaction import (
+    extract_url_secrets as _extract_url_secrets,
+)
+from chatflow_agent.core._redaction import (
+    redact_secrets as _redact_secrets,
+)
 from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult, system_prompt
-from chatflow_agent.core.engines.openai_compatible import _body_excerpt
 from chatflow_agent.core.json_codec import json_default_coercing as _json_default
 from chatflow_agent.exceptions import ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
@@ -339,24 +347,16 @@ class GeminiEngine(BaseEngine):
         return body
 
     def _redact(self, text: str) -> str:
-        """Remove the API key from text that ends up in errors or logs.
+        """Remove the API key and any embedded base-URL credentials from errors or logs.
 
-        Errors may quote the key as is, escaped (e.g. a bytes repr of a header value) or
+        Errors may quote the key as is, escaped (e.g. a bytes repr or JSON string) or
         percent-encoded (a URL), so every one of those forms is replaced.
         """
-        key = self.api_key
-        if not key:
-            return text
-        forms = {
-            key,
-            key.encode("unicode_escape").decode("ascii"),
-            ascii(key)[1:-1],
-            quote(key, safe=""),
-            quote_plus(key, safe=""),
-        }
-        for form in sorted(forms, key=len, reverse=True):
-            text = text.replace(form, "***")
-        return text
+        secrets: list[str | None] = [
+            self.api_key,
+            *_extract_url_secrets(os.environ.get("GOOGLE_GEMINI_BASE_URL")),
+        ]
+        return _redact_secrets(text, secrets)
 
     def _retry_delay(self, retries: int, retry_after: str | None = None) -> float:
         """Exponential backoff with jitter; a valid Retry-After (seconds or an HTTP-date)
@@ -455,17 +455,20 @@ class GeminiEngine(BaseEngine):
 
         url = f"{_api_base_url()}/{_model_path(agent.model)}:generateContent"
         body = self._build_request_body(agent, history)
+        encode_failure: ProviderError | None = None
         try:
             # Tool results that json cannot encode (pydantic models, dataclasses, datetimes,
             # ...) are converted by _json_default instead of failing the turn.
             content = json.dumps(body, default=_json_default).encode("utf-8")
         except Exception as err:
             # Only the exception type is given: the message may quote tool results.
-            raise ProviderError(
+            encode_failure = ProviderError(
                 f"Gemini API request body could not be encoded as JSON ({type(err).__name__}): "
                 "a tool result or tool call argument contains a circular reference or a "
                 "dict key that is not a string, number, boolean or None."
-            ) from None
+            )
+        if encode_failure is not None:
+            raise encode_failure from None
         headers = {"Content-Type": "application/json"}
         params: dict[str, str] | None = None
         if self.api_key_in_query:
@@ -539,10 +542,16 @@ class GeminiEngine(BaseEngine):
                 )
             break
 
+        json_failure: ProviderError | None = None
         try:
             data = resp.json()
-        except ValueError as err:
-            raise ProviderError("Gemini API returned a response body that is not valid JSON.") from err
+        except ValueError:
+            # Do not chain JSONDecodeError: its ``.doc`` attribute holds the full raw body.
+            json_failure = ProviderError(
+                "Gemini API returned a response body that is not valid JSON."
+            )
+        if json_failure is not None:
+            raise json_failure from None
         if not isinstance(data, dict):
             raise ProviderError("Gemini API returned a malformed response: expected a JSON object.")
 

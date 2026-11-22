@@ -16,6 +16,11 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.4.0rc3] - 2026-11-22
+
+### Security
+- **Credential Redaction and Sanitized Error Handling Across Engines and WhatsApp Outbound Logs**: `OpenAIEngine`, `AnthropicEngine`, `GeminiEngine`, and `WhatsAppChannel` now use a shared credential-redaction pipeline that masks configured API keys, tokens, and embedded URL credentials (across plain, JSON-escaped, and percent-encoded forms) before error bodies are truncated or written to logs, while preserving non-sensitive HTTP diagnostic details. Network, invalid-URL, HTTP client creation, and malformed JSON failures in `OpenAIEngine`, `AnthropicEngine`, and `GeminiEngine` now raise sanitized `ProviderError` exceptions without chaining underlying `httpx` or `json.JSONDecodeError` instances (`__cause__` and `__context__` are `None`), preserving HTTP status codes and exception type names. Non-empty HTTP header credentials containing spaces, control characters, or non-ASCII characters are validated and rejected before dispatching requests.
+
 ### Fixed
 - **Bound `TelegramChannel` `RetryAfter` Flood-Control Wait Time (`max_retry_after_seconds`)** ([#211](https://github.com/GustavoBaranda/chatflow-agent/issues/211)): `TelegramChannel` now accepts keyword-only `max_retry_after_seconds: float = 60.0` (validated with `ConfigurationError`, rejecting booleans, negative values, and non-finite numbers). The cap applies per `RetryAfter` event (not as a global turn or delivery timeout: up to 3 retries per chunk can still accumulate up to 180s of sleep per chunk excluding HTTP time, plus additional wait across chunks). Delays above the cap abort immediately without sleeping or retrying, without duplicating already-sent chunks or appending `fallback_message` after partial delivery (`0.0` allows zero-second delays and rejects positive waits). This changes previous behavior for `RetryAfter` delays above 60s.
 - **Reject Non-2xx Outbound WhatsApp Responses** ([#210](https://github.com/GustavoBaranda/chatflow-agent/issues/210)): `WhatsAppChannel._send_single_outbound_whatsapp()` now passes `follow_redirects=False` explicitly and treats only `2xx` (`200 <= status_code < 300`) responses as successful delivery. `3xx` redirect responses are logged with the masked recipient phone number, return `False` without retrying, and stop any remaining chunks in multi-chunk replies.
@@ -232,6 +237,11 @@ If you are upgrading from v0.2.0:
 ## Español
 
 ## [Unreleased]
+
+## [0.4.0rc3] - 2026-11-22
+
+### Seguridad
+- **Redacción de credenciales y sanitización de errores en motores LLM y logs salientes de WhatsApp**: `OpenAIEngine`, `AnthropicEngine`, `GeminiEngine` y `WhatsAppChannel` utilizan ahora una capa unificada de redacción que enmascara claves API, tokens y credenciales embebidas en URLs (en texto plano, escapadas en JSON y en percent-encoding) antes de truncar cuerpos de error o escribir en los logs, conservando los detalles diagnósticos HTTP no sensibles. Los fallos de red, URL inválida, creación del cliente HTTP y respuestas JSON malformadas en `OpenAIEngine`, `AnthropicEngine` y `GeminiEngine` lanzan ahora excepciones `ProviderError` sanitizadas sin encadenar las instancias subyacentes de `httpx` ni `json.JSONDecodeError` (`__cause__` y `__context__` son `None`), manteniendo los códigos HTTP y nombres de clase de error. Las credenciales no vacías enviadas en cabeceras HTTP que contengan espacios, caracteres de control o caracteres no-ASCII se validan y rechazan antes de enviar solicitudes.
 
 ### Corregido
 - **Límite de espera para `RetryAfter` en `TelegramChannel` (`max_retry_after_seconds`)** ([#211](https://github.com/GustavoBaranda/chatflow-agent/issues/211)): `TelegramChannel` acepta ahora el parámetro solo por palabra clave `max_retry_after_seconds: float = 60.0` (validado con `ConfigurationError`, rechazando booleanos, valores negativos y números no finitos). El límite se aplica a cada evento `RetryAfter` individual (no es un timeout global del turno ni del envío: con hasta 3 reintentos por fragmento pueden acumularse hasta 180s de `sleep` por fragmento sin contar tiempos HTTP, más esperas adicionales en respuestas multi-fragmento). Las demoras superiores al límite abortan de inmediato sin dormir ni reintentar, sin duplicar fragmentos ya entregados ni agregar `fallback_message` tras entrega parcial (`0.0` permite retrasos de cero segundos y rechaza esperas positivas). Esto cambia el comportamiento anterior para demoras `RetryAfter` mayores a 60s.

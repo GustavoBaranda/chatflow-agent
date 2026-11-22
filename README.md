@@ -19,11 +19,11 @@
 > **Build autonomous multi-agent swarms for WhatsApp, Telegram, custom webhook applications, and CLI in Python with a lightweight, provider-agnostic core.**
 
 ```bash
-pip install chatflow-agent==0.4.0rc2
+pip install chatflow-agent==0.4.0rc3
 ```
 
 > [!NOTE]
-> This branch documents the `0.4.0rc2` prerelease. Once published on PyPI, install it explicitly with `pip install chatflow-agent==0.4.0rc2` (avoid `pip install --pre`, which allows prereleases across all transitive dependencies). Plain `pip install chatflow-agent` selects the latest stable `0.3.x` release, which does not include every `0.4.0` API documented below.
+> This branch documents the `0.4.0rc3` prerelease. Once published on PyPI, install it explicitly with `pip install chatflow-agent==0.4.0rc3` (avoid `pip install --pre`, which allows prereleases across all transitive dependencies). Plain `pip install chatflow-agent` selects the latest stable `0.3.x` release, which does not include every `0.4.0` API documented below.
 
 `chatflow-agent` is an async-first Python framework for orchestrating multi-agent conversational workflows across real-world messaging channels. Inspired by lightweight agent handoff patterns, it combines provider-agnostic LLM engines with built-in concurrency locks, transactional turn rollbacks, SQLite persistence, and turnkey channel adapters for **WhatsApp (Meta Cloud API)**, **Telegram**, and **CLI**, plus a custom webhook example application.
 
@@ -69,19 +69,19 @@ Install only the extras your deployment requires:
 
 ```bash
 # Core framework (all LLM engines via HTTPX, SQLite & in-memory stores, CLI channel)
-pip install chatflow-agent==0.4.0rc2
+pip install chatflow-agent==0.4.0rc3
 
 # With WhatsApp Webhook connector (FastAPI + Uvicorn)
-pip install "chatflow-agent[whatsapp]==0.4.0rc2"
+pip install "chatflow-agent[whatsapp]==0.4.0rc3"
 
 # With Telegram Bot connector (python-telegram-bot)
-pip install "chatflow-agent[telegram]==0.4.0rc2"
+pip install "chatflow-agent[telegram]==0.4.0rc3"
 
 # With custom FastAPI Webhook service dependencies (FastAPI + Uvicorn)
-pip install "chatflow-agent[webhook]==0.4.0rc2"
+pip install "chatflow-agent[webhook]==0.4.0rc3"
 
 # Complete channel bundle (telegram, whatsapp, and webhook extras)
-pip install "chatflow-agent[all]==0.4.0rc2"
+pip install "chatflow-agent[all]==0.4.0rc3"
 ```
 
 ---
@@ -417,7 +417,7 @@ load_dotenv()
 | **Ollama (Local)** | `OpenAIEngine` | *None required* | `provider="ollama"`, `model="gemma2:9b"` |
 | **vLLM / Local Server** | `OpenAIEngine` | *None on `localhost`* | `base_url="http://localhost:8000/v1"`, `model="..."` |
 
-* **Built-in HTTPX Engines:** All engines (`GeminiEngine`, `OpenAIEngine`, and `AnthropicEngine`) are included out of the box with `pip install chatflow-agent==0.4.0rc2`—no extra provider SDKs required.
+* **Built-in HTTPX Engines:** All engines (`GeminiEngine`, `OpenAIEngine`, and `AnthropicEngine`) are included out of the box with `pip install chatflow-agent==0.4.0rc3`—no extra provider SDKs required.
 * **Additional Environment Variables:** `GeminiEngine` also accepts `GOOGLE_API_KEY` as a fallback and `GOOGLE_GEMINI_BASE_URL` for custom endpoints. `Ollama` optionally reads `OLLAMA_API_KEY`, and any `OpenAIEngine` preset honors `<PROVIDER>_BASE_URL` (e.g., `OPENAI_BASE_URL`, `OLLAMA_BASE_URL`).
 * **Model Prefix Auto-Detection:** When `provider` is omitted on `Agent`, `resolve_engine()` automatically selects the engine from `agent.model`:
   * **Google Gemini (`GeminiEngine`):** `gemini-*` (or default fallback)
@@ -446,6 +446,8 @@ When executing a turn for an `Agent`, the `Runner` resolves the LLM engine in th
 > **Vertex AI is not supported.** `GeminiEngine` calls only the Gemini Developer API (Google AI Studio) with an API key. Application Default Credentials (ADC) and the `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` variables are not used, so setups that relied on them fail with `ProviderError("Gemini API client is not configured. ...")`. Use a Gemini API key, or provide your own engine through `Runner(engine=...)`.
 >
 > **`GeminiEngine.client` was removed in v0.4.0.** It held the `google-genai` client, which is no longer a dependency. Assigning a fake to it no longer mocks anything. To call the SDK directly, install `google-genai` and create your own client. To mock Gemini in tests or customize HTTP, pass an `httpx.AsyncClient` with `GeminiEngine(http_client=...)`; it stays owned by you and must be used on one event loop only. See the [CHANGELOG](CHANGELOG.md) for the migration steps.
+>
+> **Prefer header authentication (`api_key_in_query=False`).** By default, `GeminiEngine` sends the API key in the `x-goog-api-key` header. Keep `api_key_in_query=False` whenever compatible with your endpoint: `api_key_in_query=True` places the key in the request URL (`?key=...`), which `httpx` logs at `INFO` level. See [SECURITY.md](SECURITY.md#operational-security-http-dependency-logging) for safe HTTP logging settings.
 
 ---
 
@@ -493,7 +495,7 @@ if __name__ == "__main__":
 Run 100% locally on your machine with zero API costs and full data privacy using [Ollama](https://ollama.com):
 
 1. Start Ollama with Gemma: `ollama run gemma2:9b`
-2. Run the script below (works out of the box with `pip install chatflow-agent==0.4.0rc2`):
+2. Run the script below (works out of the box with `pip install chatflow-agent==0.4.0rc3`):
 
 ```python
 import asyncio
@@ -814,7 +816,7 @@ Record what each tool did outside the conversation history (the `operations` tab
 
 ### WhatsApp Channel (Meta Cloud API)
 
-Run a production webhook server compatible with the official Meta WhatsApp Business Cloud API (requires `pip install "chatflow-agent[whatsapp]==0.4.0rc2"`):
+Run a production webhook server compatible with the official Meta WhatsApp Business Cloud API (requires `pip install "chatflow-agent[whatsapp]==0.4.0rc3"`):
 
 ```python
 from chatflow_agent import Agent, Runner, WhatsAppChannel
@@ -868,7 +870,7 @@ if __name__ == "__main__":
 
 ### Telegram Channel
 
-Connect your agent swarm to Telegram with async polling, typing indicators, automatic 4,096-character message splitting, and built-in `/start` and `/reset` commands (requires `pip install "chatflow-agent[telegram]==0.4.0rc2"`):
+Connect your agent swarm to Telegram with async polling, typing indicators, automatic 4,096-character message splitting, and built-in `/start` and `/reset` commands (requires `pip install "chatflow-agent[telegram]==0.4.0rc3"`):
 
 ```python
 from chatflow_agent import Agent, Runner, TelegramChannel
@@ -892,6 +894,8 @@ if __name__ == "__main__":
 
 > [!NOTE]
 > **Telegram `RetryAfter` wait limit (`max_retry_after_seconds`):** `max_retry_after_seconds` is a keyword-only option (default `60.0` seconds) that caps **each individual `RetryAfter` event** — it is not a global turn or delivery timeout. Each reply chunk allows up to 3 retries, so with the default `60.0` a single chunk can accumulate up to 180 seconds of sleep (excluding HTTP request times), and multi-chunk replies can accumulate additional wait across chunks. If Telegram requests a delay above `max_retry_after_seconds`, delivery aborts immediately without sleeping or retrying, without duplicating already-delivered chunks, and without appending `fallback_message` after partial delivery. Passing `max_retry_after_seconds=0.0` allows zero-second delays while rejecting any positive wait. Compared to earlier `0.4.0` prereleases, delays above 60 seconds now abort instead of sleeping for the full requested duration unless you raise `max_retry_after_seconds`.
+>
+> **HTTP Logging with `TelegramChannel`:** Telegram's Bot API embeds the bot token in the request URL path, and `python-telegram-bot` uses `httpx` internally. If your application enables `INFO` or `DEBUG` logging (for example `logging.basicConfig(level=logging.INFO)`), set `logging.getLogger("httpx").setLevel(logging.WARNING)` and `logging.getLogger("httpcore").setLevel(logging.WARNING)` so request URLs and low-level HTTP transport traces are not logged. See [SECURITY.md](SECURITY.md#operational-security-http-dependency-logging) and [Troubleshooting](docs/TROUBLESHOOTING.md#http-dependency-logs-httpx-and-httpcore).
 
 ### Interactive Terminal (CLI)
 

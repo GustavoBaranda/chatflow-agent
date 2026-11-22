@@ -19,11 +19,11 @@
 > **Construye equipos de agentes autónomos para WhatsApp, Telegram, aplicaciones de webhook personalizadas y CLI en Python con un núcleo ligero y agnóstico al proveedor.**
 
 ```bash
-pip install chatflow-agent==0.4.0rc2
+pip install chatflow-agent==0.4.0rc3
 ```
 
 > [!NOTE]
-> Esta rama documenta la versión preliminar `0.4.0rc2`. Una vez publicada en PyPI, instálala explícitamente con `pip install chatflow-agent==0.4.0rc2` (evita `pip install --pre`, que habilita prereleases en todas las dependencias transitivas). `pip install chatflow-agent` sin especificar versión selecciona la versión estable `0.3.x` más reciente, que no incluye todas las APIs de `0.4.0` documentadas abajo.
+> Esta rama documenta la versión preliminar `0.4.0rc3`. Una vez publicada en PyPI, instálala explícitamente con `pip install chatflow-agent==0.4.0rc3` (evita `pip install --pre`, que habilita prereleases en todas las dependencias transitivas). `pip install chatflow-agent` sin especificar versión selecciona la versión estable `0.3.x` más reciente, que no incluye todas las APIs de `0.4.0` documentadas abajo.
 
 `chatflow-agent` es un framework asíncrono de Python diseñado para orquestar flujos conversacionales multi-agente en canales de mensajería reales. Inspirado en patrones ligeros de transferencia entre agentes (handoffs), combina motores LLM multi-proveedor con candados de concurrencia por sesión, reversión transaccional ante fallos (rollback), persistencia en SQLite y conectores integrados para **WhatsApp (Meta Cloud API)**, **Telegram** y **CLI**, además de una aplicación de ejemplo para webhooks personalizados.
 
@@ -69,19 +69,19 @@ Instala únicamente los extras que tu despliegue requiera:
 
 ```bash
 # Núcleo base (todos los motores LLM vía HTTPX, almacenes SQLite y en memoria, canal CLI)
-pip install chatflow-agent==0.4.0rc2
+pip install chatflow-agent==0.4.0rc3
 
 # Con conector de Webhooks para WhatsApp (FastAPI + Uvicorn)
-pip install "chatflow-agent[whatsapp]==0.4.0rc2"
+pip install "chatflow-agent[whatsapp]==0.4.0rc3"
 
 # Con conector de Bot para Telegram (python-telegram-bot)
-pip install "chatflow-agent[telegram]==0.4.0rc2"
+pip install "chatflow-agent[telegram]==0.4.0rc3"
 
 # Con dependencias para servicio Webhook FastAPI personalizado (FastAPI + Uvicorn)
-pip install "chatflow-agent[webhook]==0.4.0rc2"
+pip install "chatflow-agent[webhook]==0.4.0rc3"
 
 # Paquete completo de canales (extras telegram, whatsapp y webhook)
-pip install "chatflow-agent[all]==0.4.0rc2"
+pip install "chatflow-agent[all]==0.4.0rc3"
 ```
 
 ---
@@ -417,7 +417,7 @@ load_dotenv()
 | **Ollama (Local)** | `OpenAIEngine` | *No requiere clave* | `provider="ollama"`, `model="gemma2:9b"` |
 | **vLLM / Servidor Local** | `OpenAIEngine` | *No requiere en `localhost`* | `base_url="http://localhost:8000/v1"`, `model="..."` |
 
-* **Motores HTTPX integrados:** Todos los motores (`GeminiEngine`, `OpenAIEngine` y `AnthropicEngine`) vienen incluidos de serie con `pip install chatflow-agent==0.4.0rc2`, sin necesidad de instalar SDKs adicionales por proveedor.
+* **Motores HTTPX integrados:** Todos los motores (`GeminiEngine`, `OpenAIEngine` y `AnthropicEngine`) vienen incluidos de serie con `pip install chatflow-agent==0.4.0rc3`, sin necesidad de instalar SDKs adicionales por proveedor.
 * **Variables de entorno adicionales:** `GeminiEngine` también acepta `GOOGLE_API_KEY` como alternativa y `GOOGLE_GEMINI_BASE_URL` para endpoints personalizados. `Ollama` lee opcionalmente `OLLAMA_API_KEY`, y cualquier preset de `OpenAIEngine` respeta `<PROVEEDOR>_BASE_URL` (por ejemplo, `OPENAI_BASE_URL`, `OLLAMA_BASE_URL`).
 * **Autodetección por prefijo de modelo:** Cuando se omite `provider` en `Agent`, `resolve_engine()` selecciona automáticamente el motor según el prefijo de `agent.model`:
   * **Google Gemini (`GeminiEngine`):** `gemini-*` (o motor por defecto)
@@ -446,6 +446,8 @@ Al ejecutar un turno para un `Agent`, el `Runner` resuelve el motor LLM en este 
 > **Vertex AI no está soportado.** `GeminiEngine` invoca únicamente la API de Gemini Developer (Google AI Studio) mediante una clave de API. Application Default Credentials (ADC) y las variables `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT` y `GOOGLE_CLOUD_LOCATION` no se utilizan, por lo que las configuraciones que dependían de ellas fallarán con `ProviderError("Gemini API client is not configured. ...")`. Utiliza una clave de API de Gemini o proporciona tu propio motor mediante `Runner(engine=...)`.
 >
 > **`GeminiEngine.client` fue eliminado en v0.4.0.** Ese atributo almacenaba el cliente de `google-genai`, que ya no es una dependencia del proyecto. Asignarle un objeto simulado (mock) ya no tiene efecto. Si necesitas invocar el SDK directamente, instala `google-genai` y crea tu propio cliente. Para simular respuestas de Gemini en tests o personalizar el transporte HTTP, pasa un `httpx.AsyncClient` mediante `GeminiEngine(http_client=...)`; el cliente permanece bajo tu control y debe usarse en un único event loop. Consulta el [CHANGELOG](CHANGELOG.md) para ver los pasos de migración.
+>
+> **Preferí autenticación por cabecera (`api_key_in_query=False`).** Por defecto, `GeminiEngine` envía la clave API en la cabecera `x-goog-api-key`. Mantené `api_key_in_query=False` siempre que sea compatible con tu endpoint: `api_key_in_query=True` incluye la clave en la URL (`?key=...`), que `httpx` registra en nivel `INFO`. Consultá [SECURITY.md](SECURITY.md#seguridad-operativa-registro-de-dependencias-http) para configurar el logging HTTP de forma segura.
 
 ---
 
@@ -493,7 +495,7 @@ if __name__ == "__main__":
 Ejecuta agentes de forma 100% local en tu equipo, sin costos de API y con privacidad total de datos utilizando [Ollama](https://ollama.com):
 
 1. Inicia Ollama con Gemma: `ollama run gemma2:9b` (o `gemma2:2b`)
-2. Ejecuta este script (funciona de serie con `pip install chatflow-agent==0.4.0rc2`):
+2. Ejecuta este script (funciona de serie con `pip install chatflow-agent==0.4.0rc3`):
 
 ```python
 import asyncio
@@ -815,7 +817,7 @@ Registra lo que hizo cada tool fuera del historial de la conversación (la tabla
 
 ### Canal de WhatsApp (Meta Cloud API)
 
-Ejecuta un servidor de webhook listo para producción, compatible con la API oficial de WhatsApp Business en Meta Cloud (requiere `pip install "chatflow-agent[whatsapp]==0.4.0rc2"`):
+Ejecuta un servidor de webhook listo para producción, compatible con la API oficial de WhatsApp Business en Meta Cloud (requiere `pip install "chatflow-agent[whatsapp]==0.4.0rc3"`):
 
 ```python
 from chatflow_agent import Agent, Runner, WhatsAppChannel
@@ -869,7 +871,7 @@ if __name__ == "__main__":
 
 ### Canal de Telegram
 
-Conecta tu enjambre de agentes a Telegram con polling asíncrono, indicadores de escritura, fragmentación automática de mensajes a 4.096 caracteres y soporte nativo de los comandos `/start` y `/reset` (requiere `pip install "chatflow-agent[telegram]==0.4.0rc2"`):
+Conecta tu enjambre de agentes a Telegram con polling asíncrono, indicadores de escritura, fragmentación automática de mensajes a 4.096 caracteres y soporte nativo de los comandos `/start` y `/reset` (requiere `pip install "chatflow-agent[telegram]==0.4.0rc3"`):
 
 ```python
 from chatflow_agent import Agent, Runner, TelegramChannel
@@ -894,6 +896,8 @@ if __name__ == "__main__":
 
 > [!NOTE]
 > **Límite de espera `RetryAfter` en Telegram (`max_retry_after_seconds`):** `max_retry_after_seconds` es una opción solo por palabra clave (`60.0` segundos por defecto) que limita **cada evento `RetryAfter` individual** — no es un timeout global del turno ni del envío. Cada fragmento de respuesta admite hasta 3 reintentos, por lo que con el valor por defecto de `60.0` un mismo fragmento puede acumular hasta 180 segundos de `sleep` (sin incluir los tiempos de las solicitudes HTTP), y una respuesta con varios fragmentos puede acumular esperas adicionales entre fragmentos. Si Telegram solicita una espera superior a `max_retry_after_seconds`, el envío se aborta de inmediato sin dormir ni reintentar, sin duplicar fragmentos ya entregados y sin agregar `fallback_message` tras una entrega parcial. El valor `max_retry_after_seconds=0.0` permite retrasos de cero segundos pero rechaza cualquier espera positiva. Respecto a prereleases anteriores de `0.4.0`, las demoras superiores a 60 segundos ahora se abortan en lugar de esperar la duración completa, salvo que aumentes `max_retry_after_seconds`.
+>
+> **Logging HTTP con `TelegramChannel`:** la Bot API de Telegram incluye el token del bot en la ruta de cada URL, y `python-telegram-bot` utiliza `httpx` internamente. Si tu aplicación habilita logging en nivel `INFO` o `DEBUG` (por ejemplo `logging.basicConfig(level=logging.INFO)`), configurá `logging.getLogger("httpx").setLevel(logging.WARNING)` y `logging.getLogger("httpcore").setLevel(logging.WARNING)` para evitar registrar URLs de solicitud y trazas HTTP de bajo nivel. Consultá [SECURITY.md](SECURITY.md#seguridad-operativa-registro-de-dependencias-http) y la [Guía de Solución de Problemas](docs/es/TROUBLESHOOTING.md#logs-de-dependencias-http-httpx-y-httpcore).
 
 ### Terminal interactiva (CLI)
 

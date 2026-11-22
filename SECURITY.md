@@ -12,9 +12,32 @@ Security patches and bug fixes are provided exclusively for the latest released 
 
 | Version | Supported | Notes |
 |:-------:|:---------:|:------|
-| `0.4.0` pre-releases (e.g. `0.4.0rc2`) | :warning: | Intended for testing and evaluation. Not recommended for production. Security issues may be addressed in subsequent pre-release versions, without guaranteed backports or response times. |
+| `0.4.0` pre-releases (e.g. `0.4.0rc3`) | :warning: | Intended for testing and evaluation. Not recommended for production. Security issues may be addressed in subsequent pre-release versions, without guaranteed backports or response times. |
 | `0.3.4` (Latest) | :white_check_mark: | Current release supported on a best-effort basis. |
 | `< 0.3.4` | :x: | Unsupported. Please upgrade to the latest release (`0.3.4`). |
+
+---
+
+### Operational Security: HTTP Dependency Logging
+
+`chatflow-agent` redacts configured API keys, tokens, and URL credentials from its own error messages, `ProviderError` exceptions, and channel logs, and does not mutate global Python logging configuration on behalf of your application.
+
+However, underlying HTTP dependencies (`httpx` and `httpcore`) emit their own logs when your application configures root logging at `INFO` or `DEBUG` (for example via `logging.basicConfig(level=logging.INFO)`):
+
+- **`httpx` at `INFO` level** logs full request URLs. Any credential embedded in a request URL — including Telegram Bot API URLs used by `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`), or a custom `base_url` with userinfo/query credentials — will appear in `httpx` logs.
+- **`httpcore` at `DEBUG` level** logs low-level connection and send/receive events and may include response headers that can contain sensitive metadata depending on the upstream service and dependency version. Keeping `httpcore` at `WARNING` avoids verbose transport traces in application logs.
+
+**Recommended production configuration:**
+
+```python
+import logging
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+```
+
+- Keep `GeminiEngine(api_key_in_query=False)` (the default) whenever your Gemini endpoint or proxy supports the `x-goog-api-key` header.
+- **Limitations:** raising `httpx`/`httpcore` log levels prevents those loggers from emitting request URLs and low-level HTTP transport traces, but does not scrub credentials from reverse-proxy access logs, custom HTTP transport hooks, APM stack-frame `locals()`, or third-party loggers outside `httpx`/`httpcore`.
 
 ---
 
@@ -77,9 +100,32 @@ Los parches de seguridad y correcciones de errores se proporcionan exclusivament
 
 | Versión | Con Soporte | Notas |
 |:-------:|:-----------:|:------|
-| Versiones preliminares de `0.4.0` (p. ej. `0.4.0rc2`) | :warning: | Destinadas a pruebas y evaluación. No se recomiendan para producción. Los problemas de seguridad pueden corregirse en versiones preliminares posteriores, sin backports ni tiempos de respuesta garantizados. |
+| Versiones preliminares de `0.4.0` (p. ej. `0.4.0rc3`) | :warning: | Destinadas a pruebas y evaluación. No se recomiendan para producción. Los problemas de seguridad pueden corregirse en versiones preliminares posteriores, sin backports ni tiempos de respuesta garantizados. |
 | `0.3.4` (Última) | :white_check_mark: | Versión actual soportada bajo modalidad best-effort. |
 | `< 0.3.4` | :x: | Sin soporte. Actualiza a la última versión disponible (`0.3.4`). |
+
+---
+
+### Seguridad Operativa: Registro de Dependencias HTTP
+
+`chatflow-agent` redacta claves API, tokens y credenciales en URLs configuradas en sus propios mensajes de error, excepciones `ProviderError` y logs de canales, y no modifica la configuración global de `logging` de Python en nombre de tu aplicación.
+
+Sin embargo, las dependencias HTTP subyacentes (`httpx` y `httpcore`) emiten sus propios registros cuando tu aplicación configura el logger raíz en nivel `INFO` o `DEBUG` (por ejemplo mediante `logging.basicConfig(level=logging.INFO)`):
+
+- **`httpx` en nivel `INFO`** registra las URLs completas de cada solicitud. Cualquier credencial incluida en una URL —como las rutas de la Bot API de Telegram usadas por `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`) o un `base_url` personalizado con credenciales en `userinfo` o query— aparecerá en los logs de `httpx`.
+- **`httpcore` en nivel `DEBUG`** registra eventos de conexión y de envío/recepción de bajo nivel, y puede incluir cabeceras de respuesta potencialmente sensibles según el servicio remoto y la versión de la dependencia. Mantener `httpcore` en `WARNING` evita trazas detalladas de transporte en los logs de la aplicación.
+
+**Configuración recomendada en producción:**
+
+```python
+import logging
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+```
+
+- Mantené `GeminiEngine(api_key_in_query=False)` (valor por defecto) siempre que el proveedor o proxy admita la cabecera `x-goog-api-key`.
+- **Limitaciones:** elevar el nivel de los loggers `httpx`/`httpcore` evita que estos registren URLs de solicitud y trazas HTTP de bajo nivel, pero no sanitiza credenciales en logs de acceso de proxies reversos, hooks personalizados de transporte HTTP, captura de `locals()` en herramientas APM ni otros loggers de terceros.
 
 ---
 

@@ -6,6 +6,7 @@ Features:
 - Standard python-telegram-bot integration with zero emoji clutter.
 """
 
+import logging
 import os
 import sys
 
@@ -65,6 +66,10 @@ triage_agent = Agent(
 )
 
 def main() -> None:
+    # Prevent httpx INFO / httpcore DEBUG logs from recording Telegram Bot API token URLs.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     # 4. Persistent Runner — `with` closes the store when the bot stops.
     with SQLiteSessionStore(
         db_path="telegram_sessions.db",
