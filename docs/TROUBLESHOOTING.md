@@ -163,7 +163,7 @@ Waiting in the queue does not consume `llm_timeout_seconds`, so a message can ta
 
 ### Bot tokens or API keys appear in `INFO` or `DEBUG` logs
 
-**Cause:** `chatflow-agent` does not alter global logging levels for third-party libraries. When an application configures root logging at `INFO` (e.g. `logging.basicConfig(level=logging.INFO)`), `httpx` logs every request URL, which exposes credentials placed in URLs — notably Telegram Bot API URLs in `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`), or custom `base_url` values with embedded credentials. Enabling `DEBUG` on `httpcore` additionally logs raw request headers (`Authorization`, `x-api-key`, `x-goog-api-key`).
+**Cause:** `chatflow-agent` does not alter global logging levels for third-party libraries. When an application configures root logging at `INFO` (e.g. `logging.basicConfig(level=logging.INFO)`), `httpx` logs every request URL, which exposes credentials placed in URLs — notably Telegram Bot API URLs in `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`), or custom `base_url` values with embedded credentials. Enabling `DEBUG` on `httpcore` emits low-level connection and transport lifecycle events and may include response headers or metadata that can be sensitive depending on the upstream service and dependency version.
 
 **Fix:** raise the `httpx` and `httpcore` logger levels in your application's startup code:
 

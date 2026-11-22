@@ -163,7 +163,7 @@ La espera en la cola no consume `llm_timeout_seconds`, así que un mensaje puede
 
 ### Aparecen tokens de bots o claves API en logs `INFO` o `DEBUG`
 
-**Causa:** `chatflow-agent` no modifica los niveles globales de logging de bibliotecas de terceros. Cuando una aplicación configura el logger raíz en nivel `INFO` (por ejemplo con `logging.basicConfig(level=logging.INFO)`), `httpx` registra cada URL de solicitud, lo que expone credenciales presentes en la URL —en particular las rutas de la Bot API de Telegram en `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`) o valores de `base_url` con credenciales embebidas. Habilitar `DEBUG` en `httpcore` además registra las cabeceras HTTP completas (`Authorization`, `x-api-key`, `x-goog-api-key`).
+**Causa:** `chatflow-agent` no modifica los niveles globales de logging de bibliotecas de terceros. Cuando una aplicación configura el logger raíz en nivel `INFO` (por ejemplo con `logging.basicConfig(level=logging.INFO)`), `httpx` registra cada URL de solicitud, lo que expone credenciales presentes en la URL —en particular las rutas de la Bot API de Telegram en `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`) o valores de `base_url` con credenciales embebidas. Habilitar `DEBUG` en `httpcore` emite eventos de conexión y transporte de bajo nivel y puede incluir cabeceras o metadatos de respuesta potencialmente sensibles según el servicio remoto y la versión de la dependencia.
 
 **Solución:** elevá el nivel de los loggers `httpx` y `httpcore` al iniciar tu aplicación:
 

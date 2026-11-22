@@ -25,7 +25,7 @@ Security patches and bug fixes are provided exclusively for the latest released 
 However, underlying HTTP dependencies (`httpx` and `httpcore`) emit their own logs when your application configures root logging at `INFO` or `DEBUG` (for example via `logging.basicConfig(level=logging.INFO)`):
 
 - **`httpx` at `INFO` level** logs full request URLs. Any credential embedded in a request URL — including Telegram Bot API URLs used by `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`), or a custom `base_url` with userinfo/query credentials — will appear in `httpx` logs.
-- **`httpcore` at `DEBUG` level** logs raw HTTP request headers (including `Authorization`, `x-api-key`, and `x-goog-api-key`).
+- **`httpcore` at `DEBUG` level** logs low-level connection and send/receive events and may include response headers that can contain sensitive metadata depending on the upstream service and dependency version. Keeping `httpcore` at `WARNING` avoids verbose transport traces in application logs.
 
 **Recommended production configuration:**
 
@@ -37,7 +37,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 ```
 
 - Keep `GeminiEngine(api_key_in_query=False)` (the default) whenever your Gemini endpoint or proxy supports the `x-goog-api-key` header.
-- **Limitations:** raising `httpx`/`httpcore` log levels prevents those loggers from emitting request URLs and headers, but does not scrub credentials from reverse-proxy access logs, custom HTTP transport hooks, APM stack-frame `locals()`, or third-party loggers outside `httpx`/`httpcore`.
+- **Limitations:** raising `httpx`/`httpcore` log levels prevents those loggers from emitting request URLs and low-level HTTP transport traces, but does not scrub credentials from reverse-proxy access logs, custom HTTP transport hooks, APM stack-frame `locals()`, or third-party loggers outside `httpx`/`httpcore`.
 
 ---
 
@@ -113,7 +113,7 @@ Los parches de seguridad y correcciones de errores se proporcionan exclusivament
 Sin embargo, las dependencias HTTP subyacentes (`httpx` y `httpcore`) emiten sus propios registros cuando tu aplicación configura el logger raíz en nivel `INFO` o `DEBUG` (por ejemplo mediante `logging.basicConfig(level=logging.INFO)`):
 
 - **`httpx` en nivel `INFO`** registra las URLs completas de cada solicitud. Cualquier credencial incluida en una URL —como las rutas de la Bot API de Telegram usadas por `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`) o un `base_url` personalizado con credenciales en `userinfo` o query— aparecerá en los logs de `httpx`.
-- **`httpcore` en nivel `DEBUG`** registra las cabeceras HTTP completas (incluyendo `Authorization`, `x-api-key` y `x-goog-api-key`).
+- **`httpcore` en nivel `DEBUG`** registra eventos de conexión y de envío/recepción de bajo nivel, y puede incluir cabeceras de respuesta potencialmente sensibles según el servicio remoto y la versión de la dependencia. Mantener `httpcore` en `WARNING` evita trazas detalladas de transporte en los logs de la aplicación.
 
 **Configuración recomendada en producción:**
 
@@ -125,7 +125,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 ```
 
 - Mantené `GeminiEngine(api_key_in_query=False)` (valor por defecto) siempre que el proveedor o proxy admita la cabecera `x-goog-api-key`.
-- **Limitaciones:** elevar el nivel de los loggers `httpx`/`httpcore` evita que estos registren URLs y cabeceras de solicitud, pero no sanitiza credenciales en logs de acceso de proxies reversos, hooks personalizados de transporte HTTP, captura de `locals()` en herramientas APM ni otros loggers de terceros.
+- **Limitaciones:** elevar el nivel de los loggers `httpx`/`httpcore` evita que estos registren URLs de solicitud y trazas HTTP de bajo nivel, pero no sanitiza credenciales en logs de acceso de proxies reversos, hooks personalizados de transporte HTTP, captura de `locals()` en herramientas APM ni otros loggers de terceros.
 
 ---
 
