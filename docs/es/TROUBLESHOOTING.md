@@ -22,8 +22,8 @@ Problemas frecuentes al instalar y ejecutar `chatflow-agent`, con los mensajes e
 **Solución:** instalá la prerelease indicando la versión exacta (evitá `pip install --pre`, que habilita prereleases en todas las dependencias), como se indica en la sección [Instalación y requisitos](../../README.es.md#instalación-y-requisitos) del README:
 
 ```bash
-pip install chatflow-agent==0.4.0rc2
-pip install "chatflow-agent[whatsapp]==0.4.0rc2"   # con un extra opcional
+pip install chatflow-agent==0.4.0rc3
+pip install "chatflow-agent[whatsapp]==0.4.0rc3"   # con un extra opcional
 ```
 
 ### `DependencyError` al usar un canal
@@ -34,7 +34,7 @@ The feature '<feature>' requires optional dependencies from '<extra>'. Please in
 
 **Causa:** el paquete base no instala las dependencias de los canales. `WhatsAppChannel` necesita el extra `whatsapp` (FastAPI, Uvicorn) y `TelegramChannel` el extra `telegram` (`python-telegram-bot`).
 
-**Solución:** ejecutá el comando que indica el mensaje fijando la versión preliminar mientras `0.4.0` sea una prerelease (por ejemplo, `pip install "chatflow-agent[all]==0.4.0rc2"` instala todos los extras).
+**Solución:** ejecutá el comando que indica el mensaje fijando la versión preliminar mientras `0.4.0` sea una prerelease (por ejemplo, `pip install "chatflow-agent[all]==0.4.0rc3"` instala todos los extras).
 
 ---
 
