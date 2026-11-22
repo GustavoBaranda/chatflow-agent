@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import os
+import uuid
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
@@ -46,6 +47,15 @@ if TYPE_CHECKING:
 # OpenAI rejects longer tool-call IDs ("string too long", as users report it; its published API
 # spec sets no limit). No limit is known for the other OpenAI-compatible providers.
 _OPENAI_MAX_TOOL_CALL_ID_LENGTH = 40
+
+
+def _synthetic_tool_call_id() -> str:
+    """Generate a collision-resistant fallback tool-call ID compatible with all providers.
+
+    Uses ``call_`` plus 24 lowercase hex characters (29 characters total), which satisfies
+    OpenAI's 40-character limit, Anthropic's ``[a-zA-Z0-9_-]+`` format, and Gemini.
+    """
+    return f"call_{uuid.uuid4().hex[:24]}"
 
 _LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
 # Explicit compatibility exception for local dev servers bound to 0.0.0.0 (not a loopback address)
@@ -498,21 +508,24 @@ class OpenAIEngine(BaseEngine):
             )
 
         extracted_calls: list[ToolCall] = []
-        for idx, tc in enumerate(raw_tool_calls):
+        for tc in raw_tool_calls:
             if not isinstance(tc, dict):
                 raise ProviderError(
                     f"{self.provider.upper()} returned a malformed response: "
                     "a tool call is not an object"
                 )
-            if "id" not in tc or tc["id"] is None:
-                call_id = f"call_{idx}"
+            raw_id = tc.get("id")
+            if raw_id is None:
+                call_id = _synthetic_tool_call_id()
+            elif not isinstance(raw_id, str):
+                raise ProviderError(
+                    f"{self.provider.upper()} returned a malformed response: "
+                    "a tool call's id is not a string"
+                )
+            elif not raw_id.strip():
+                call_id = _synthetic_tool_call_id()
             else:
-                call_id = tc["id"]
-                if not isinstance(call_id, str):
-                    raise ProviderError(
-                        f"{self.provider.upper()} returned a malformed response: "
-                        "a tool call's id is not a string"
-                    )
+                call_id = raw_id
             func_data = tc.get("function", {})
             if not isinstance(func_data, dict):
                 raise ProviderError(

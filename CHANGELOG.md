@@ -16,6 +16,9 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+- **Prevent Synthetic Tool-Call ID Collisions Across Turns in `OpenAIEngine`** ([#213](https://github.com/GustavoBaranda/chatflow-agent/issues/213)): when an OpenAI-compatible provider omits `tool_call.id` or returns `None`, `""`, or whitespace-only strings, `OpenAIEngine` now generates a unique stateless fallback ID (`call_<24 hex chars>`, 29 characters, compatible with OpenAI, Anthropic, and Gemini) instead of reusing per-response indices (`call_0`, `call_1`). Provider-supplied non-empty IDs remain unchanged byte-for-byte.
+
 ## [0.4.0rc3] - 2026-11-22
 
 ### Security
@@ -237,6 +240,9 @@ If you are upgrading from v0.2.0:
 ## Español
 
 ## [Unreleased]
+
+### Corregido
+- **Prevención de colisiones de IDs sintéticos de tool calls entre turnos en `OpenAIEngine`** ([#213](https://github.com/GustavoBaranda/chatflow-agent/issues/213)): cuando un proveedor compatible con OpenAI omite `tool_call.id` o devuelve `None`, `""` o solo espacios, `OpenAIEngine` genera ahora un ID de respaldo único sin estado (`call_<24 hex>`, 29 caracteres, compatible con OpenAI, Anthropic y Gemini) en lugar de reutilizar índices por respuesta (`call_0`, `call_1`). Los IDs no vacíos provistos por el proveedor se conservan sin cambios byte a byte.
 
 ## [0.4.0rc3] - 2026-11-22
 
