@@ -414,10 +414,13 @@ async def test_single_and_multiple_function_calls_get_part_index_ids() -> None:
     result = await make_engine(Recorder(payload)).generate_turn_async(bot(), USER_HELLO)
 
     assert result.text == "Let me check."
-    assert result.tool_calls == [
-        ToolCall(id="call_weather_1", name="weather", args={"city": "Paris"}),
-        ToolCall(id="call_clock_2", name="clock", args={}),
+    assert len(result.tool_calls) == 2
+    assert [(c.name, c.args) for c in result.tool_calls] == [
+        ("weather", {"city": "Paris"}),
+        ("clock", {}),
     ]
+    assert all(re.fullmatch(r"cf_gemini_[0-9a-f]{24}", c.id) for c in result.tool_calls)
+    assert result.tool_calls[0].id != result.tool_calls[1].id
 
 
 async def test_function_call_ids_from_gemini_are_kept_and_missing_ones_are_synthetic() -> None:
@@ -437,11 +440,11 @@ async def test_function_call_ids_from_gemini_are_kept_and_missing_ones_are_synth
     }
     result = await make_engine(Recorder(payload)).generate_turn_async(bot(), USER_HELLO)
 
-    assert result.tool_calls == [
-        ToolCall(id="fc-weather", name="weather", args={"city": "Paris"}),
-        ToolCall(id="call_clock_1", name="clock", args={}),
-        ToolCall(id="call_clock_2", name="clock", args={}),
-    ]
+    assert len(result.tool_calls) == 3
+    assert result.tool_calls[0] == ToolCall(id="fc-weather", name="weather", args={"city": "Paris"})
+    assert [(c.name, c.args) for c in result.tool_calls[1:]] == [("clock", {}), ("clock", {})]
+    assert all(re.fullmatch(r"cf_gemini_[0-9a-f]{24}", c.id) for c in result.tool_calls[1:])
+    assert result.tool_calls[1].id != result.tool_calls[2].id
 
 
 async def test_only_the_first_candidate_is_used() -> None:

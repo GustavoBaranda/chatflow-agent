@@ -17,6 +17,7 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Fixed
+- **Prevent Synthetic Tool-Call ID Collisions Across Turns in `GeminiEngine`** ([#231](https://github.com/GustavoBaranda/chatflow-agent/issues/231)): when Gemini omits `functionCall.id` or returns `None`, `""`, or whitespace-only strings, `GeminiEngine` now generates a unique stateless Gemini-scoped fallback ID (`cf_gemini_<24 hex chars>`, 34 characters, compatible with OpenAI and Anthropic) instead of reusing per-response indices (`call_{name}_{part_idx}`). `_with_provider_id()` omits both current (`cf_gemini_<24 hex>`) and legacy (`call_{name}_{part_idx}`) Gemini synthetic IDs when sending history back to Gemini while preserving provider-supplied IDs and OpenAI/Anthropic IDs byte-for-byte.
 - **Prevent Synthetic Tool-Call ID Collisions Across Turns in `OpenAIEngine`** ([#213](https://github.com/GustavoBaranda/chatflow-agent/issues/213)): when an OpenAI-compatible provider omits `tool_call.id` or returns `None`, `""`, or whitespace-only strings, `OpenAIEngine` now generates a unique stateless fallback ID (`call_<24 hex chars>`, 29 characters, compatible with OpenAI, Anthropic, and Gemini) instead of reusing per-response indices (`call_0`, `call_1`). Provider-supplied non-empty IDs remain unchanged byte-for-byte.
 
 ## [0.4.0rc3] - 2026-11-22
@@ -242,6 +243,7 @@ If you are upgrading from v0.2.0:
 ## [Unreleased]
 
 ### Corregido
+- **Prevención de colisiones de IDs sintéticos de tool calls entre turnos en `GeminiEngine`** ([#231](https://github.com/GustavoBaranda/chatflow-agent/issues/231)): cuando Gemini omite `functionCall.id` o devuelve `None`, `""` o solo espacios, `GeminiEngine` genera ahora un ID de respaldo único sin estado con prefijo propio de Gemini (`cf_gemini_<24 hex>`, 34 caracteres, compatible con OpenAI y Anthropic) en lugar de reutilizar índices por respuesta (`call_{name}_{part_idx}`). `_with_provider_id()` omite tanto el formato nuevo (`cf_gemini_<24 hex>`) como el legado (`call_{name}_{part_idx}`) al reenviar historial a Gemini, conservando byte a byte los IDs reales del proveedor y los IDs de OpenAI y Anthropic.
 - **Prevención de colisiones de IDs sintéticos de tool calls entre turnos en `OpenAIEngine`** ([#213](https://github.com/GustavoBaranda/chatflow-agent/issues/213)): cuando un proveedor compatible con OpenAI omite `tool_call.id` o devuelve `None`, `""` o solo espacios, `OpenAIEngine` genera ahora un ID de respaldo único sin estado (`call_<24 hex>`, 29 caracteres, compatible con OpenAI, Anthropic y Gemini) en lugar de reutilizar índices por respuesta (`call_0`, `call_1`). Los IDs no vacíos provistos por el proveedor se conservan sin cambios byte a byte.
 
 ## [0.4.0rc3] - 2026-11-22
