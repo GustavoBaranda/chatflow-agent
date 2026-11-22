@@ -19,11 +19,8 @@
 > **Build autonomous multi-agent swarms for WhatsApp, Telegram, custom webhook applications, and CLI in Python with a lightweight, provider-agnostic core.**
 
 ```bash
-pip install chatflow-agent==0.4.0rc3
+pip install chatflow-agent
 ```
-
-> [!NOTE]
-> This branch documents the `0.4.0rc3` prerelease. Once published on PyPI, install it explicitly with `pip install chatflow-agent==0.4.0rc3` (avoid `pip install --pre`, which allows prereleases across all transitive dependencies). Plain `pip install chatflow-agent` selects the latest stable `0.3.x` release, which does not include every `0.4.0` API documented below.
 
 `chatflow-agent` is an async-first Python framework for orchestrating multi-agent conversational workflows across real-world messaging channels. Inspired by lightweight agent handoff patterns, it combines provider-agnostic LLM engines with built-in concurrency locks, transactional turn rollbacks, SQLite persistence, and turnkey channel adapters for **WhatsApp (Meta Cloud API)**, **Telegram**, and **CLI**, plus a custom webhook example application.
 
@@ -69,19 +66,19 @@ Install only the extras your deployment requires:
 
 ```bash
 # Core framework (all LLM engines via HTTPX, SQLite & in-memory stores, CLI channel)
-pip install chatflow-agent==0.4.0rc3
+pip install chatflow-agent
 
 # With WhatsApp Webhook connector (FastAPI + Uvicorn)
-pip install "chatflow-agent[whatsapp]==0.4.0rc3"
+pip install "chatflow-agent[whatsapp]"
 
 # With Telegram Bot connector (python-telegram-bot)
-pip install "chatflow-agent[telegram]==0.4.0rc3"
+pip install "chatflow-agent[telegram]"
 
 # With custom FastAPI Webhook service dependencies (FastAPI + Uvicorn)
-pip install "chatflow-agent[webhook]==0.4.0rc3"
+pip install "chatflow-agent[webhook]"
 
 # Complete channel bundle (telegram, whatsapp, and webhook extras)
-pip install "chatflow-agent[all]==0.4.0rc3"
+pip install "chatflow-agent[all]"
 ```
 
 ---
@@ -423,7 +420,7 @@ load_dotenv()
 | **Ollama (Local)** | `OpenAIEngine` | *None required* | `provider="ollama"`, `model="gemma2:9b"` |
 | **vLLM / Local Server** | `OpenAIEngine` | *None on `localhost`* | `base_url="http://localhost:8000/v1"`, `model="..."` |
 
-* **Built-in HTTPX Engines:** All engines (`GeminiEngine`, `OpenAIEngine`, and `AnthropicEngine`) are included out of the box with `pip install chatflow-agent==0.4.0rc3`—no extra provider SDKs required.
+* **Built-in HTTPX Engines:** All engines (`GeminiEngine`, `OpenAIEngine`, and `AnthropicEngine`) are included out of the box with `pip install chatflow-agent`—no extra provider SDKs required.
 * **Additional Environment Variables:** `GeminiEngine` also accepts `GOOGLE_API_KEY` as a fallback and `GOOGLE_GEMINI_BASE_URL` for custom endpoints. `Ollama` optionally reads `OLLAMA_API_KEY`, and any `OpenAIEngine` preset honors `<PROVIDER>_BASE_URL` (e.g., `OPENAI_BASE_URL`, `OLLAMA_BASE_URL`).
 * **Model Prefix Auto-Detection:** When `provider` is omitted on `Agent`, `resolve_engine()` automatically selects the engine from `agent.model`:
   * **Google Gemini (`GeminiEngine`):** `gemini-*` (or default fallback)
@@ -501,7 +498,7 @@ if __name__ == "__main__":
 Run 100% locally on your machine with zero API costs and full data privacy using [Ollama](https://ollama.com):
 
 1. Start Ollama with Gemma: `ollama run gemma2:9b`
-2. Run the script below (works out of the box with `pip install chatflow-agent==0.4.0rc3`):
+2. Run the script below (works out of the box with `pip install chatflow-agent`):
 
 ```python
 import asyncio
@@ -822,7 +819,7 @@ Record what each tool did outside the conversation history (the `operations` tab
 
 ### WhatsApp Channel (Meta Cloud API)
 
-Run a production webhook server compatible with the official Meta WhatsApp Business Cloud API (requires `pip install "chatflow-agent[whatsapp]==0.4.0rc3"`):
+Run a production webhook server compatible with the official Meta WhatsApp Business Cloud API (requires `pip install "chatflow-agent[whatsapp]"`):
 
 ```python
 from chatflow_agent import Agent, Runner, WhatsAppChannel
@@ -876,7 +873,7 @@ if __name__ == "__main__":
 
 ### Telegram Channel
 
-Connect your agent swarm to Telegram with async polling, typing indicators, automatic 4,096-character message splitting, and built-in `/start` and `/reset` commands (requires `pip install "chatflow-agent[telegram]==0.4.0rc3"`):
+Connect your agent swarm to Telegram with async polling, typing indicators, automatic 4,096-character message splitting, and built-in `/start` and `/reset` commands (requires `pip install "chatflow-agent[telegram]"`):
 
 ```python
 from chatflow_agent import Agent, Runner, TelegramChannel
