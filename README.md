@@ -341,6 +341,12 @@ print(f"[{response.active_agent_name}]: {response.content}")
           <sub><b>@IENVYshanks</b></sub>
         </a>
       </td>
+      <td align="center" valign="top" width="16.66%">
+        <a href="https://github.com/jwalith4418-Mj">
+          <img src="https://github.com/jwalith4418-Mj.png?size=64" width="64" height="64" alt="@jwalith4418-Mj" /><br />
+          <sub><b>@jwalith4418-Mj</b></sub>
+        </a>
+      </td>
     </tr>
   </tbody>
 </table>
