@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -221,7 +222,7 @@ async def test_openai_missing_tool_call_id_is_synthesized():
         result = await engine.generate_turn_async(
             agent=agent, history=[Message(role=Role.USER, content="hi")]
         )
-        assert result.tool_calls[0].id == "call_0"
+        assert re.fullmatch(r"call_[0-9a-f]{24}", result.tool_calls[0].id)
     finally:
         await client.aclose()
 
