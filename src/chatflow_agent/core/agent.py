@@ -73,7 +73,7 @@ class Agent:
         provider: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
-        engine: Any | None = None,
+        engine: BaseEngine | None = None,
     ) -> None:
         if not name or not name.strip():
             raise ValueError("Agent name must be a non-empty string.")
@@ -112,7 +112,7 @@ class Agent:
         self.provider = provider
         self.base_url = base_url
         self.api_key = api_key
-        self.engine = engine
+        self.engine: BaseEngine | None = engine
         self.tools: list[Tool] = []
         self.handoffs: list[Agent] = []
 
