@@ -19,6 +19,70 @@ Versioning / Versionado: [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 - **Accurate `engine` Type Annotation on `Agent`** ([#220](https://github.com/GustavoBaranda/chatflow-agent/issues/220)): `Agent.__init__` and `Agent.engine` are now annotated as `BaseEngine | None` instead of `Any | None`, so static type checkers (`mypy`, `pyright`) catch invalid engines without changing runtime behavior. CI verifies this in `tests/type_checks/agent_engine.py` with `mypy --strict tests/type_checks`.
 
+## [0.4.0] - 2026-11-22
+
+First stable release of the `0.4.x` series, consolidating all changes from `0.4.0rc1`, `0.4.0rc2`, and `0.4.0rc3` together with post-`rc3` synthetic tool-call ID fixes for `OpenAIEngine` and `GeminiEngine`. See the individual release-candidate sections below for full per-PR detail and contributor attributions.
+
+### Highlights & New Features
+- **Turn Timeouts, Deferred Turns & Safe Session Resets:** Added `Runner.run_async(..., turn_timeout=...)`, `Runner.spawn_turn()` for deferred follow-up turns outside the active turn lock, `Runner.reset_session_async()` / `Runner.reset_session()`, `SessionContext.refresh()`, and `/reset` in `CLIChannel`.
+- **In-Memory SQLite & Store Lifecycle:** Added `SQLiteSessionStore(db_path=":memory:")`, explicit `close()`, and `with SQLiteSessionStore(...) as store:` context-manager cleanup.
+- **New Public Exceptions & Documentation:** Exported `ToolSchemaError`, `ToolArgumentValidationError`, `ConfigurationError`, `JsonCodecError`, `ReentrantTurnError`, and `SessionDeletedError` from `chatflow_agent`; added bilingual Architecture, `0.3.4` → `0.4.0` Migration, and Troubleshooting guides.
+
+### Engines & Providers
+- **Native `httpx` `GeminiEngine`:** Replaced the `google-genai` SDK with direct Gemini Developer REST API (`v1beta`) requests over `httpx`, supporting `http_client=...`, `api_key_in_query=True`, `GOOGLE_GEMINI_BASE_URL`, and `Retry-After` delays bounded by `max_delay`.
+- **Configurable `AnthropicEngine` & Provider Routing:** Added `AnthropicEngine(..., max_tokens=4096)` with truncation warning logs (`stop_reason == "max_tokens"`), `deepseek-` model prefix detection, strict `ConfigurationError` validation for unknown providers or invalid endpoint combinations (no silent fallbacks), and `Agent(api_key=...)` propagation on default Gemini fallback.
+- **Cross-Provider Tool-Call ID Normalization:** Added collision-resistant stateless synthetic fallback IDs for `OpenAIEngine` (`#213`/`#230`) and `GeminiEngine` (`#231`/`#232`).
+
+### Tools & Validation
+- **Runtime Pydantic Argument Validation:** Enabled `validate_args=True` by default (`ToolArgumentValidationError`, opt-out with `validate_args=False`), order-independent union validation (`str | int`), and strict finite numeric checks (`allow_inf_nan=False`).
+- **Schema & Typing Improvements:** Unrepresentable union members raise `ToolSchemaError` at registration, `@tool` / `@agent.tool` provide precise `@overload` static types, plain functions with `self`/`cls` parameters remain intact in schemas, `Tool.to_openai_parameters()` exposes normalized JSON Schemas, and unified `json_codec` serialization raises `JsonCodecError` on non-JSON session metadata.
+
+### Sessions, SQLite & Concurrency
+- **Serialized, Non-Blocking SQLite Execution:** Per-session arrival-order serialization, worker-thread offloading for file-backed SQLite stores, cancellation/timeout rollbacks that wait for in-flight SQLite writes before restoring state, `ReentrantTurnError` lineage protection, and `SessionDeletedError` deletion guards.
+- **In-Memory Isolation & Thread Safety:** Thread-safe `SessionStore` deduplication (`record_processed_message()` / `is_message_processed()`) and deep-copied in-memory session metadata isolation.
+
+### Telegram & WhatsApp Integrations
+- **`TelegramChannel`:** Added `concurrent_updates` support, session-safe `/reset` coordinated through `Runner.reset_session_async()`, and bounded `RetryAfter` flood-control retries (`max_retry_after_seconds=60.0`) without duplicating sent chunks or sending contradictory fallback replies after partial delivery.
+- **`WhatsAppChannel`:** Separated `queue_timeout_seconds` from `llm_timeout_seconds` (`float | None = 120.0`), enforced strict `2xx` outbound delivery (`follow_redirects=False`), added deterministic SHA-256 fallback `wamid` generation (`gen_<sha256>`), validated outbound/body-size settings with `ConfigurationError`, masked `sender` in webhook JSON responses, and supported all awaitable `on_24h_window_expired` hooks.
+
+### Security
+- **Credential Redaction and Sanitized Error Handling (from `0.4.0rc3`):** Shared credential-redaction pipeline across `OpenAIEngine`, `AnthropicEngine`, `GeminiEngine`, and `WhatsAppChannel` outbound logs (masking configured API keys, tokens, and embedded URL credentials across plain, JSON-escaped, and percent-encoded forms), sanitized `ProviderError` exceptions without chaining `httpx`/`json.JSONDecodeError` internals, pre-dispatch HTTP header credential validation, no credential-bearing redirects, and redacted/bounded `ToolArgumentValidationError` messages and tracebacks.
+
+### Performance
+- **Gemini Connection Pooling:** `async with runner:` reuses a pooled `httpx` client for `GeminiEngine` requests on the same event loop (opened automatically by `Runner.run()`, `TelegramChannel.run()`, and `WhatsAppChannel`).
+- **Lower `SQLiteSessionStore` Query Overhead:** Single-transaction `SQLiteSessionStore.get()` and removal of redundant `refresh()` queries at turn start.
+
+### Important Fixes
+- **Prevent Synthetic Tool-Call ID Collisions Across Turns in `GeminiEngine`** ([#231](https://github.com/GustavoBaranda/chatflow-agent/issues/231), [#232](https://github.com/GustavoBaranda/chatflow-agent/pull/232)): when Gemini omits `functionCall.id` or returns `None`, `""`, or whitespace-only strings, `GeminiEngine` now generates a unique stateless Gemini-scoped fallback ID (`cf_gemini_<24 hex chars>`, 34 characters, compatible with OpenAI and Anthropic) instead of reusing per-response indices (`call_{name}_{part_idx}`). When sending history back to Gemini, `GeminiEngine` omits both current (`cf_gemini_<24 hex>`) and legacy (`call_{name}_{part_idx}`) Gemini synthetic IDs while preserving provider-supplied IDs and OpenAI/Anthropic IDs byte-for-byte.
+- **Prevent Synthetic Tool-Call ID Collisions Across Turns in `OpenAIEngine`** ([#213](https://github.com/GustavoBaranda/chatflow-agent/issues/213), [#230](https://github.com/GustavoBaranda/chatflow-agent/pull/230)): when an OpenAI-compatible provider omits `tool_call.id` or returns `None`, `""`, or whitespace-only strings, `OpenAIEngine` now generates a unique stateless fallback ID (`call_<24 hex chars>`, 29 characters, compatible with OpenAI, Anthropic, and Gemini) instead of reusing per-response indices (`call_0`, `call_1`). Provider-supplied non-empty IDs remain unchanged byte-for-byte.
+- **Configuration & Packaging Hardening:** Rejected boolean flags for `turn_timeout`, `queue_timeout_seconds`, `max_turns`, and `default_max_turns` ([#224](https://github.com/GustavoBaranda/chatflow-agent/pull/224)), constrained `httpx>=0.27.0,<1.0`, fell back to exponential backoff on invalid `Retry-After` headers across all engines/channels, and stopped remaining WhatsApp outbound chunks on failure with empty-reply fallback guarding.
+
+### Breaking Changes from `0.3.x`
+For full upgrade instructions and code examples, see the [0.4.0 Migration Guide](docs/MIGRATION_0.4.md). The four confirmed breaking changes from `v0.3.4` to `0.4.0` are:
+1. **Removal of `google-genai` and end of Vertex AI / ADC fallback:** Core dependencies are now solely `pydantic>=2.6.0` and `httpx>=0.27.0,<1.0`; `GeminiEngine` calls the Gemini Developer REST API (`v1beta`) directly over `httpx` and requires an explicit Gemini API key instead of falling back to Google Cloud Vertex AI / Application Default Credentials (ADC).
+2. **Removal of `GeminiEngine.client`:** The `GeminiEngine.client` attribute (previously a `google-genai` client) has been removed; pass `http_client: httpx.AsyncClient | None = None` or a custom `BaseEngine` stub instead.
+3. **Rejection of duplicate `Agent` names:** Multi-agent graphs registering distinct `Agent` instances with the same `name` now raise an error instead of silently shadowing each other.
+4. **Removal of `WhatsAppChannel` `dedup_ttl_hours` and keyword-only parameters:** Removed the unused `dedup_ttl_hours` parameter from `WhatsAppChannel` (configure deduplication TTL on the attached `SessionStore` / `SQLiteSessionStore`), and made `max_body_size`, `enable_docs`, and `queue_timeout_seconds` keyword-only.
+
+### Notable Behavior Changes
+- **Runtime tool-argument validation enabled by default:** Model-supplied tool arguments are validated and coerced via Pydantic (`ToolArgumentValidationError`, subclass of `ToolExecutionError`) before execution (`validate_args=True` by default, opt-out via `validate_args=False`).
+- **Strict `Runner.run()` event-loop guard:** Calling synchronous `Runner.run()` inside an already running event loop raises `RuntimeError`; use `await runner.run_async(...)` in async contexts.
+
+### Known Limitations
+- **Historical persisted tool-call IDs:** New synthetic tool-call IDs generated in `0.4.0` are unique across turns, but existing SQLite sessions created before `0.4.0` remain untouched on disk for backward compatibility. As a result, legacy duplicated synthetic IDs (`call_0`, `call_{name}_{part_idx}`, or `""`) already present in historical SQLite sessions can still be propagated to Anthropic and OpenAI during cross-provider handoffs.
+- **Single-node SQLite coordination:** `SQLiteSessionStore` is scoped to a single process/node; multi-node deployments require an application-provided `BaseSessionStore`.
+- **WhatsApp at-most-once acknowledgment:** Recording `wamid` before background dispatch prevents duplicate processing at the deliberate cost of losing an in-flight turn if the process crashes immediately after acknowledging Meta's webhook.
+
+## [0.4.0rc3] - 2026-11-22
+
+### Security
+- **Credential Redaction and Sanitized Error Handling Across Engines and WhatsApp Outbound Logs**: `OpenAIEngine`, `AnthropicEngine`, `GeminiEngine`, and `WhatsAppChannel` now use a shared credential-redaction pipeline that masks configured API keys, tokens, and embedded URL credentials (across plain, JSON-escaped, and percent-encoded forms) before error bodies are truncated or written to logs, while preserving non-sensitive HTTP diagnostic details. Network, invalid-URL, HTTP client creation, and malformed JSON failures in `OpenAIEngine`, `AnthropicEngine`, and `GeminiEngine` now raise sanitized `ProviderError` exceptions without chaining underlying `httpx` or `json.JSONDecodeError` instances (`__cause__` and `__context__` are `None`), preserving HTTP status codes and exception type names. Non-empty HTTP header credentials containing spaces, control characters, or non-ASCII characters are validated and rejected before dispatching requests.
+
+### Fixed
+- **Bound `TelegramChannel` `RetryAfter` Flood-Control Wait Time (`max_retry_after_seconds`)** ([#211](https://github.com/GustavoBaranda/chatflow-agent/issues/211)): `TelegramChannel` now accepts keyword-only `max_retry_after_seconds: float = 60.0` (validated with `ConfigurationError`, rejecting booleans, negative values, and non-finite numbers). The cap applies per `RetryAfter` event (not as a global turn or delivery timeout: up to 3 retries per chunk can still accumulate up to 180s of sleep per chunk excluding HTTP time, plus additional wait across chunks). Delays above the cap abort immediately without sleeping or retrying, without duplicating already-sent chunks or appending `fallback_message` after partial delivery (`0.0` allows zero-second delays and rejects positive waits). This changes previous behavior for `RetryAfter` delays above 60s.
+- **Reject Non-2xx Outbound WhatsApp Responses** ([#210](https://github.com/GustavoBaranda/chatflow-agent/issues/210)): `WhatsAppChannel._send_single_outbound_whatsapp()` now passes `follow_redirects=False` explicitly and treats only `2xx` (`200 <= status_code < 300`) responses as successful delivery. `3xx` redirect responses are logged with the masked recipient phone number, return `False` without retrying, and stop any remaining chunks in multi-chunk replies.
+- Reject boolean flags for `turn_timeout`, `queue_timeout_seconds`, `max_turns` and `default_max_turns` with the existing `ValueError` contract ([#224](https://github.com/GustavoBaranda/chatflow-agent/pull/224) by [@jwalith4418-Mj](https://github.com/jwalith4418-Mj), [#214](https://github.com/GustavoBaranda/chatflow-agent/issues/214)). Positive numeric settings and `turn_timeout=None` are unchanged.
+
 ## [0.4.0rc2] - 2026-11-21
 
 ### ⚠ BREAKING CHANGES
@@ -233,6 +297,70 @@ If you are upgrading from v0.2.0:
 
 ### Corregido
 - **Anotación de tipo precisa de `engine` en `Agent`** ([#220](https://github.com/GustavoBaranda/chatflow-agent/issues/220)): `Agent.__init__` y `Agent.engine` ahora se anotan como `BaseEngine | None` en lugar de `Any | None`, de modo que los verificadores de tipos estáticos (`mypy`, `pyright`) detectan motores inválidos sin cambiar el comportamiento en tiempo de ejecución. CI lo verifica en `tests/type_checks/agent_engine.py` con `mypy --strict tests/type_checks`.
+
+## [0.4.0] - 2026-11-22
+
+Primera versión estable de la serie `0.4.x`, que consolida todos los cambios de `0.4.0rc1`, `0.4.0rc2` y `0.4.0rc3` junto con las correcciones posteriores contra colisiones de IDs sintéticos de tool calls en `OpenAIEngine` y `GeminiEngine`. Consultá las secciones individuales de las versiones preliminares más abajo para el detalle por PR y las atribuciones de colaboradores.
+
+### Funcionalidades Nuevas y Destacados
+- **Timeouts por turno, turnos diferidos y reset seguro de sesiones:** Se agregaron `Runner.run_async(..., turn_timeout=...)`, `Runner.spawn_turn()` para encolar turnos de seguimiento fuera del candado activo, `Runner.reset_session_async()` / `Runner.reset_session()`, `SessionContext.refresh()` y `/reset` en `CLIChannel`.
+- **SQLite en memoria y ciclo de vida del store:** Se incorporaron `SQLiteSessionStore(db_path=":memory:")`, cierre explícito `close()` y soporte de context manager `with SQLiteSessionStore(...) as store:`.
+- **Nuevas excepciones públicas y documentación:** Exportación desde `chatflow_agent` de `ToolSchemaError`, `ToolArgumentValidationError`, `ConfigurationError`, `JsonCodecError`, `ReentrantTurnError` y `SessionDeletedError`; nuevas guías bilingües de Arquitectura, Migración (`0.3.4` → `0.4.0`) y Solución de Problemas.
+
+### Motores y Proveedores
+- **`GeminiEngine` nativo sobre `httpx`:** Reemplazo del SDK `google-genai` por solicitudes directas a la API REST de Gemini Developer (`v1beta`) sobre `httpx`, con soporte para `http_client=...`, `api_key_in_query=True`, `GOOGLE_GEMINI_BASE_URL` y demoras `Retry-After` acotadas por `max_delay`.
+- **`AnthropicEngine` configurable y enrutamiento estricto:** Nuevo parámetro `AnthropicEngine(..., max_tokens=4096)` con advertencias de truncamiento (`stop_reason == "max_tokens"`), detección de prefijo de modelos `deepseek-`, validación estricta con `ConfigurationError` para proveedores o endpoints inválidos (sin fallbacks silenciosos) y respeto de `Agent(api_key=...)` en el fallback predeterminado de Gemini.
+- **Normalización cross-provider de IDs de tool calls:** IDs sintéticos sin estado y resistentes a colisiones en `OpenAIEngine` (`#213`/`#230`) y `GeminiEngine` (`#231`/`#232`).
+
+### Herramientas y Validaciones
+- **Validación en tiempo de ejecución con Pydantic:** Activada por defecto (`validate_args=True`, `ToolArgumentValidationError`, desactivable con `validate_args=False`), validación de uniones independiente del orden (`str | int`) y verificación estricta de números finitos (`allow_inf_nan=False`).
+- **Mejoras de esquemas y tipado:** Los miembros de unión no representables lanzan `ToolSchemaError` al registrar la herramienta, `@tool` / `@agent.tool` proveen sobrecargas `@overload` precisas para tipado estático, las funciones comunes con parámetros `self`/`cls` los conservan en el esquema, `Tool.to_openai_parameters()` expone el JSON Schema normalizado y `json_codec` unificado lanza `JsonCodecError` ante metadatos de sesión no serializables.
+
+### Sesiones, SQLite y Concurrencia
+- **Ejecución SQLite serializada y no bloqueante:** Serialización por sesión en orden de llegada, descarga a hilos trabajadores para bases SQLite en archivo, rollbacks ante cancelación o timeout que aguardan escrituras SQLite en curso antes de restaurar estado, protección contra reentrada (`ReentrantTurnError`) y guardas `SessionDeletedError`.
+- **Aislamiento y seguridad de hilos en memoria:** Deduplicación thread-safe en `SessionStore` (`record_processed_message()` / `is_message_processed()`) y aislamiento por copia profunda de metadatos en sesiones en memoria.
+
+### Integraciones Telegram y WhatsApp
+- **`TelegramChannel`:** Soporte para `concurrent_updates`, `/reset` seguro por sesión coordinado con `Runner.reset_session_async()` y reintentos acotados ante flood-control `RetryAfter` (`max_retry_after_seconds=60.0`) sin duplicar fragmentos enviados ni agregar `fallback_message` tras entrega parcial.
+- **`WhatsAppChannel`:** Separación de `queue_timeout_seconds` y `llm_timeout_seconds` (`float | None = 120.0`), rechazo estricto de respuestas salientes no-`2xx` (`follow_redirects=False`), generación determinista SHA-256 de `wamid` fallback (`gen_<sha256>`), validación de ajustes de reintentos y tamaño de payload con `ConfigurationError`, enmascaramiento de `sender` en respuestas JSON del webhook y soporte para cualquier invocable awaitable en `on_24h_window_expired`.
+
+### Seguridad
+- **Redacción de credenciales y sanitización de errores (desde `0.4.0rc3`):** Capa compartida de redacción de credenciales en `OpenAIEngine`, `AnthropicEngine`, `GeminiEngine` y logs salientes de `WhatsAppChannel` (enmascarando claves API, tokens y credenciales en URLs en texto plano, escapadas en JSON y en percent-encoding), excepciones `ProviderError` sanitizadas sin encadenar detalles internos de `httpx` ni `json.JSONDecodeError`, validación previa de credenciales en cabeceras HTTP, bloqueo de redirecciones con credenciales y mensajes/tracebacks acotados y redactados en `ToolArgumentValidationError`.
+
+### Rendimiento
+- **Pool de conexiones en Gemini:** `async with runner:` reutiliza un cliente `httpx` en pool para las peticiones de `GeminiEngine` en el mismo event loop (abierto automáticamente por `Runner.run()`, `TelegramChannel.run()` y `WhatsAppChannel`).
+- **Menor sobrecarga de consultas en `SQLiteSessionStore`:** Lectura en una única transacción en `SQLiteSessionStore.get()` y eliminación de llamadas redundantes a `refresh()` al iniciar el turno.
+
+### Correcciones Importantes
+- **Prevención de colisiones de IDs sintéticos de tool calls entre turnos en `GeminiEngine`** ([#231](https://github.com/GustavoBaranda/chatflow-agent/issues/231), [#232](https://github.com/GustavoBaranda/chatflow-agent/pull/232)): cuando Gemini omite `functionCall.id` o devuelve `None`, `""` o solo espacios, `GeminiEngine` genera ahora un ID de respaldo único sin estado con prefijo propio de Gemini (`cf_gemini_<24 hex>`, 34 caracteres, compatible con OpenAI y Anthropic) en lugar de reutilizar índices por respuesta (`call_{name}_{part_idx}`). Al reenviar historial a Gemini, `GeminiEngine` omite tanto el formato nuevo (`cf_gemini_<24 hex>`) como el legado (`call_{name}_{part_idx}`), conservando byte a byte los IDs reales del proveedor y los IDs de OpenAI y Anthropic.
+- **Prevención de colisiones de IDs sintéticos de tool calls entre turnos en `OpenAIEngine`** ([#213](https://github.com/GustavoBaranda/chatflow-agent/issues/213), [#230](https://github.com/GustavoBaranda/chatflow-agent/pull/230)): cuando un proveedor compatible con OpenAI omite `tool_call.id` o devuelve `None`, `""` o solo espacios, `OpenAIEngine` genera ahora un ID de respaldo único sin estado (`call_<24 hex>`, 29 caracteres, compatible con OpenAI, Anthropic y Gemini) en lugar de reutilizar índices por respuesta (`call_0`, `call_1`). Los IDs no vacíos provistos por el proveedor se conservan sin cambios byte a byte.
+- **Endurecimiento de configuración y empaquetado:** Rechazo de booleanos en `turn_timeout`, `queue_timeout_seconds`, `max_turns` y `default_max_turns` ([#224](https://github.com/GustavoBaranda/chatflow-agent/pull/224)), restricción `httpx>=0.27.0,<1.0`, fallback a backoff exponencial ante encabezados `Retry-After` inválidos en todos los motores/canales y detención de fragmentos salientes restantes en WhatsApp ante fallos con protección contra respuestas vacías.
+
+### Cambios Incompatibles desde `0.3.x`
+Para las instrucciones completas de actualización y ejemplos de código, consultá la [Guía de Migración a 0.4.0](docs/es/MIGRATION_0.4.md). Los cuatro cambios incompatibles confirmados entre `v0.3.4` y `0.4.0` son:
+1. **Eliminación de `google-genai` y fin del soporte Vertex AI / ADC:** Las dependencias del núcleo son ahora únicamente `pydantic>=2.6.0` y `httpx>=0.27.0,<1.0`; `GeminiEngine` invoca directamente la API REST de Gemini Developer (`v1beta`) sobre `httpx` y requiere una API key explícita de Gemini en lugar de recurrir a Google Cloud Vertex AI / Application Default Credentials (ADC).
+2. **Eliminación de `GeminiEngine.client`:** Se eliminó el atributo `GeminiEngine.client` (anteriormente un cliente de `google-genai`); en su lugar utilizá `http_client: httpx.AsyncClient | None = None` o un stub de `BaseEngine`.
+3. **Rechazo de nombres duplicados de `Agent`:** Los grafos multi-agente que registren instancias distintas de `Agent` con el mismo `name` ahora lanzan error en lugar de sobrescribirse silenciosamente.
+4. **Eliminación de `dedup_ttl_hours` en `WhatsAppChannel` y parámetros keyword-only:** Se eliminó el parámetro sin uso `dedup_ttl_hours` de `WhatsAppChannel` (el TTL de deduplicación se configura en el `SessionStore` / `SQLiteSessionStore` adjunto) y `max_body_size`, `enable_docs` y `queue_timeout_seconds` pasaron a ser solo por palabra clave.
+
+### Cambios de Comportamiento Notables
+- **Validación en tiempo de ejecución de argumentos de tools activada por defecto:** Los argumentos provistos por el modelo se validan y coaccionan con Pydantic (`ToolArgumentValidationError`, subclase de `ToolExecutionError`) antes de ejecutar la herramienta (`validate_args=True` por defecto; desactivable con `validate_args=False`).
+- **Guarda estricta de event loop en `Runner.run()`:** Invocar `Runner.run()` dentro de un event loop ya activo lanza `RuntimeError`; utilizá `await runner.run_async(...)` en contextos asíncronos.
+
+### Limitaciones Conocidas
+- **IDs históricos persistidos en SQLite:** Los nuevos IDs sintéticos generados en `0.4.0` son únicos entre turnos, pero las sesiones SQLite creadas antes de `0.4.0` se conservan intactas en disco por compatibilidad hacia atrás. En consecuencia, los IDs sintéticos legados duplicados (`call_0`, `call_{name}_{part_idx}` o `""`) que ya existan en sesiones SQLite históricas todavía pueden propagarse a Anthropic y OpenAI durante handoffs entre proveedores.
+- **Coordinación SQLite de nodo único:** `SQLiteSessionStore` aplica a un único proceso/nodo; los despliegues multi-nodo requieren un `BaseSessionStore` externo provisto por la aplicación.
+- **Confirmación *at-most-once* en WhatsApp:** Registrar el `wamid` antes del despacho en segundo plano evita procesamientos duplicados con la contrapartida deliberada de perder un turno en vuelo si el proceso cae inmediatamente tras confirmar el webhook a Meta.
+
+## [0.4.0rc3] - 2026-11-22
+
+### Seguridad
+- **Redacción de credenciales y sanitización de errores en motores LLM y logs salientes de WhatsApp**: `OpenAIEngine`, `AnthropicEngine`, `GeminiEngine` y `WhatsAppChannel` utilizan ahora una capa unificada de redacción que enmascara claves API, tokens y credenciales embebidas en URLs (en texto plano, escapadas en JSON y en percent-encoding) antes de truncar cuerpos de error o escribir en los logs, conservando los detalles diagnósticos HTTP no sensibles. Los fallos de red, URL inválida, creación del cliente HTTP y respuestas JSON malformadas en `OpenAIEngine`, `AnthropicEngine` y `GeminiEngine` lanzan ahora excepciones `ProviderError` sanitizadas sin encadenar las instancias subyacentes de `httpx` ni `json.JSONDecodeError` (`__cause__` y `__context__` son `None`), manteniendo los códigos HTTP y nombres de clase de error. Las credenciales no vacías enviadas en cabeceras HTTP que contengan espacios, caracteres de control o caracteres no-ASCII se validan y rechazan antes de enviar solicitudes.
+
+### Corregido
+- **Límite de espera para `RetryAfter` en `TelegramChannel` (`max_retry_after_seconds`)** ([#211](https://github.com/GustavoBaranda/chatflow-agent/issues/211)): `TelegramChannel` acepta ahora el parámetro solo por palabra clave `max_retry_after_seconds: float = 60.0` (validado con `ConfigurationError`, rechazando booleanos, valores negativos y números no finitos). El límite se aplica a cada evento `RetryAfter` individual (no es un timeout global del turno ni del envío: con hasta 3 reintentos por fragmento pueden acumularse hasta 180s de `sleep` por fragmento sin contar tiempos HTTP, más esperas adicionales en respuestas multi-fragmento). Las demoras superiores al límite abortan de inmediato sin dormir ni reintentar, sin duplicar fragmentos ya entregados ni agregar `fallback_message` tras entrega parcial (`0.0` permite retrasos de cero segundos y rechaza esperas positivas). Esto cambia el comportamiento anterior para demoras `RetryAfter` mayores a 60s.
+- **Rechazo de respuestas salientes no-2xx en WhatsApp** ([#210](https://github.com/GustavoBaranda/chatflow-agent/issues/210)): `WhatsAppChannel._send_single_outbound_whatsapp()` ahora pasa `follow_redirects=False` de forma explícita y considera exitosas únicamente las respuestas `2xx` (`200 <= status_code < 300`). Las respuestas de redirección `3xx` se registran con el número del destinatario enmascarado, devuelven `False` sin reintentar y detienen el envío de los fragmentos restantes en respuestas divididas.
+- Se rechazan valores booleanos en `turn_timeout`, `queue_timeout_seconds`, `max_turns` y `default_max_turns` con el mismo contrato `ValueError` ([#224](https://github.com/GustavoBaranda/chatflow-agent/pull/224) por [@jwalith4418-Mj](https://github.com/jwalith4418-Mj), [#214](https://github.com/GustavoBaranda/chatflow-agent/issues/214)). Los valores numéricos positivos y `turn_timeout=None` no cambian.
 
 ## [0.4.0rc2] - 2026-11-21
 

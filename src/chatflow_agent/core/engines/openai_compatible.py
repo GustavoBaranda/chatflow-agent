@@ -10,11 +10,30 @@ import json
 import logging
 import math
 import os
+import uuid
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 import httpx
 
+from chatflow_agent.core._redaction import (
+    body_excerpt as _body_excerpt,  # noqa: F401
+)
+from chatflow_agent.core._redaction import (
+    describe_error as _describe,
+)
+from chatflow_agent.core._redaction import (
+    extract_url_secrets as _extract_url_secrets,
+)
+from chatflow_agent.core._redaction import (
+    redact_secrets as _redact_secrets,
+)
+from chatflow_agent.core._redaction import (
+    sanitize_error_body as _sanitize_error_body,
+)
+from chatflow_agent.core._redaction import (
+    validate_header_secret as _validate_header_secret,
+)
 from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult, replacement_tool_call_id
 from chatflow_agent.core.json_codec import encode_tool_content
 from chatflow_agent.exceptions import ConfigurationError, ProviderError
@@ -28,6 +47,15 @@ if TYPE_CHECKING:
 # OpenAI rejects longer tool-call IDs ("string too long", as users report it; its published API
 # spec sets no limit). No limit is known for the other OpenAI-compatible providers.
 _OPENAI_MAX_TOOL_CALL_ID_LENGTH = 40
+
+
+def _synthetic_tool_call_id() -> str:
+    """Generate a collision-resistant fallback tool-call ID compatible with all providers.
+
+    Uses ``call_`` plus 24 lowercase hex characters (29 characters total), which satisfies
+    OpenAI's 40-character limit, Anthropic's ``[a-zA-Z0-9_-]+`` format, and Gemini.
+    """
+    return f"call_{uuid.uuid4().hex[:24]}"
 
 _LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
 # Explicit compatibility exception for local dev servers bound to 0.0.0.0 (not a loopback address)
@@ -183,12 +211,6 @@ def _lowercase_schema_types(schema: Any) -> Any:
 
 
 
-def _body_excerpt(text: str | None, limit: int = 1000) -> str:
-    """A bounded excerpt of an error response body for a ProviderError message."""
-    body = text or ""
-    return body if len(body) <= limit else body[:limit] + "… (truncated)"
-
-
 class OpenAIEngine(BaseEngine):
     """Universal OpenAI-compatible API engine powered by async httpx."""
 
@@ -240,6 +262,18 @@ class OpenAIEngine(BaseEngine):
         self.base_delay = 1.0
         self.max_delay = 10.0
         self._external_client = http_client
+
+    def _secrets(self) -> list[str]:
+        """Credentials to redact from error messages, response bodies, and retry logs."""
+        items: list[str] = []
+        if self.api_key:
+            items.append(self.api_key)
+        items.extend(_extract_url_secrets(self.base_url))
+        return items
+
+    def _redact(self, text: str) -> str:
+        """Remove API key and embedded URL credentials from diagnostic text."""
+        return _redact_secrets(text, self._secrets())
 
     def _tool_call_id(self, call_id: str) -> str:
         """The history's tool-call ID, unless OpenAI would reject it (e.g. one from another provider)."""
@@ -328,13 +362,31 @@ class OpenAIEngine(BaseEngine):
 
         headers = {"Content-Type": "application/json"}
         if self.api_key:
+            _validate_header_secret(self.api_key, label=f"{self.provider.upper()} API key")
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         url = f"{self.base_url}/chat/completions"
 
         retries = 0
         while True:
-            client = self._external_client or httpx.AsyncClient(timeout=self.timeout)
+            client_failure: ProviderError | None = None
+            client: httpx.AsyncClient | None = self._external_client
+            if client is None:
+                try:
+                    client = httpx.AsyncClient(timeout=self.timeout)
+                except Exception as err:
+                    client_failure = ProviderError(
+                        f"{self.provider.upper()} HTTP client could not be created "
+                        f"({type(err).__name__}). Check proxy and TLS environment variables."
+                    )
+            if client_failure is not None:
+                raise client_failure from None
+            assert client is not None
+
+            # Errors caught from httpx or JSON decoding may hold request headers or the raw
+            # response body on the exception object. Raising after the except block with
+            # ``from None`` ensures neither ``__cause__`` nor ``__context__`` retains them.
+            failure: ProviderError | None = None
             try:
                 # Never follow redirects, even on an injected client configured to:
                 # the credential must not be replayed to whatever host a 3xx names.
@@ -370,38 +422,52 @@ class OpenAIEngine(BaseEngine):
                         continue
                     raise ProviderError(
                         f"{self.provider.upper()} API request failed ({resp.status_code}): "
-                        f"{_body_excerpt(resp.text)}"
+                        f"{_sanitize_error_body(resp.text, self._secrets())}"
                     )
 
                 if resp.status_code >= 400:
                     raise ProviderError(
                         f"{self.provider.upper()} API request failed ({resp.status_code}): "
-                        f"{_body_excerpt(resp.text)}"
+                        f"{_sanitize_error_body(resp.text, self._secrets())}"
                     )
                 try:
                     data = resp.json()
                 except ValueError as err:
-                    raise ProviderError(
-                        f"{self.provider.upper()} returned a malformed response: {err}"
-                    ) from err
-                break
+                    failure = ProviderError(
+                        f"{self.provider.upper()} returned a malformed response: "
+                        f"{self._redact(_describe(err))}"
+                    )
             except (httpx.ConnectError, httpx.ConnectTimeout) as net_err:
+                reason = self._redact(_describe(net_err))
                 if retries < self.max_retries:
                     import random
                     base = self.base_delay * (2 ** retries)
                     delay = min(self.max_delay, base + random.uniform(0.0, 0.25 * base))
                     logger.warning(
-                        f"{self.provider.upper()} connect error: {net_err}. Retrying in {delay:.2f}s..."
+                        f"{self.provider.upper()} connect error ({type(net_err).__name__}): {reason}. Retrying in {delay:.2f}s..."
                     )
                     await asyncio.sleep(delay)
                     retries += 1
                     continue
-                raise ProviderError(f"{self.provider.upper()} connection error: {net_err}") from net_err
+                failure = ProviderError(
+                    f"{self.provider.upper()} connection error ({type(net_err).__name__}): {reason}"
+                )
             except httpx.RequestError as err:
-                raise ProviderError(f"{self.provider.upper()} connection error: {err}") from err
+                failure = ProviderError(
+                    f"{self.provider.upper()} connection error ({type(err).__name__}): "
+                    f"{self._redact(_describe(err))}"
+                )
+            except httpx.InvalidURL as err:
+                failure = ProviderError(
+                    f"{self.provider.upper()} request URL is invalid: {self._redact(_describe(err))}"
+                )
             finally:
                 if not self._external_client:
                     await client.aclose()
+
+            if failure is not None:
+                raise failure from None
+            break
 
         if not isinstance(data, dict):
             raise ProviderError(
@@ -442,21 +508,24 @@ class OpenAIEngine(BaseEngine):
             )
 
         extracted_calls: list[ToolCall] = []
-        for idx, tc in enumerate(raw_tool_calls):
+        for tc in raw_tool_calls:
             if not isinstance(tc, dict):
                 raise ProviderError(
                     f"{self.provider.upper()} returned a malformed response: "
                     "a tool call is not an object"
                 )
-            if "id" not in tc or tc["id"] is None:
-                call_id = f"call_{idx}"
+            raw_id = tc.get("id")
+            if raw_id is None:
+                call_id = _synthetic_tool_call_id()
+            elif not isinstance(raw_id, str):
+                raise ProviderError(
+                    f"{self.provider.upper()} returned a malformed response: "
+                    "a tool call's id is not a string"
+                )
+            elif not raw_id.strip():
+                call_id = _synthetic_tool_call_id()
             else:
-                call_id = tc["id"]
-                if not isinstance(call_id, str):
-                    raise ProviderError(
-                        f"{self.provider.upper()} returned a malformed response: "
-                        "a tool call's id is not a string"
-                    )
+                call_id = raw_id
             func_data = tc.get("function", {})
             if not isinstance(func_data, dict):
                 raise ProviderError(

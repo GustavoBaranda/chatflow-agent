@@ -455,6 +455,7 @@ except ToolArgumentValidationError as exc:
   * Las respuestas HTTP JSON del webhook ahora enmascaran el número `sender` con `_mask_phone()` (PR #192); los mensajes de Meta que omiten `"id"` generan un `wamid` fallback determinista mediante SHA-256 (`gen_<sha256>`) sobre JSON canónico (PR #204); la entrega saliente detiene los fragmentos restantes ante un fallo, envía `fallback_message` ante respuestas vacías o solo con espacios y advierte al construirse si faltan credenciales salientes (PR #180); y `on_24h_window_expired` espera cualquier valor de retorno awaitable (PR #196).
 * **Resiliencia ante flood-control y fallback en `TelegramChannel`:**
   * `TelegramChannel` captura `telegram.error.RetryAfter` por fragmento no enviado y reintenta hasta 3 veces sin duplicar fragmentos ya entregados, envía `fallback_message` ante respuestas vacías o solo con espacios, protege el envío del fallback frente a errores secundarios (sin agregar `fallback_message` tras una entrega parcial) y registra únicamente el nombre de la clase de excepción en errores de handlers (PRs #180, #203).
+  * `TelegramChannel` incorpora además el parámetro solo por palabra clave `max_retry_after_seconds: float = 60.0` (validado con `ConfigurationError`, rechazando booleanos, valores negativos y números no finitos) (#211). El límite se aplica **a cada evento `RetryAfter` individual** — no es un timeout global del turno ni del envío: con hasta 3 reintentos por fragmento y el valor predeterminado de `60.0`, pueden acumularse hasta 180 segundos de `sleep` por fragmento (sin incluir los tiempos de las solicitudes HTTP), y las respuestas con varios fragmentos pueden acumular esperas adicionales. Las demoras superiores a `max_retry_after_seconds` abortan de inmediato sin dormir ni reintentar, sin duplicar fragmentos ya entregados ni agregar `fallback_message` tras una entrega parcial (`0.0` permite retrasos de cero segundos y rechaza cualquier espera positiva). Esto modifica el comportamiento anterior para demoras `RetryAfter` mayores a 60 segundos; aumentá `max_retry_after_seconds` explícitamente si necesitás tolerar esperas mayores.
 * **Manejo consistente de `Retry-After` entre proveedores y WhatsApp:**
   * Los encabezados `Retry-After` negativos o no finitos en `WhatsAppChannel`, `OpenAIEngine` y `AnthropicEngine` ahora recurren al backoff exponencial en lugar de disparar un reintento inmediato, igualando el comportamiento de `GeminiEngine` (PR #194).
 * **Desambiguación de nombres de handoff y registro dinámico:**
@@ -474,6 +475,17 @@ except ToolArgumentValidationError as exc:
 * **Compatibilidad total hacia atrás del esquema SQLite:** Los archivos de base de datos SQLite existentes creados en `v0.3.x` funcionan en `0.4.0` sin necesidad de migración manual de esquema.
 
 ---
+
+### 3.6. Valores booleanos en la configuración numérica
+
+`True` y `False` generan `ValueError` en `Runner.run_async(turn_timeout=...)`,
+`WhatsAppChannel(queue_timeout_seconds=...)` y los argumentos `max_turns` /
+`default_max_turns` de `SessionContext`, `SQLiteSessionContext`, `SessionStore`
+y `SQLiteSessionStore`. Utiliza límites de turnos enteros positivos y tiempos
+numéricos positivos y finitos, en lugar de valores booleanos.
+`turn_timeout=None` sigue desactivando el límite de tiempo del turno activo.
+No cambian los valores predeterminados, las entradas numéricas válidas ni los
+esquemas de SQLite.
 
 ## 4. Documentación relacionada
 

@@ -376,8 +376,11 @@ async def test_queue_limit_does_not_reach_turns_started_by_tools(any_store: Any)
             return EngineTurnResult(text=f"re:{last.content}")
 
     engine = Engine()
+    # This test verifies isolation of the channel's queue wait limit (queue_limit);
+    # leave the outer turn unbounded so slow disk I/O (e.g. sqlite_file) does not
+    # trip an unrelated outer turn timeout.
     channel, runner, _, sent = build(
-        any_store, queue=queue_limit, turn=5.0, engine=engine, tools=[ask_other]
+        any_store, queue=queue_limit, turn=None, engine=engine, tools=[ask_other]
     )
     holder["runner"] = runner
     # Keep session creation outside the deliberately short channel deadline. This test is

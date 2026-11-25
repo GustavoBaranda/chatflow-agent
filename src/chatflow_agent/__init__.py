@@ -40,7 +40,7 @@ from chatflow_agent.types import (
 # Alias for semantic consistency
 BaseSessionContext = SessionContext
 
-__version__ = "0.4.0rc2"
+__version__ = "0.4.0"
 __all__ = [
     "__version__",
     "Agent",

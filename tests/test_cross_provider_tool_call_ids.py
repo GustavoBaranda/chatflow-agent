@@ -21,6 +21,7 @@ from chatflow_agent.types import Message, Role, ToolCall, ToolResult
 
 # The replacement an engine sends for an ID its provider would reject.
 REPLACEMENT = re.compile(r"call_[0-9a-f]{24}")
+GEMINI_SYNTHETIC = re.compile(r"cf_gemini_[0-9a-f]{24}")
 
 OPENAI_ID = "call_AbC123xyz0123456789abcde"
 ANTHROPIC_ID = "toolu_01A09q90qw90lq917835lq9"
@@ -230,7 +231,7 @@ def agents(first: Provider, second: Provider) -> tuple[Agent, Agent]:
     [
         ("gemini", "anthropic", "fc:lookup/1", None),  # None: replaced
         ("gemini", "anthropic", GEMINI_ID, GEMINI_ID),
-        ("gemini", "anthropic", None, "call_lookup_0"),  # no Gemini ID: the synthetic one
+        ("gemini", "anthropic", None, GEMINI_SYNTHETIC),  # no Gemini ID: stateless synthetic ID
         ("gemini", "openai", "fc-" + "a" * 45, None),
         ("gemini", "openai", "fc:lookup/1", "fc:lookup/1"),
         ("openai", "anthropic", OPENAI_ID, OPENAI_ID),
@@ -240,7 +241,7 @@ def agents(first: Provider, second: Provider) -> tuple[Agent, Agent]:
     ],
 )
 async def test_handoff_sends_the_destination_matching_ids_it_accepts(
-    source: str, destination: str, lookup_id: str | None, expected: str | None
+    source: str, destination: str, lookup_id: str | None, expected: str | re.Pattern[str] | None
 ) -> None:
     first, second = PROVIDERS[source](), PROVIDERS[destination]()
     first.replies = [first.call("lookup", lookup_id), first.call("transfer_to_specialist", first.handoff_id)]
@@ -253,7 +254,9 @@ async def test_handoff_sends_the_destination_matching_ids_it_accepts(
     calls, results = second.ids(second.bodies[0])
     assert calls == results, "every result must carry its call's ID"
     assert calls[1] == first.handoff_id
-    if expected is not None:
+    if isinstance(expected, re.Pattern):
+        assert expected.fullmatch(calls[0])
+    elif expected is not None:
         assert calls[0] == expected
     else:
         assert REPLACEMENT.fullmatch(calls[0])

@@ -11,14 +11,23 @@ import math
 import os
 import random
 import re
+import secrets
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote, quote_plus, urlsplit
+from urllib.parse import urlsplit
 
 import httpx
 
+from chatflow_agent.core._redaction import (
+    body_excerpt as _body_excerpt,
+)
+from chatflow_agent.core._redaction import (
+    extract_url_secrets as _extract_url_secrets,
+)
+from chatflow_agent.core._redaction import (
+    redact_secrets as _redact_secrets,
+)
 from chatflow_agent.core.engines.base import BaseEngine, EngineTurnResult, system_prompt
-from chatflow_agent.core.engines.openai_compatible import _body_excerpt
 from chatflow_agent.core.json_codec import json_default_coercing as _json_default
 from chatflow_agent.exceptions import ProviderError
 from chatflow_agent.types import Message, Role, ToolCall
@@ -36,6 +45,15 @@ _RETRIABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _API_KEY_PATTERN = re.compile(r"[\x21-\x7e]+")
 # A model ID such as "gemini-2.5-flash"; "models/" or "tunedModels/" may precede it.
 _MODEL_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# Stateless fallback IDs synthesized when Gemini omits functionCall.id (34 chars: <= 40 for
+# OpenAI, [a-zA-Z0-9_-]+ for Anthropic, and distinct from OpenAI's call_* prefix).
+_GEMINI_SYNTHETIC_ID_PREFIX = "cf_gemini_"
+_GEMINI_SYNTHETIC_ID_PATTERN = re.compile(r"cf_gemini_[0-9a-f]{24}")
+
+
+def _synthetic_gemini_tool_call_id() -> str:
+    """Generate a collision-resistant fallback tool-call ID scoped to GeminiEngine."""
+    return f"{_GEMINI_SYNTHETIC_ID_PREFIX}{secrets.token_hex(12)}"
 
 
 def _new_attempt_client(timeout: float) -> httpx.AsyncClient:
@@ -339,24 +357,16 @@ class GeminiEngine(BaseEngine):
         return body
 
     def _redact(self, text: str) -> str:
-        """Remove the API key from text that ends up in errors or logs.
+        """Remove the API key and any embedded base-URL credentials from errors or logs.
 
-        Errors may quote the key as is, escaped (e.g. a bytes repr of a header value) or
+        Errors may quote the key as is, escaped (e.g. a bytes repr or JSON string) or
         percent-encoded (a URL), so every one of those forms is replaced.
         """
-        key = self.api_key
-        if not key:
-            return text
-        forms = {
-            key,
-            key.encode("unicode_escape").decode("ascii"),
-            ascii(key)[1:-1],
-            quote(key, safe=""),
-            quote_plus(key, safe=""),
-        }
-        for form in sorted(forms, key=len, reverse=True):
-            text = text.replace(form, "***")
-        return text
+        secrets: list[str | None] = [
+            self.api_key,
+            *_extract_url_secrets(os.environ.get("GOOGLE_GEMINI_BASE_URL")),
+        ]
+        return _redact_secrets(text, secrets)
 
     def _retry_delay(self, retries: int, retry_after: str | None = None) -> float:
         """Exponential backoff with jitter; a valid Retry-After (seconds or an HTTP-date)
@@ -455,17 +465,20 @@ class GeminiEngine(BaseEngine):
 
         url = f"{_api_base_url()}/{_model_path(agent.model)}:generateContent"
         body = self._build_request_body(agent, history)
+        encode_failure: ProviderError | None = None
         try:
             # Tool results that json cannot encode (pydantic models, dataclasses, datetimes,
             # ...) are converted by _json_default instead of failing the turn.
             content = json.dumps(body, default=_json_default).encode("utf-8")
         except Exception as err:
             # Only the exception type is given: the message may quote tool results.
-            raise ProviderError(
+            encode_failure = ProviderError(
                 f"Gemini API request body could not be encoded as JSON ({type(err).__name__}): "
                 "a tool result or tool call argument contains a circular reference or a "
                 "dict key that is not a string, number, boolean or None."
-            ) from None
+            )
+        if encode_failure is not None:
+            raise encode_failure from None
         headers = {"Content-Type": "application/json"}
         params: dict[str, str] | None = None
         if self.api_key_in_query:
@@ -539,10 +552,16 @@ class GeminiEngine(BaseEngine):
                 )
             break
 
+        json_failure: ProviderError | None = None
         try:
             data = resp.json()
-        except ValueError as err:
-            raise ProviderError("Gemini API returned a response body that is not valid JSON.") from err
+        except ValueError:
+            # Do not chain JSONDecodeError: its ``.doc`` attribute holds the full raw body.
+            json_failure = ProviderError(
+                "Gemini API returned a response body that is not valid JSON."
+            )
+        if json_failure is not None:
+            raise json_failure from None
         if not isinstance(data, dict):
             raise ProviderError("Gemini API returned a malformed response: expected a JSON object.")
 
@@ -569,7 +588,7 @@ class GeminiEngine(BaseEngine):
                 raise _malformed("'content' is not an object")
             parts = _optional_list(content or {}, "parts")
             text_chunks: list[str] = []
-            for idx, part in enumerate(parts):
+            for part in parts:
                 if not isinstance(part, dict):
                     raise _malformed("a part is not an object")
                 text = part.get("text")
@@ -579,7 +598,7 @@ class GeminiEngine(BaseEngine):
                     text_chunks.append(text)
                 function_call = part.get("functionCall")
                 if function_call:
-                    extracted_calls.append(_parse_function_call(function_call, idx))
+                    extracted_calls.append(_parse_function_call(function_call))
             if text_chunks:
                 extracted_text = "".join(text_chunks)
 
@@ -604,9 +623,12 @@ def _optional_list(obj: dict[str, Any], key: str) -> list[Any]:
     return value
 
 
-def _parse_function_call(function_call: Any, part_idx: int) -> ToolCall:
-    """Convert a ``functionCall`` part into a ToolCall. Gemini's ``id`` is kept; without one,
-    the ID is synthetic, in the engine's historical format."""
+def _parse_function_call(function_call: Any) -> ToolCall:
+    """Convert a ``functionCall`` part into a ToolCall.
+
+    Non-empty provider ``id`` strings are preserved byte-for-byte; missing, null, empty, or
+    whitespace-only IDs receive a stateless Gemini-scoped synthetic ID.
+    """
     if not isinstance(function_call, dict):
         raise _malformed("'functionCall' is not an object")
     name = function_call.get("name")
@@ -615,18 +637,32 @@ def _parse_function_call(function_call: Any, part_idx: int) -> ToolCall:
     args = function_call.get("args")
     if args is not None and not isinstance(args, dict):
         raise _malformed("'functionCall.args' is not an object")
-    call_id = function_call.get("id")
-    if call_id is not None and not isinstance(call_id, str):
+    raw_id = function_call.get("id")
+    if raw_id is None:
+        call_id = _synthetic_gemini_tool_call_id()
+    elif not isinstance(raw_id, str):
         raise _malformed("'functionCall.id' is not a string")
+    elif not raw_id.strip():
+        call_id = _synthetic_gemini_tool_call_id()
+    else:
+        call_id = raw_id
     return ToolCall(
-        id=call_id or f"call_{name}_{part_idx}",
+        id=call_id,
         name=name or "",
         args=dict(args or {}),
     )
 
 
+def _is_synthetic_gemini_id(call_id: str, name: str) -> bool:
+    """Return True if ``call_id`` matches a current or legacy Gemini synthetic ID."""
+    return bool(
+        _GEMINI_SYNTHETIC_ID_PATTERN.fullmatch(call_id)
+        or re.fullmatch(rf"call_{re.escape(name)}_\d+", call_id)
+    )
+
+
 def _with_provider_id(part: dict[str, Any], call_id: str, name: str) -> dict[str, Any]:
-    """Add ``id`` to a functionCall/functionResponse part, unless the ID is a synthetic one."""
-    if not re.fullmatch(rf"call_{re.escape(name)}_\d+", call_id):
+    """Add ``id`` to a functionCall/functionResponse part, unless the ID is a Gemini synthetic one."""
+    if not _is_synthetic_gemini_id(call_id, name):
         part["id"] = call_id
     return part

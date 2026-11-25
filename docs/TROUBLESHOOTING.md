@@ -9,6 +9,7 @@ Common problems when installing and running `chatflow-agent`, with the exact mes
 - [WhatsApp webhook](#whatsapp-webhook)
 - [Timeouts](#timeouts)
 - [SQLite session stores](#sqlite-session-stores)
+- [HTTP dependency logs (`httpx` and `httpcore`)](#http-dependency-logs-httpx-and-httpcore)
 
 ---
 
@@ -16,13 +17,13 @@ Common problems when installing and running `chatflow-agent`, with the exact mes
 
 ### A documented API does not exist after `pip install chatflow-agent`
 
-**Cause:** the documentation describes the `0.4.0` prerelease. Plain `pip install chatflow-agent` installs the latest stable `0.3.x` release, which does not include every `0.4.0` API.
+**Cause:** an older `0.3.x` release is installed in the active environment and does not include every `0.4.0` API.
 
-**Fix:** install the prerelease by explicit version (avoid `pip install --pre`, which allows prereleases across all dependencies), as shown in the README's [Installation & Requirements](../README.md#installation--requirements) section:
+**Fix:** upgrade to the latest stable `0.4.x` release, as shown in the README's [Installation & Requirements](../README.md#installation--requirements) section:
 
 ```bash
-pip install chatflow-agent==0.4.0rc2
-pip install "chatflow-agent[whatsapp]==0.4.0rc2"   # with an optional extra
+pip install --upgrade chatflow-agent
+pip install --upgrade "chatflow-agent[whatsapp]"   # with an optional extra
 ```
 
 ### `DependencyError` when using a channel
@@ -33,7 +34,7 @@ The feature '<feature>' requires optional dependencies from '<extra>'. Please in
 
 **Cause:** the core package does not install channel dependencies. `WhatsAppChannel` needs the `whatsapp` extra (FastAPI, Uvicorn) and `TelegramChannel` needs the `telegram` extra (`python-telegram-bot`).
 
-**Fix:** run the command shown in the message, pinning the prerelease version while `0.4.0` is a prerelease (for example, `pip install "chatflow-agent[all]==0.4.0rc2"` installs every extra).
+**Fix:** run the command shown in the message (for example, `pip install "chatflow-agent[all]"` installs every extra).
 
 ---
 
@@ -155,3 +156,24 @@ Waiting in the queue does not consume `llm_timeout_seconds`, so a message can ta
 ### Worker threads or files stay open after shutdown
 
 **Fix:** close stores deterministically with `with SQLiteSessionStore(...) as store:` or `store.close()`.
+
+---
+
+## HTTP dependency logs (`httpx` and `httpcore`)
+
+### Bot tokens or API keys appear in `INFO` or `DEBUG` logs
+
+**Cause:** `chatflow-agent` does not alter global logging levels for third-party libraries. When an application configures root logging at `INFO` (e.g. `logging.basicConfig(level=logging.INFO)`), `httpx` logs every request URL, which exposes credentials placed in URLs — notably Telegram Bot API URLs in `TelegramChannel` (`/bot<TOKEN>/...`), `GeminiEngine(..., api_key_in_query=True)` (`?key=...`), or custom `base_url` values with embedded credentials. Enabling `DEBUG` on `httpcore` emits low-level connection and transport lifecycle events and may include response headers or metadata that can be sensitive depending on the upstream service and dependency version.
+
+**Fix:** raise the `httpx` and `httpcore` logger levels in your application's startup code:
+
+```python
+import logging
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+```
+
+For `GeminiEngine`, keep `api_key_in_query=False` (the default) whenever your provider or proxy supports the `x-goog-api-key` header.
+
+**Limitations:** this setting suppresses `httpx`/`httpcore` request logs in your Python process, but does not redact secrets from reverse-proxy access logs, custom `httpx` event hooks, APM stack-frame variable capture (`locals()`), or other third-party loggers.

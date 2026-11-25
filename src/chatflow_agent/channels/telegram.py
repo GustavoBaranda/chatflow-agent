@@ -5,6 +5,7 @@ import contextlib
 import datetime
 import logging
 import math
+import numbers
 import warnings
 from typing import Any
 
@@ -15,6 +16,22 @@ from chatflow_agent.types import AgentResponse
 logger = logging.getLogger("chatflow_agent.telegram")
 
 _MAX_OUTBOUND_RETRIES = 3
+_DEFAULT_MAX_RETRY_AFTER_SECONDS = 60.0
+
+
+def _validate_max_retry_after_seconds(value: object) -> float:
+    """Return ``float(value)`` if it is a finite non-negative real number (not a bool)."""
+    if isinstance(value, numbers.Real) and not isinstance(value, bool):
+        try:
+            seconds = float(value)
+        except (OverflowError, TypeError, ValueError):
+            seconds = math.inf
+        if math.isfinite(seconds) and seconds >= 0.0:
+            return seconds
+    raise ConfigurationError(
+        "TelegramChannel 'max_retry_after_seconds' must be a finite number of seconds >= 0 "
+        f"(not a bool), got invalid {type(value).__name__} value."
+    )
 
 
 def _retry_after_seconds(
@@ -53,6 +70,7 @@ class TelegramChannel(BaseChannel):
         allowed_updates: list[str] | None = None,
         *,
         concurrent_updates: bool | int | Any = False,
+        max_retry_after_seconds: float = _DEFAULT_MAX_RETRY_AFTER_SECONDS,
     ) -> None:
         super().__init__()
         self.token = token
@@ -87,6 +105,10 @@ class TelegramChannel(BaseChannel):
                 "TelegramChannel 'concurrent_updates' must be a boolean, a positive integer, "
                 f"or a BaseUpdateProcessor instance, got {type(concurrent_updates).__name__}."
             )
+
+        self.max_retry_after_seconds: float = _validate_max_retry_after_seconds(
+            max_retry_after_seconds
+        )
 
         self._update_cls = Update
         self._action_cls = ChatAction
@@ -162,8 +184,15 @@ class TelegramChannel(BaseChannel):
                 await update.message.reply_text(chunk)
                 return True
             except self._retry_after_cls as err:
+                delay = _retry_after_seconds(err, self._ptb_deprecation_warning_cls)
+                if delay > self.max_retry_after_seconds:
+                    logger.error(
+                        f"Telegram flood control: requested retry delay ({delay:.2f}s) exceeds "
+                        f"max_retry_after_seconds ({self.max_retry_after_seconds:.2f}s); "
+                        f"aborting reply ({type(err).__name__})."
+                    )
+                    return False
                 if retries < _MAX_OUTBOUND_RETRIES:
-                    delay = _retry_after_seconds(err, self._ptb_deprecation_warning_cls)
                     retries += 1
                     logger.warning(
                         f"Telegram flood control: retrying in {delay:.2f}s "
