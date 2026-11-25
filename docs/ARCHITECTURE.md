@@ -214,6 +214,9 @@ sequenceDiagram
 
 All LLM integrations implement [`BaseEngine`](../src/chatflow_agent/core/engines/base.py) (`async def generate_turn_async(agent, history) -> EngineTurnResult`).
 
+> [!NOTE]
+> `Agent(engine=...)` and `Runner(engine=...)` are annotated as `BaseEngine | None`. At runtime they check `isinstance(engine, BaseEngine)`, so an engine registered virtually with `BaseEngine.register()` is accepted. Static type checkers such as Mypy do not recognize virtual subclasses and report an `arg-type` error for it. Inherit explicitly from `BaseEngine` (recommended), or pass `cast(BaseEngine, engine)`.
+
 #### 7-Step Engine Resolution Precedence (`resolve_engine`)
 
 When `Runner` evaluates a turn for `current_agent`, [`resolve_engine()`](../src/chatflow_agent/core/engines/factory.py) selects the engine using the following strict order, validated early at `Agent` and `Runner` initialization:

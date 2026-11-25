@@ -214,6 +214,9 @@ sequenceDiagram
 
 Todas las integraciones LLM implementan [`BaseEngine`](../../src/chatflow_agent/core/engines/base.py) (`async def generate_turn_async(agent, history) -> EngineTurnResult`).
 
+> [!NOTE]
+> `Agent(engine=...)` y `Runner(engine=...)` se anotan como `BaseEngine | None`. En tiempo de ejecución comprueban `isinstance(engine, BaseEngine)`, por lo que se acepta un motor registrado de forma virtual con `BaseEngine.register()`. Los verificadores de tipos estáticos como Mypy no reconocen las subclases virtuales e informan un error `arg-type` para ese motor. Para evitarlo, conviene heredar explícitamente de `BaseEngine` (recomendado) o pasar `cast(BaseEngine, engine)`.
+
 #### Precedencia de 7 Niveles en la Resolución de Motores (`resolve_engine`)
 
 Cuando `Runner` evalúa un turno para `current_agent`, [`resolve_engine()`](../../src/chatflow_agent/core/engines/factory.py) selecciona el motor siguiendo este orden estricto, con validación fail-fast temprana al inicializar `Agent` y `Runner`:
