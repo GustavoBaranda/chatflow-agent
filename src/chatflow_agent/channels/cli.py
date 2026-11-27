@@ -49,9 +49,7 @@ class CLIChannel(BaseChannel):
 
             if user_input.lower() == "/reset":
                 # Clear the current session's memory without dispatching to the agent.
-                session = runner.get_session(self.session_id)
-                if session is not None:
-                    session.clear_history()
+                runner.reset_session(self.session_id)
                 print("Conversation memory has been reset.")
                 continue
 
