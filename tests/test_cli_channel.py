@@ -1,6 +1,12 @@
 """Tests for BaseChannel and CLIChannel."""
 
+import contextlib
+import json
+import sqlite3
+from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
+from typing import NamedTuple
 
 import pytest
 
@@ -8,6 +14,7 @@ from chatflow_agent.channels.base import BaseChannel, ChannelError
 from chatflow_agent.channels.cli import CLIChannel
 from chatflow_agent.core.agent import Agent
 from chatflow_agent.core.engine import EngineTurnResult, GeminiEngine
+from chatflow_agent.core.memory import BaseSessionStore, SessionStore, SQLiteSessionStore
 from chatflow_agent.core.runner import Runner
 
 
@@ -144,6 +151,134 @@ def test_cli_reset_with_sqlite_session_clears_persisted_history(
         assert session.history == []
     finally:
         reloaded.close()
+
+
+# --- /reset through Runner.reset_session() (#240, #242) ---------------------
+
+
+class _ResetStore(NamedTuple):
+    store: BaseSessionStore
+    db_path: Path | None  # set only for the file-backed SQLite store
+
+
+@pytest.fixture(params=["memory", "sqlite_disk", "sqlite_memory"])
+def reset_store(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[_ResetStore]:
+    """Each store kind /reset must support; SQLite stores are closed even if a test fails."""
+    if request.param == "memory":
+        yield _ResetStore(SessionStore(), None)
+        return
+    db_path = tmp_path / "sessions.db" if request.param == "sqlite_disk" else None
+    store = SQLiteSessionStore(db_path=str(db_path) if db_path is not None else ":memory:")
+    try:
+        yield _ResetStore(store, db_path)
+    finally:
+        store.close()
+
+
+def _spy_reset_session(runner: Runner, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, bool]]:
+    """Record every Runner.reset_session() call and its result, delegating to the real method."""
+    calls: list[tuple[str, bool]] = []
+    real_reset_session = runner.reset_session
+
+    def spy(session_id: str) -> bool:
+        result = real_reset_session(session_id)
+        calls.append((session_id, result))
+        return result
+
+    monkeypatch.setattr(runner, "reset_session", spy)
+    return calls
+
+
+def _forbid_dispatch(cli: CLIChannel, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_dispatch(session_id: str, message: str, metadata: object = None) -> None:
+        raise AssertionError(f"dispatch() must not be called for {message!r}")
+
+    monkeypatch.setattr(cli, "dispatch", fail_dispatch)
+
+
+def test_cli_reset_uses_runner_reset_session_and_keeps_session_state(
+    reset_store: _ResetStore, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """/reset clears only the history, via Runner.reset_session(), without dispatching.
+
+    Metadata and the active agent of the session are kept, and other sessions are untouched.
+    """
+    billing = Agent(name="Billing", instructions="Handle billing.")
+    triage = Agent(name="Triage", instructions="Route the user.", handoffs=[billing])
+    runner = Runner(
+        starting_agent=triage,
+        engine=MockEngine("Command processed."),
+        session_store=reset_store.store,
+    )
+    cli = CLIChannel(session_id="cli_user")
+    cli.attach(runner)
+
+    metadata = {"channel": "cli", "topic": "invoice"}
+    runner.run("cli_user", "remember this", metadata=metadata)
+    runner.run("other_user", "keep this")
+    session = runner.get_session("cli_user")
+    assert session is not None
+    session.set_active_agent(billing)  # state left by a handoff
+    other = runner.get_session("other_user")
+    assert other is not None
+    other_history = list(other.history)
+    assert session.history and other_history
+
+    calls = _spy_reset_session(runner, monkeypatch)
+    _forbid_dispatch(cli, monkeypatch)
+    _drive_cli_loop(cli, ["/reset", "exit"], monkeypatch)
+
+    assert calls == [("cli_user", True)]
+    assert "Conversation memory has been reset." in capsys.readouterr().out
+
+    session = runner.get_session("cli_user")
+    assert session is not None
+    assert session.history == []
+    assert session.metadata == metadata
+    assert session.active_agent.name == "Billing"
+
+    other = runner.get_session("other_user")
+    assert other is not None
+    assert other.history == other_history
+
+    if reset_store.db_path is not None:
+        # The reset is persisted, and only the history rows of this session are removed.
+        with contextlib.closing(sqlite3.connect(reset_store.db_path)) as conn:
+            metadata_json, active_agent_name = conn.execute(
+                "SELECT metadata_json, active_agent_name FROM chatflow_sessions WHERE session_id = ?",
+                ("cli_user",),
+            ).fetchone()
+            message_counts = dict(
+                conn.execute(
+                    "SELECT session_id, COUNT(*) FROM chatflow_messages GROUP BY session_id"
+                ).fetchall()
+            )
+        assert json.loads(metadata_json) == metadata
+        assert active_agent_name == "Billing"
+        assert message_counts == {"other_user": len(other_history)}
+
+
+def test_cli_reset_without_existing_session_is_a_no_op(
+    reset_store: _ResetStore, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """/reset for a session that does not exist creates nothing and never dispatches."""
+    agent = Agent(name="CLI Assistant", instructions="Assist user via CLI.")
+    runner = Runner(
+        starting_agent=agent,
+        engine=MockEngine("Command processed."),
+        session_store=reset_store.store,
+    )
+    cli = CLIChannel(session_id="no_session_yet")
+    cli.attach(runner)
+
+    calls = _spy_reset_session(runner, monkeypatch)
+    _forbid_dispatch(cli, monkeypatch)
+    _drive_cli_loop(cli, ["/reset", "exit"], monkeypatch)
+
+    assert calls == [("no_session_yet", False)]
+    assert "Conversation memory has been reset." in capsys.readouterr().out
+    assert reset_store.store.get("no_session_yet") is None
+    assert runner.get_session("no_session_yet") is None
 
 
 def test_cli_reset_only_matches_exact_command(monkeypatch, capsys) -> None:
